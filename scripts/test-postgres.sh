@@ -15,4 +15,4 @@ docker compose -f "$COMPOSE_FILE" up --detach --wait
 
 cd "$ROOT_DIR"
 DATABASE_URL="$DATABASE_URL" \
-  ./node_modules/.bin/vitest run --exclude 'dist/**' tests/postgres-store.test.ts
+  ./node_modules/.bin/vitest run --exclude 'dist/**' tests/postgres*.test.ts
