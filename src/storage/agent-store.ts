@@ -90,6 +90,10 @@ export interface AgentStore {
   createSession(input: CreateSessionInput): Promise<AgentSession>;
   getSession(sessionId: string): Promise<AgentSession | undefined>;
   getJob(jobId: string): Promise<AgentJob | undefined>;
+  getJobByClientRequestId(
+    sessionId: string,
+    clientRequestId: string
+  ): Promise<AgentJob | undefined>;
   listSessionMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput

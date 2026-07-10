@@ -1,5 +1,6 @@
 import { Pool, type PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { JobCoordinator } from '../src/runtime/job-coordinator.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
 
@@ -73,6 +74,37 @@ describe('PostgresAgentStore Job transactions', () => {
     expect(await store.getJob('job_second')).toBeUndefined();
     expect(await store.listSessionMessages('session_conflict')).toHaveLength(1);
     expect(await store.getSession('session_conflict')).toMatchObject({ version: 1, updatedAtMs: 20 });
+  });
+
+  it('replays an identical clientRequestId and rejects payload drift', async () => {
+    await store.createSession({ id: 'session_idempotent', mode: 'agent', nowMs: 10 });
+    const coordinator = new JobCoordinator({
+      store,
+      workerId: 'worker_idempotent',
+      clock: { nowMs: () => 20 },
+    });
+    const first = await coordinator.createJob({
+      sessionId: 'session_idempotent',
+      jobId: 'job_idempotent',
+      userMessageId: 'message_idempotent',
+      clientRequestId: 'request_idempotent',
+      content: 'same payload',
+    });
+    const replay = await coordinator.createJob({
+      sessionId: 'session_idempotent',
+      jobId: 'job_unused',
+      userMessageId: 'message_unused',
+      clientRequestId: 'request_idempotent',
+      content: 'same payload',
+    });
+    expect(replay).toEqual(first);
+    expect(await store.listSessionMessages('session_idempotent')).toHaveLength(1);
+
+    await expect(coordinator.createJob({
+      sessionId: 'session_idempotent',
+      clientRequestId: 'request_idempotent',
+      content: 'changed payload',
+    })).rejects.toMatchObject({ code: 'idempotency_conflict' });
   });
 
   it('allows exactly one concurrent claim and rejects stale or foreign renewals', async () => {

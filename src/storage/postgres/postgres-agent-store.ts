@@ -54,6 +54,19 @@ export class PostgresAgentStore implements AgentStore {
     return result.rows[0] ? mapAgentJobRow(result.rows[0]) : undefined;
   }
 
+  async getJobByClientRequestId(
+    sessionId: string,
+    clientRequestId: string
+  ): Promise<AgentJob | undefined> {
+    const result = await this.#pool.query<AgentJobRow>(
+      `select *
+       from agent_jobs
+       where session_id = $1 and client_request_id = $2`,
+      [sessionId, clientRequestId]
+    );
+    return result.rows[0] ? mapAgentJobRow(result.rows[0]) : undefined;
+  }
+
   async listSessionMessages(sessionId: string, afterRowId = 0): Promise<AgentMessage[]> {
     const result = await this.#pool.query<AgentMessageRow>(
       `select *

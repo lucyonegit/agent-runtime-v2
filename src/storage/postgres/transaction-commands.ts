@@ -56,6 +56,25 @@ export async function createJobAndAppendUserMessageCommand(
 ): Promise<CreateJobAndAppendUserMessageResult> {
   return withPostgresTransaction(client, async () => {
     await lockAgentSession(client, input.sessionId);
+    if (input.clientRequestId) {
+      const existingRequest = await client.query<{ id: string }>(
+        `select id
+         from agent_jobs
+         where session_id = $1 and client_request_id = $2`,
+        [input.sessionId, input.clientRequestId]
+      );
+      if (existingRequest.rows[0]) {
+        throw new AgentStoreError(
+          'CLIENT_REQUEST_CONFLICT',
+          `Client request ${JSON.stringify(input.clientRequestId)} was already used in this Session.`,
+          {
+            sessionId: input.sessionId,
+            clientRequestId: input.clientRequestId,
+            existingJobId: existingRequest.rows[0].id,
+          }
+        );
+      }
+    }
     if (input.retryOfJobId) {
       await assertValidRetry(client, input.sessionId, input.retryOfJobId);
     }
