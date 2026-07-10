@@ -6,10 +6,16 @@ import type {
   ClaimJobInput,
   ClaimToolInvocationInput,
   ClaimToolInvocationResult,
+  AnswerInputAndClaimResumeInput,
+  AnswerInputAndClaimResumeResult,
   CommitModelToolCallsInput,
   CommitModelToolCallsResult,
   CommitToolResultInput,
   CommitToolResultResult,
+  CompleteJobWithFinalMessageInput,
+  CompleteJobWithFinalMessageResult,
+  CreateInputRequestsAndMarkWaitingInput,
+  CreateInputRequestsAndMarkWaitingResult,
   CreateJobAndAppendUserMessageInput,
   CreateJobAndAppendUserMessageResult,
   CreateSessionInput,
@@ -20,8 +26,11 @@ import {
   cancelJobCommand,
   claimJobCommand,
   claimToolInvocationCommand,
+  answerInputAndClaimResumeCommand,
   commitModelToolCallsCommand,
   commitToolResultCommand,
+  completeJobWithFinalMessageCommand,
+  createInputRequestsAndMarkWaitingCommand,
   createJobAndAppendUserMessageCommand,
   createSessionCommand,
   failJobCommand,
@@ -130,6 +139,24 @@ export class PostgresAgentStore implements AgentStore {
 
   async commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult> {
     return this.#withClient(client => commitToolResultCommand(client, input));
+  }
+
+  async completeJobWithFinalMessage(
+    input: CompleteJobWithFinalMessageInput
+  ): Promise<CompleteJobWithFinalMessageResult> {
+    return this.#withClient(client => completeJobWithFinalMessageCommand(client, input));
+  }
+
+  async createInputRequestsAndMarkWaiting(
+    input: CreateInputRequestsAndMarkWaitingInput
+  ): Promise<CreateInputRequestsAndMarkWaitingResult> {
+    return this.#withClient(client => createInputRequestsAndMarkWaitingCommand(client, input));
+  }
+
+  async answerInputAndClaimResume(
+    input: AnswerInputAndClaimResumeInput
+  ): Promise<AnswerInputAndClaimResumeResult> {
+    return this.#withClient(client => answerInputAndClaimResumeCommand(client, input));
   }
 
   async failJob(input: FailJobInput): Promise<AgentJob> {

@@ -7,6 +7,10 @@ import type {
   AgentToolCall,
   AgentToolInvocation,
   AgentToolSideEffectLevel,
+  AgentUserInputAnswerMode,
+  AgentUserInputRequest,
+  AgentUserInputSchema,
+  AgentUserInputSource,
 } from '../domain/index.js';
 
 export type AgentStoreErrorCode =
@@ -22,7 +26,10 @@ export type AgentStoreErrorCode =
   | 'JOB_LEASE_LOST'
   | 'TOOL_INVOCATION_NOT_FOUND'
   | 'TOOL_INVOCATION_CONFLICT'
-  | 'INVALID_TOOL_INVOCATION_STATE';
+  | 'INVALID_TOOL_INVOCATION_STATE'
+  | 'USER_INPUT_REQUEST_NOT_FOUND'
+  | 'INVALID_USER_INPUT_STATE'
+  | 'USER_INPUT_ANSWER_CONFLICT';
 
 export class AgentStoreError extends Error {
   readonly code: AgentStoreErrorCode;
@@ -153,6 +160,71 @@ export interface CommitToolResultResult {
   invocation: AgentToolInvocation;
 }
 
+export interface CompleteJobWithFinalMessageInput {
+  sessionId: string;
+  jobId: string;
+  attemptId: string;
+  workerId: string;
+  outputId: string;
+  messageId: string;
+  content: string;
+  messageType?: 'assistant_message' | 'plan_final';
+  nowMs: number;
+}
+
+export interface CompleteJobWithFinalMessageResult {
+  job: AgentJob;
+  message: AgentMessage;
+}
+
+export interface PendingUserInputRequestInput {
+  requestId: string;
+  toolCallId?: string;
+  source: AgentUserInputSource;
+  answerMode: AgentUserInputAnswerMode;
+  title?: string;
+  prompt: string;
+  inputSchema: AgentUserInputSchema;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateInputRequestsAndMarkWaitingInput {
+  sessionId: string;
+  jobId: string;
+  stepRunId?: string;
+  attemptId: string;
+  workerId: string;
+  requests: PendingUserInputRequestInput[];
+  nowMs: number;
+}
+
+export interface CreateInputRequestsAndMarkWaitingResult {
+  job: AgentJob;
+  requests: AgentUserInputRequest[];
+  invocations: AgentToolInvocation[];
+}
+
+export interface AnswerInputAndClaimResumeInput {
+  requestId: string;
+  expectedVersion: number;
+  clientAnswerId: string;
+  answer: unknown;
+  answerMessageId: string;
+  workerId: string;
+  attemptId: string;
+  nowMs: number;
+  leaseUntilMs: number;
+}
+
+export interface AnswerInputAndClaimResumeResult {
+  request: AgentUserInputRequest;
+  answerMessage: AgentMessage;
+  job: AgentJob;
+  invocation?: AgentToolInvocation;
+  shouldResume: boolean;
+  attemptId?: string;
+}
+
 export interface AgentStore {
   createSession(input: CreateSessionInput): Promise<AgentSession>;
   getSession(sessionId: string): Promise<AgentSession | undefined>;
@@ -171,6 +243,15 @@ export interface AgentStore {
   commitModelToolCalls(input: CommitModelToolCallsInput): Promise<CommitModelToolCallsResult>;
   claimToolInvocation(input: ClaimToolInvocationInput): Promise<ClaimToolInvocationResult>;
   commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult>;
+  completeJobWithFinalMessage(
+    input: CompleteJobWithFinalMessageInput
+  ): Promise<CompleteJobWithFinalMessageResult>;
+  createInputRequestsAndMarkWaiting(
+    input: CreateInputRequestsAndMarkWaitingInput
+  ): Promise<CreateInputRequestsAndMarkWaitingResult>;
+  answerInputAndClaimResume(
+    input: AnswerInputAndClaimResumeInput
+  ): Promise<AnswerInputAndClaimResumeResult>;
   failJob(input: FailJobInput): Promise<AgentJob>;
   cancelJob(input: CancelJobInput): Promise<AgentJob>;
 }

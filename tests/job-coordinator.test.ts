@@ -153,6 +153,9 @@ function createStore(): AgentStore {
     commitModelToolCalls: vi.fn<AgentStore['commitModelToolCalls']>(),
     claimToolInvocation: vi.fn<AgentStore['claimToolInvocation']>(),
     commitToolResult: vi.fn<AgentStore['commitToolResult']>(),
+    completeJobWithFinalMessage: vi.fn<AgentStore['completeJobWithFinalMessage']>(),
+    createInputRequestsAndMarkWaiting: vi.fn<AgentStore['createInputRequestsAndMarkWaiting']>(),
+    answerInputAndClaimResume: vi.fn<AgentStore['answerInputAndClaimResume']>(),
     failJob: vi.fn<AgentStore['failJob']>(),
     cancelJob: vi.fn<AgentStore['cancelJob']>(),
   };

@@ -3,6 +3,7 @@ import type { AgentJob, AgentJobError } from '../domain/index.js';
 import {
   AgentStoreError,
   type AgentStore,
+  type AnswerInputAndClaimResumeResult,
   type CreateJobAndAppendUserMessageResult,
 } from '../storage/agent-store.js';
 import { resolveExecutionLimits, type ExecutionLimits } from './execution-limits.js';
@@ -43,6 +44,14 @@ export interface RetryCoordinatedJobInput {
   clientRequestId?: string;
   jobId?: string;
   userMessageId?: string;
+}
+
+export interface AnswerCoordinatedInput {
+  requestId: string;
+  expectedVersion: number;
+  clientAnswerId: string;
+  answer: unknown;
+  answerMessageId?: string;
 }
 
 export class JobCoordinator {
@@ -193,6 +202,25 @@ export class JobCoordinator {
         clientRequestId: input.clientRequestId,
         jobMetadata: source.metadata,
         nowMs: this.#clock.nowMs(),
+      });
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
+  async answerInput(input: AnswerCoordinatedInput): Promise<AnswerInputAndClaimResumeResult> {
+    const nowMs = this.#clock.nowMs();
+    try {
+      return await this.#store.answerInputAndClaimResume({
+        requestId: input.requestId,
+        expectedVersion: input.expectedVersion,
+        clientAnswerId: input.clientAnswerId,
+        answer: input.answer,
+        answerMessageId: input.answerMessageId ?? this.#ids.messageId(),
+        workerId: this.#workerId,
+        attemptId: this.#ids.attemptId(),
+        nowMs,
+        leaseUntilMs: nowMs + this.#limits.jobLeaseMs,
       });
     } catch (error) {
       throw mapStoreError(error);

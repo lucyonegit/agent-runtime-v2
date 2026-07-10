@@ -2,6 +2,11 @@ import { Pool, type PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { JobCoordinator } from '../src/runtime/job-coordinator.js';
 import { ToolExecutor } from '../src/runtime/tool-executor.js';
+import { AgentLoop } from '../src/agent-loop/agent-loop.js';
+import { AgentRunner } from '../src/runtime/agent-runner.js';
+import { RuntimeEventWriter } from '../src/runtime/runtime-event-writer.js';
+import type { AgentRealtimeEvent } from '../src/domain/index.js';
+import { checksumToolArguments } from '../src/runtime/transaction-commands.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
 
@@ -328,6 +333,386 @@ describe('PostgresAgentStore Job transactions', () => {
     });
   });
 
+  it('answers multiple tool inputs atomically and gives resume ownership to exactly one answer', async () => {
+    await store.createSession({ id: 'session_inputs', mode: 'agent', nowMs: 10 });
+    await createJob(store, 'session_inputs', 'job_inputs', 'message_inputs', 20);
+    const job = await store.claimJob({
+      jobId: 'job_inputs',
+      expectedVersion: 0,
+      workerId: 'worker_inputs',
+      attemptId: 'attempt_inputs',
+      nowMs: 30,
+      leaseUntilMs: 100,
+    });
+    await store.commitModelToolCalls({
+      sessionId: 'session_inputs',
+      jobId: job.id,
+      attemptId: 'attempt_inputs',
+      workerId: 'worker_inputs',
+      outputId: 'output_inputs',
+      messageId: 'message_input_calls',
+      content: '',
+      invocations: [
+        pendingInvocation('invocation_input_a', 'call_input_a', 'choose_a'),
+        pendingInvocation('invocation_input_b', 'call_input_b', 'choose_b'),
+      ],
+      nowMs: 31,
+    });
+    await store.claimToolInvocation({
+      jobId: 'job_inputs',
+      toolCallId: 'call_input_a',
+      workerId: 'worker_inputs',
+      attemptId: 'attempt_inputs',
+      nowMs: 32,
+    });
+    await store.claimToolInvocation({
+      jobId: 'job_inputs',
+      toolCallId: 'call_input_b',
+      workerId: 'worker_inputs',
+      attemptId: 'attempt_inputs',
+      nowMs: 32,
+    });
+
+    const waiting = await store.createInputRequestsAndMarkWaiting({
+      sessionId: 'session_inputs',
+      jobId: 'job_inputs',
+      attemptId: 'attempt_inputs',
+      workerId: 'worker_inputs',
+      requests: [
+        {
+          requestId: 'input_a',
+          toolCallId: 'call_input_a',
+          source: 'tool',
+          answerMode: 'as_tool_result',
+          prompt: 'Choose A',
+          inputSchema: { type: 'text' },
+        },
+        {
+          requestId: 'input_b',
+          toolCallId: 'call_input_b',
+          source: 'tool',
+          answerMode: 'as_tool_result',
+          prompt: 'Choose B',
+          inputSchema: { type: 'text' },
+        },
+      ],
+      nowMs: 33,
+    });
+    expect(waiting.job).toMatchObject({ status: 'waiting_user_input', version: 2 });
+    expect(waiting.job).not.toHaveProperty('leaseOwner');
+    expect(waiting.requests).toHaveLength(2);
+    expect(waiting.invocations.map(invocation => invocation.status))
+      .toEqual(['waiting_user_input', 'waiting_user_input']);
+
+    const answers = await Promise.all([
+      store.answerInputAndClaimResume({
+        requestId: 'input_a',
+        expectedVersion: 0,
+        clientAnswerId: 'answer_a',
+        answer: 'A',
+        answerMessageId: 'message_answer_a',
+        workerId: 'worker_resume_a',
+        attemptId: 'attempt_resume_a',
+        nowMs: 40,
+        leaseUntilMs: 100,
+      }),
+      store.answerInputAndClaimResume({
+        requestId: 'input_b',
+        expectedVersion: 0,
+        clientAnswerId: 'answer_b',
+        answer: 'B',
+        answerMessageId: 'message_answer_b',
+        workerId: 'worker_resume_b',
+        attemptId: 'attempt_resume_b',
+        nowMs: 40,
+        leaseUntilMs: 100,
+      }),
+    ]);
+    expect(answers.filter(answer => answer.shouldResume)).toHaveLength(1);
+    expect(answers.filter(answer => !answer.shouldResume)).toHaveLength(1);
+    const resumeWinner = answers.find(answer => answer.shouldResume)!;
+    expect(resumeWinner.job).toMatchObject({
+      status: 'resuming',
+      version: 3,
+      currentAttemptId: resumeWinner.attemptId,
+      attemptNo: 2,
+    });
+    expect(answers.map(answer => answer.request.status)).toEqual(['answered', 'answered']);
+    expect(answers.map(answer => answer.answerMessage.messageType)).toEqual(['tool_result', 'tool_result']);
+    expect(answers.map(answer => answer.invocation?.status)).toEqual(['completed', 'completed']);
+
+    await expect(store.answerInputAndClaimResume({
+      requestId: 'input_a',
+      expectedVersion: 0,
+      clientAnswerId: 'answer_a',
+      answer: 'A',
+      answerMessageId: 'unused_message',
+      workerId: 'unused_worker',
+      attemptId: 'unused_attempt',
+      nowMs: 50,
+      leaseUntilMs: 110,
+    })).resolves.toMatchObject({
+      request: { status: 'answered', clientAnswerId: 'answer_a' },
+      shouldResume: false,
+    });
+    await expect(store.answerInputAndClaimResume({
+      requestId: 'input_a',
+      expectedVersion: 1,
+      clientAnswerId: 'different_answer',
+      answer: 'different',
+      answerMessageId: 'different_message',
+      workerId: 'unused_worker',
+      attemptId: 'unused_attempt',
+      nowMs: 51,
+      leaseUntilMs: 111,
+    })).rejects.toMatchObject({ code: 'USER_INPUT_ANSWER_CONFLICT' });
+  });
+
+  it('runs a direct Job from model tool call through durable result to atomic final completion', async () => {
+    await store.createSession({ id: 'session_direct', mode: 'agent', nowMs: 10 });
+    await createJob(store, 'session_direct', 'job_direct', 'message_direct', 20);
+    const claimed = await store.claimJob({
+      jobId: 'job_direct',
+      expectedVersion: 0,
+      workerId: 'worker_direct',
+      attemptId: 'attempt_direct',
+      nowMs: 30,
+      leaseUntilMs: 100,
+    });
+    const definition = {
+      name: 'lookup',
+      description: 'lookup docs',
+      schema: { type: 'object' },
+      sideEffectLevel: 'read_only' as const,
+    };
+    let durableBeforeExternalExecution = false;
+    const toolExecutor = new ToolExecutor({
+      store,
+      workerId: 'worker_direct',
+      tools: [{
+        definition,
+        execute: async (_arguments, context) => {
+          durableBeforeExternalExecution = (
+            await store.getToolInvocation(context.jobId, context.toolCallId)
+          )?.status === 'running';
+          return { type: 'completed', content: 'lookup result', result: { value: 42 } };
+        },
+      }],
+      clock: { nowMs: () => 35 },
+    });
+    let modelCalls = 0;
+    const loop = new AgentLoop({
+      streaming: false,
+      model: {
+        invoke: async request => {
+          modelCalls += 1;
+          if (modelCalls === 1) {
+            expect(request.messages).toHaveLength(0);
+            return {
+              toolCalls: [{ id: 'call_direct', name: 'lookup', args: { query: 'runtime' } }],
+            };
+          }
+          expect(request.messages).toHaveLength(2);
+          return { content: 'final direct answer' };
+        },
+      },
+      clock: { nowMs: () => 35 },
+    });
+    const published: AgentRealtimeEvent[] = [];
+    let messageNo = 1;
+    let invocationNo = 1;
+    const writer = new RuntimeEventWriter({
+      store,
+      workerId: 'worker_direct',
+      tools: [definition],
+      publisher: { publish: event => { published.push(event); } },
+      ids: {
+        eventId: () => 'event_direct',
+        messageId: () => `runtime_message_${messageNo++}`,
+        toolInvocationId: () => `runtime_invocation_${invocationNo++}`,
+        userInputRequestId: () => 'runtime_input_1',
+      },
+      clock: { nowMs: () => 36 },
+    });
+    const coordinator = new JobCoordinator({
+      store,
+      workerId: 'worker_direct',
+      clock: { nowMs: () => 36 },
+    });
+    const runner = new AgentRunner({ loop, writer, coordinator });
+    let outputNo = 1;
+
+    const result = await runner.runDirect({
+      job: claimed,
+      messages: [],
+      tools: [definition],
+      toolExecutor,
+      outputIdFactory: () => `runtime_output_${outputNo++}`,
+      limits: { maxIterations: 4, maxToolCalls: 4, deadlineMs: 90 },
+    });
+
+    expect(durableBeforeExternalExecution).toBe(true);
+    expect(result).toMatchObject({
+      type: 'completed',
+      job: {
+        id: 'job_direct',
+        strategy: 'direct',
+        stage: 'direct_execution',
+        status: 'completed',
+        version: 2,
+      },
+      message: {
+        messageType: 'assistant_message',
+        channel: 'final',
+        content: 'final direct answer',
+      },
+    });
+    expect((await store.listSessionMessages('session_direct')).map(message => ({
+      rowId: message.rowId,
+      type: message.messageType,
+    }))).toEqual([
+      { rowId: 1, type: 'user_message' },
+      { rowId: 2, type: 'tool_call' },
+      { rowId: 3, type: 'tool_result' },
+      { rowId: 4, type: 'assistant_message' },
+    ]);
+    expect(published.map(event => event.type)).toEqual([
+      'message.upserted',
+      'tool_invocation.upserted',
+      'message.upserted',
+      'tool_invocation.upserted',
+      'message.upserted',
+      'job.upserted',
+    ]);
+  });
+
+  it('runs direct HITL through waiting, answer-as-tool-result, resume claim, and final completion', async () => {
+    await store.createSession({ id: 'session_hitl', mode: 'agent', nowMs: 10 });
+    await createJob(store, 'session_hitl', 'job_hitl', 'message_hitl', 20);
+    const claimed = await store.claimJob({
+      jobId: 'job_hitl',
+      expectedVersion: 0,
+      workerId: 'worker_hitl',
+      attemptId: 'attempt_hitl_1',
+      nowMs: 30,
+      leaseUntilMs: 100,
+    });
+    const definition = {
+      name: 'choose',
+      description: 'choose a value',
+      schema: { type: 'object' },
+      sideEffectLevel: 'read_only' as const,
+    };
+    const toolExecutor = new ToolExecutor({
+      store,
+      workerId: 'worker_hitl',
+      tools: [{
+        definition,
+        execute: async () => ({
+          type: 'requires_user_input',
+          request: {
+            source: 'tool',
+            answerMode: 'as_tool_result',
+            prompt: 'Choose one',
+            inputSchema: { type: 'single_choice', options: [{ label: 'One', value: 'one' }] },
+          },
+        }),
+      }],
+      clock: { nowMs: () => 35 },
+    });
+    let messageNo = 1;
+    let writerNowMs = 36;
+    const writer = new RuntimeEventWriter({
+      store,
+      workerId: 'worker_hitl',
+      tools: [definition],
+      ids: {
+        eventId: () => 'event_hitl',
+        messageId: () => `hitl_runtime_message_${messageNo++}`,
+        toolInvocationId: () => 'hitl_invocation',
+        userInputRequestId: () => 'hitl_input',
+      },
+      clock: { nowMs: () => writerNowMs },
+    });
+    const coordinator = new JobCoordinator({
+      store,
+      workerId: 'worker_hitl',
+      clock: { nowMs: () => 40 },
+      ids: {
+        jobId: () => 'unused_job',
+        messageId: () => 'hitl_answer_message',
+        attemptId: () => 'attempt_hitl_2',
+      },
+    });
+    const waitingRunner = new AgentRunner({
+      loop: new AgentLoop({
+        streaming: false,
+        model: {
+          invoke: async () => ({
+            toolCalls: [{ id: 'call_hitl', name: 'choose', args: {} }],
+          }),
+        },
+        clock: { nowMs: () => 35 },
+      }),
+      writer,
+      coordinator,
+    });
+    const waiting = await waitingRunner.runDirect({
+      job: claimed,
+      messages: [],
+      tools: [definition],
+      toolExecutor,
+      outputIdFactory: () => 'hitl_output_1',
+      limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+    });
+    expect(waiting).toMatchObject({
+      type: 'waiting_user_input',
+      job: { status: 'waiting_user_input', version: 2 },
+      requests: [{ id: 'hitl_input', status: 'pending', toolInvocationId: 'hitl_invocation' }],
+    });
+    if (waiting.type !== 'waiting_user_input') throw new Error('expected waiting result');
+
+    const answered = await coordinator.answerInput({
+      requestId: waiting.requests[0].id,
+      expectedVersion: waiting.requests[0].version,
+      clientAnswerId: 'hitl_client_answer',
+      answer: 'one',
+    });
+    expect(answered).toMatchObject({
+      shouldResume: true,
+      attemptId: 'attempt_hitl_2',
+      job: { status: 'resuming', version: 3, currentAttemptId: 'attempt_hitl_2' },
+      answerMessage: { messageType: 'tool_result', toolCallId: 'call_hitl' },
+      invocation: { status: 'completed' },
+    });
+    writerNowMs = 42;
+
+    const resumeRunner = new AgentRunner({
+      loop: new AgentLoop({
+        streaming: false,
+        model: { invoke: async () => ({ content: 'resumed final answer' }) },
+        clock: { nowMs: () => 41 },
+      }),
+      writer,
+      coordinator,
+    });
+    const resumed = await resumeRunner.runDirect({
+      job: answered.job,
+      messages: [],
+      tools: [definition],
+      toolExecutor,
+      outputIdFactory: () => 'hitl_output_2',
+      limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+    });
+    expect(resumed).toMatchObject({
+      type: 'completed',
+      job: { status: 'completed', version: 4 },
+      message: { content: 'resumed final answer' },
+    });
+    expect((await store.listSessionMessages('session_hitl')).map(message => message.messageType))
+      .toEqual(['user_message', 'tool_call', 'tool_result', 'assistant_message']);
+  });
+
   it('fails descendants atomically, preserves side-effect uncertainty, and creates retry as a new Job', async () => {
     await store.createSession({ id: 'session_fail', mode: 'agent', nowMs: 10 });
     await createJob(store, 'session_fail', 'job_fail', 'message_fail', 20);
@@ -429,14 +814,15 @@ function pendingInvocation(
   toolCallId: string,
   toolName: string
 ) {
+  const args = toolName === 'lookup' ? { query: 'docs' } : {};
   return {
     invocationId,
     call: {
       id: toolCallId,
       name: toolName,
-      args: toolName === 'lookup' ? { query: 'docs' } : {},
+      args,
     },
-    argumentsChecksum: `${invocationId}_checksum`,
+    argumentsChecksum: checksumToolArguments(args),
     sideEffectLevel: 'read_only' as const,
     idempotencyKey: `${invocationId}_idempotency`,
   };

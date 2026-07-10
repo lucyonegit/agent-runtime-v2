@@ -8,6 +8,7 @@ import {
 import type { AgentToolDefinition } from '../agent-loop/model-port.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { mapStoreError } from './runtime-errors.js';
+import { checksumToolArguments } from './transaction-commands.js';
 
 export interface RuntimeToolContext {
   sessionId: string;
@@ -84,7 +85,7 @@ export class ToolExecutor implements ToolExecutorPort {
     }
     if (
       invocation.toolName !== request.call.name
-      || invocation.argumentsChecksum.length === 0
+      || invocation.argumentsChecksum !== checksumToolArguments(request.call.args)
       || invocation.sideEffectLevel !== tool.definition.sideEffectLevel
     ) {
       throw new FatalToolExecutionError(

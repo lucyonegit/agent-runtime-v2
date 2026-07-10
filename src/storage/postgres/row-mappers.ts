@@ -16,6 +16,11 @@ import type {
   AgentToolInvocationStatus,
   AgentToolResult,
   AgentToolSideEffectLevel,
+  AgentUserInputAnswerMode,
+  AgentUserInputRequest,
+  AgentUserInputSchema,
+  AgentUserInputSource,
+  AgentUserInputStatus,
 } from '../../domain/index.js';
 
 export interface AgentSessionRow {
@@ -102,6 +107,30 @@ export interface AgentToolInvocationRow {
   started_at_ms: string | number | null;
   completed_at_ms: string | number | null;
   updated_at_ms: string | number;
+}
+
+export interface AgentUserInputRequestRow {
+  id: string;
+  session_id: string;
+  job_id: string;
+  plan_id: string | null;
+  step_id: string | null;
+  step_run_id: string | null;
+  tool_invocation_id: string | null;
+  source: string;
+  answer_mode: string;
+  status: string;
+  title: string | null;
+  prompt: string;
+  input_schema: unknown;
+  answer: unknown;
+  answer_message_id: string | null;
+  client_answer_id: string | null;
+  version: number;
+  metadata: unknown;
+  created_at_ms: string | number;
+  updated_at_ms: string | number;
+  answered_at_ms: string | number | null;
 }
 
 export function mapAgentSessionRow(row: AgentSessionRow): AgentSession {
@@ -221,6 +250,38 @@ export function mapAgentToolInvocationRow(
       ? {}
       : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_tool_invocations.completed_at_ms') }),
     updatedAtMs: mapBigint(row.updated_at_ms, 'agent_tool_invocations.updated_at_ms'),
+  };
+}
+
+export function mapAgentUserInputRequestRow(
+  row: AgentUserInputRequestRow
+): AgentUserInputRequest {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    jobId: row.job_id,
+    ...(row.plan_id === null ? {} : { planId: row.plan_id }),
+    ...(row.step_id === null ? {} : { stepId: row.step_id }),
+    ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
+    ...(row.tool_invocation_id === null ? {} : { toolInvocationId: row.tool_invocation_id }),
+    source: row.source as AgentUserInputSource,
+    answerMode: row.answer_mode as AgentUserInputAnswerMode,
+    status: row.status as AgentUserInputStatus,
+    ...(row.title === null ? {} : { title: row.title }),
+    prompt: row.prompt,
+    inputSchema: mapRecord(row.input_schema, 'agent_user_input_requests.input_schema') as AgentUserInputSchema,
+    ...(row.answer === null ? {} : { answer: row.answer }),
+    ...(row.answer_message_id === null ? {} : { answerMessageId: row.answer_message_id }),
+    ...(row.client_answer_id === null ? {} : { clientAnswerId: row.client_answer_id }),
+    version: row.version,
+    ...(row.metadata === null
+      ? {}
+      : { metadata: mapRecord(row.metadata, 'agent_user_input_requests.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_user_input_requests.created_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_user_input_requests.updated_at_ms'),
+    ...(row.answered_at_ms === null
+      ? {}
+      : { answeredAtMs: mapBigint(row.answered_at_ms, 'agent_user_input_requests.answered_at_ms') }),
   };
 }
 

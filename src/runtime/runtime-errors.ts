@@ -64,7 +64,14 @@ export function mapStoreError(error: unknown): RuntimeError {
       });
     case 'INVALID_JOB_STATE':
     case 'INVALID_JOB_RETRY':
+    case 'INVALID_USER_INPUT_STATE':
+    case 'USER_INPUT_REQUEST_NOT_FOUND':
       return new RuntimeError('invalid_job_state', error.message, {
+        details: error.details,
+        cause: error,
+      });
+    case 'USER_INPUT_ANSWER_CONFLICT':
+      return new RuntimeError('idempotency_conflict', error.message, {
         details: error.details,
         cause: error,
       });
