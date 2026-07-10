@@ -8,7 +8,9 @@ import type {
 
 export type AgentStoreErrorCode =
   | 'SESSION_NOT_FOUND'
+  | 'SESSION_ALREADY_EXISTS'
   | 'JOB_NOT_FOUND'
+  | 'JOB_ALREADY_EXISTS'
   | 'ACTIVE_JOB_CONFLICT'
   | 'CLIENT_REQUEST_CONFLICT'
   | 'CONCURRENCY_CONFLICT'
