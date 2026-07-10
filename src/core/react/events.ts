@@ -5,7 +5,7 @@ import type {
   AgentMessageChannel,
   AgentModelTokenUsage,
   AgentToolCall,
-} from '../../domain/index.js';
+} from './types.js';
 
 export enum CoreStepEventType {
   ModelOutputDelta = 'model.output.delta',

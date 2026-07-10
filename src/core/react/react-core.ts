@@ -1,5 +1,5 @@
 import { AIMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
-import type { AgentModelTokenUsage, AgentToolCall } from '../../domain/index.js';
+import type { AgentModelTokenUsage, AgentToolCall } from './types.js';
 import {
   CoreStepEventType,
   type CoreStepEvent,
