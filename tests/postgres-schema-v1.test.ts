@@ -5,6 +5,11 @@ import {
   AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
   applyAgentRuntimeSchemaV1,
 } from '../src/storage/postgres/schema-v1.js';
+import {
+  assertAgentRuntimeSchemaVersion,
+  migrateAgentRuntimeSchema,
+  resetAgentRuntimeSchema,
+} from '../src/storage/postgres/migrations.js';
 
 const databaseUrl = process.env.DATABASE_URL
   ?? 'postgresql://postgres:postgres@127.0.0.1:55433/agent_runtime_test';
@@ -136,6 +141,73 @@ describe('canonical PostgreSQL schema v1', () => {
     await insertModelCall(client!, 'call_1', 'job_unique', 1);
     await expect(insertModelCall(client!, 'call_2', 'job_unique', 2))
       .rejects.toMatchObject({ code: '23505' });
+  });
+
+  it('validates the exact schema version, name, and checksum', async () => {
+    await expect(assertAgentRuntimeSchemaVersion(client!)).resolves.toEqual({
+      version: AGENT_RUNTIME_SCHEMA_VERSION,
+      name: 'job-step-run-canonical',
+      checksum: AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
+      appliedAtMs: 1_000,
+    });
+  });
+
+  it('fails closed for missing, older, newer, and modified schemas', async () => {
+    await client!.query(
+      `update agent_schema_versions set checksum = 'modified' where version = $1`,
+      [AGENT_RUNTIME_SCHEMA_VERSION]
+    );
+    await expect(assertAgentRuntimeSchemaVersion(client!)).rejects.toMatchObject({
+      code: 'AGENT_RUNTIME_SCHEMA_CHECKSUM_MISMATCH',
+    });
+
+    await client!.query('delete from agent_schema_versions');
+    await client!.query(
+      `insert into agent_schema_versions(version, name, checksum, applied_at_ms)
+       values (0, 'legacy', 'legacy', 1)`
+    );
+    await expect(assertAgentRuntimeSchemaVersion(client!)).rejects.toMatchObject({
+      code: 'AGENT_RUNTIME_SCHEMA_OLDER',
+    });
+
+    await client!.query('delete from agent_schema_versions');
+    await client!.query(
+      `insert into agent_schema_versions(version, name, checksum, applied_at_ms)
+       values (2, 'future', 'future', 1)`
+    );
+    await expect(assertAgentRuntimeSchemaVersion(client!)).rejects.toMatchObject({
+      code: 'AGENT_RUNTIME_SCHEMA_NEWER',
+    });
+
+    await resetAgentRuntimeSchema(client!);
+    await expect(assertAgentRuntimeSchemaVersion(client!)).rejects.toMatchObject({
+      code: 'AGENT_RUNTIME_SCHEMA_MISSING',
+    });
+  });
+
+  it('resets only agent-owned tables and can explicitly migrate a blank schema', async () => {
+    await client!.query('create table users (id text primary key)');
+    await client!.query(`insert into users(id) values ('user_1')`);
+
+    const droppedTables = await resetAgentRuntimeSchema(client!);
+    expect(droppedTables).toEqual(EXPECTED_TABLES);
+
+    const remainingTables = await client!.query<{ table_name: string }>(
+      `select table_name
+       from information_schema.tables
+       where table_schema = current_schema()
+       order by table_name`
+    );
+    expect(remainingTables.rows.map(row => row.table_name)).toEqual(['users']);
+    await expect(client!.query('select id from users')).resolves.toMatchObject({
+      rows: [{ id: 'user_1' }],
+    });
+
+    await expect(migrateAgentRuntimeSchema(client!, 2_000)).resolves.toMatchObject({
+      version: AGENT_RUNTIME_SCHEMA_VERSION,
+      checksum: AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
+      appliedAtMs: 2_000,
+    });
   });
 });
 

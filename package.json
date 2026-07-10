@@ -2,16 +2,18 @@
   "name": "agent-runtime-v2",
   "version": "0.1.0",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "serve": "node dist/server/main.js",
-    "dev:server": "npm run build && node dist/server/main.js",
+    "serve": "node dist/src/server/main.js",
+    "dev:server": "npm run build && node dist/src/server/main.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude 'dist/**' --exclude 'tests/postgres*.test.ts'",
     "test:postgres": "bash scripts/test-postgres.sh",
-    "test:all": "npm test && npm run test:postgres"
+    "test:all": "npm test && npm run test:postgres",
+    "schema:migrate": "npm run build && node dist/scripts/migrate-agent-runtime-schema.js",
+    "schema:reset": "npm run build && node dist/scripts/reset-agent-runtime-schema.js"
   },
   "dependencies": {
     "@langchain/core": "^1.2.1",
