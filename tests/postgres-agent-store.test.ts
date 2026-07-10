@@ -1,5 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JobCoordinator } from '../src/runtime/job-coordinator.js';
 import { ToolExecutor } from '../src/runtime/tool-executor.js';
 import { AgentLoop } from '../src/agent-loop/agent-loop.js';
@@ -7,6 +7,9 @@ import { AgentRunner } from '../src/runtime/agent-runner.js';
 import { RuntimeEventWriter } from '../src/runtime/runtime-event-writer.js';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
 import { checksumToolArguments } from '../src/runtime/transaction-commands.js';
+import { StepRunner } from '../src/planner/step-runner.js';
+import { PlanEngine } from '../src/planner/plan-engine.js';
+import { PlanSummarizer } from '../src/planner/plan-summarizer.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
 
@@ -711,6 +714,223 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     expect((await store.listSessionMessages('session_hitl')).map(message => message.messageType))
       .toEqual(['user_message', 'tool_call', 'tool_result', 'assistant_message']);
+  });
+
+  it('advances a two-step Plan with explicit StepRun retry into plan_final completion', async () => {
+    await store.createSession({ id: 'session_plan', mode: 'agent', nowMs: 10 });
+    await createJob(store, 'session_plan', 'job_plan', 'message_plan_goal', 20);
+    let job = await store.claimJob({
+      jobId: 'job_plan',
+      expectedVersion: 0,
+      workerId: 'worker_plan',
+      attemptId: 'attempt_plan',
+      nowMs: 30,
+      leaseUntilMs: 200,
+    });
+    job = await store.routeJob({
+      jobId: job.id,
+      workerId: 'worker_plan',
+      attemptId: 'attempt_plan',
+      strategy: 'planned',
+      nowMs: 31,
+    });
+    expect(job).toMatchObject({ strategy: 'planned', stage: 'planning', version: 2 });
+    const createdPlan = await store.createPlan({
+      sessionId: 'session_plan',
+      jobId: 'job_plan',
+      workerId: 'worker_plan',
+      attemptId: 'attempt_plan',
+      planId: 'plan_work',
+      messageId: 'message_plan_created',
+      title: 'Two steps',
+      goal: 'finish both',
+      steps: [
+        { id: 'step_one', title: 'One', instruction: 'do one' },
+        { id: 'step_two', title: 'Two', instruction: 'do two' },
+      ],
+      nowMs: 32,
+    });
+    job = createdPlan.job;
+    expect(job).toMatchObject({ stage: 'step_execution', version: 3 });
+
+    let firstRun = await store.createStepRun({
+      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
+      attemptId: 'attempt_plan', planId: 'plan_work', stepId: 'step_one',
+      stepRunId: 'run_one_1', executor: 'agent', maxRunsPerStep: 2, nowMs: 33,
+    });
+    expect(firstRun.stepRun).toMatchObject({ runNo: 1, status: 'running' });
+    const firstOutput = await store.commitStepOutput({
+      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
+      attemptId: 'attempt_plan', stepRunId: 'run_one_1',
+      messageId: 'message_step_one', outputId: 'output_step_one',
+      content: 'step one complete', structuredOutput: { schemaVersion: 1, summary: 'one' }, nowMs: 34,
+    });
+    expect(firstOutput).toMatchObject({
+      hasPendingSteps: true,
+      step: { status: 'completed' },
+      stepRun: { status: 'completed' },
+      job: { stage: 'step_execution', version: 5 },
+    });
+
+    const secondRun = await store.createStepRun({
+      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
+      attemptId: 'attempt_plan', planId: 'plan_work', stepId: 'step_two',
+      stepRunId: 'run_two_1', executor: 'agent', maxRunsPerStep: 2, nowMs: 35,
+    });
+    const failedForRetry = await store.failStepRun({
+      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
+      attemptId: 'attempt_plan', stepRunId: secondRun.stepRun.id,
+      error: { code: 'invalid_step_output', message: 'repair failed' },
+      retryStep: true, nowMs: 36,
+    });
+    expect(failedForRetry).toMatchObject({
+      job: { status: 'running', stage: 'step_execution', version: 7 },
+      step: { status: 'pending' },
+      stepRun: { status: 'failed', runNo: 1 },
+    });
+    const retryRun = await store.createStepRun({
+      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
+      attemptId: 'attempt_plan', planId: 'plan_work', stepId: 'step_two',
+      stepRunId: 'run_two_2', executor: 'agent', maxRunsPerStep: 2, nowMs: 37,
+    });
+    expect(retryRun.stepRun).toMatchObject({ runNo: 2, status: 'running' });
+    const lastOutput = await store.commitStepOutput({
+      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
+      attemptId: 'attempt_plan', stepRunId: 'run_two_2',
+      messageId: 'message_step_two', outputId: 'output_step_two',
+      content: 'step two complete', structuredOutput: { schemaVersion: 1, summary: 'two' }, nowMs: 38,
+    });
+    expect(lastOutput).toMatchObject({
+      hasPendingSteps: false,
+      plan: { status: 'completed' },
+      job: { stage: 'finalizing', version: 9 },
+    });
+    const final = await store.completeJobWithFinalMessage({
+      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
+      attemptId: 'attempt_plan', outputId: 'output_plan_final',
+      messageId: 'message_plan_final', content: 'all steps complete',
+      messageType: 'plan_final', nowMs: 39,
+    });
+    expect(final).toMatchObject({
+      job: { status: 'completed', strategy: 'planned', stage: 'finalizing', version: 10 },
+      message: { messageType: 'plan_final' },
+    });
+    expect((await store.listJobStepRuns('job_plan')).map(run => [run.id, run.runNo, run.status]))
+      .toEqual([
+        ['run_one_1', 1, 'completed'],
+        ['run_two_1', 1, 'failed'],
+        ['run_two_2', 2, 'completed'],
+      ]);
+  });
+
+  it('repairs one invalid StepOutput, commits only validated JSON, and summarizes the Plan', async () => {
+    await store.createSession({ id: 'session_step_runner', mode: 'agent', nowMs: 10 });
+    await createJob(store, 'session_step_runner', 'job_step_runner', 'message_step_goal', 20);
+    let job = await store.claimJob({
+      jobId: 'job_step_runner', expectedVersion: 0, workerId: 'worker_step_runner',
+      attemptId: 'attempt_step_runner', nowMs: 30, leaseUntilMs: 200,
+    });
+    job = await store.routeJob({
+      jobId: job.id, workerId: 'worker_step_runner', attemptId: 'attempt_step_runner',
+      strategy: 'planned', nowMs: 31,
+    });
+    const plan = await store.createPlan({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_step_runner',
+      attemptId: 'attempt_step_runner', planId: 'plan_step_runner',
+      messageId: 'message_step_plan', title: 'One step', goal: 'finish',
+      steps: [{ id: 'step_runner_step', title: 'Step', instruction: 'Do it' }], nowMs: 32,
+    });
+    const started = await store.createStepRun({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_step_runner',
+      attemptId: 'attempt_step_runner', planId: plan.plan.id, stepId: plan.steps[0].id,
+      stepRunId: 'run_step_runner', executor: 'agent', maxRunsPerStep: 2, nowMs: 33,
+    });
+    let writerMessageNo = 1;
+    const writer = new RuntimeEventWriter({
+      store,
+      workerId: 'worker_step_runner',
+      tools: [],
+      ids: {
+        eventId: () => 'step_event',
+        messageId: () => `step_writer_message_${writerMessageNo++}`,
+        toolInvocationId: () => 'unused_invocation',
+        userInputRequestId: () => 'unused_input',
+      },
+      clock: { nowMs: () => 34 },
+    });
+    let repairCalls = 0;
+    const runner = new StepRunner({
+      loop: new AgentLoop({
+        streaming: false,
+        model: { invoke: async () => ({ content: 'not-json' }) },
+        clock: { nowMs: () => 34 },
+      }),
+      writer,
+      store,
+      repair: {
+        repair: async () => {
+          repairCalls += 1;
+          return {
+            schemaVersion: 1,
+            summary: 'validated after repair',
+            artifacts: [],
+            evidence: [],
+            unresolved: [],
+          };
+        },
+      },
+    });
+    const stepResult = await runner.run({
+      job: started.job,
+      stepRun: started.stepRun,
+      messages: [],
+      tools: [],
+      toolExecutor: { execute: async () => { throw new Error('no tools expected'); } },
+      outputIdFactory: () => 'output_repaired_step',
+      limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 100 },
+    });
+    expect(repairCalls).toBe(1);
+    expect(stepResult).toMatchObject({
+      type: 'completed',
+      output: { schemaVersion: 1, summary: 'validated after repair' },
+      job: { stage: 'finalizing' },
+    });
+    if (stepResult.type !== 'completed') throw new Error('expected completed step');
+    const stepMessages = await store.listSessionMessages('session_step_runner');
+    const committedOutput = stepMessages.find(message => message.messageType === 'step_output')!;
+    expect(JSON.parse(committedOutput.content)).toMatchObject({
+      schemaVersion: 1,
+      summary: 'validated after repair',
+    });
+    expect(committedOutput.content).not.toContain('not-json');
+
+    const summarize = vi.fn(async ({ outputs }) => `final:${outputs[0].output.summary}`);
+    const engine = new PlanEngine({
+      store,
+      workerId: 'worker_step_runner',
+      planner: {
+        route: async () => 'planned',
+        createPlan: async () => ({ title: 'unused', goal: 'unused', steps: [] }),
+      },
+      summarizer: new PlanSummarizer({ summarize }),
+      ids: {
+        planId: () => 'unused_plan', stepId: () => 'unused_step',
+        stepRunId: () => 'unused_run', messageId: () => 'message_step_final',
+        outputId: () => 'output_step_final',
+      },
+      clock: { nowMs: () => 35 },
+    });
+    const final = await engine.finalize(
+      stepResult.job,
+      'finish',
+      '2026-07-11',
+      'Asia/Shanghai'
+    );
+    expect(final).toMatchObject({
+      job: { status: 'completed', stage: 'finalizing' },
+      message: { messageType: 'plan_final', content: 'final:validated after repair' },
+    });
+    expect(summarize).toHaveBeenCalledTimes(1);
   });
 
   it('fails descendants atomically, preserves side-effect uncertainty, and creates retry as a new Job', async () => {

@@ -1,5 +1,13 @@
 import type { Pool, PoolClient } from 'pg';
-import type { AgentJob, AgentMessage, AgentSession, AgentToolInvocation } from '../../domain/index.js';
+import type {
+  AgentJob,
+  AgentMessage,
+  AgentPlan,
+  AgentPlanStep,
+  AgentSession,
+  AgentStepRun,
+  AgentToolInvocation,
+} from '../../domain/index.js';
 import type {
   AgentStore,
   CancelJobInput,
@@ -19,6 +27,15 @@ import type {
   CreateJobAndAppendUserMessageInput,
   CreateJobAndAppendUserMessageResult,
   CreateSessionInput,
+  CreatePlanInput,
+  CreatePlanResult,
+  CreateStepRunInput,
+  CreateStepRunResult,
+  CommitStepOutputInput,
+  CommitStepOutputResult,
+  FailStepRunInput,
+  FailStepRunResult,
+  RouteJobInput,
   FailJobInput,
   RenewJobLeaseInput,
 } from '../agent-store.js';
@@ -33,6 +50,11 @@ import {
   createInputRequestsAndMarkWaitingCommand,
   createJobAndAppendUserMessageCommand,
   createSessionCommand,
+  createPlanCommand,
+  createStepRunCommand,
+  commitStepOutputCommand,
+  failStepRunCommand,
+  routeJobCommand,
   failJobCommand,
   renewJobLeaseCommand,
 } from './transaction-commands.js';
@@ -40,10 +62,16 @@ import {
   mapAgentJobRow,
   mapAgentMessageRow,
   mapAgentSessionRow,
+  mapAgentPlanRow,
+  mapAgentPlanStepRow,
+  mapAgentStepRunRow,
   mapAgentToolInvocationRow,
   type AgentJobRow,
   type AgentMessageRow,
   type AgentSessionRow,
+  type AgentPlanRow,
+  type AgentPlanStepRow,
+  type AgentStepRunRow,
   type AgentToolInvocationRow,
 } from './row-mappers.js';
 
@@ -98,6 +126,30 @@ export class PostgresAgentStore implements AgentStore {
       [jobId, toolCallId]
     );
     return result.rows[0] ? mapAgentToolInvocationRow(result.rows[0]) : undefined;
+  }
+
+  async getPlanByJobId(jobId: string): Promise<AgentPlan | undefined> {
+    const result = await this.#pool.query<AgentPlanRow>(
+      `select * from agent_plans where job_id = $1`,
+      [jobId]
+    );
+    return result.rows[0] ? mapAgentPlanRow(result.rows[0]) : undefined;
+  }
+
+  async listPlanSteps(planId: string): Promise<AgentPlanStep[]> {
+    const result = await this.#pool.query<AgentPlanStepRow>(
+      `select * from agent_plan_steps where plan_id = $1 order by position asc`,
+      [planId]
+    );
+    return result.rows.map(mapAgentPlanStepRow);
+  }
+
+  async listJobStepRuns(jobId: string): Promise<AgentStepRun[]> {
+    const result = await this.#pool.query<AgentStepRunRow>(
+      `select * from agent_step_runs where job_id = $1 order by created_at_ms asc, id asc`,
+      [jobId]
+    );
+    return result.rows.map(mapAgentStepRunRow);
   }
 
   async listSessionMessages(sessionId: string, afterRowId = 0): Promise<AgentMessage[]> {
@@ -157,6 +209,26 @@ export class PostgresAgentStore implements AgentStore {
     input: AnswerInputAndClaimResumeInput
   ): Promise<AnswerInputAndClaimResumeResult> {
     return this.#withClient(client => answerInputAndClaimResumeCommand(client, input));
+  }
+
+  async routeJob(input: RouteJobInput): Promise<AgentJob> {
+    return this.#withClient(client => routeJobCommand(client, input));
+  }
+
+  async createPlan(input: CreatePlanInput): Promise<CreatePlanResult> {
+    return this.#withClient(client => createPlanCommand(client, input));
+  }
+
+  async createStepRun(input: CreateStepRunInput): Promise<CreateStepRunResult> {
+    return this.#withClient(client => createStepRunCommand(client, input));
+  }
+
+  async commitStepOutput(input: CommitStepOutputInput): Promise<CommitStepOutputResult> {
+    return this.#withClient(client => commitStepOutputCommand(client, input));
+  }
+
+  async failStepRun(input: FailStepRunInput): Promise<FailStepRunResult> {
+    return this.#withClient(client => failStepRunCommand(client, input));
   }
 
   async failJob(input: FailJobInput): Promise<AgentJob> {

@@ -7,6 +7,7 @@ import {
 import type { AgentToolDefinition } from '../agent-loop/model-port.js';
 import type { AgentLoopTarget } from '../agent-loop/agent-loop.js';
 import type { AgentStore } from '../storage/agent-store.js';
+import type { AgentJobError } from '../domain/index.js';
 import { mapStoreError } from './runtime-errors.js';
 import { checksumToolArguments, createToolIdempotencyKey } from './transaction-commands.js';
 
@@ -248,6 +249,62 @@ export class RuntimeEventWriter {
       return committed;
     } catch (error) {
       throw mapStoreError(error);
+    }
+  }
+
+  async commitStepOutput(
+    event: Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted }>,
+    target: AgentLoopTarget & { stepRunId: string },
+    structuredOutput: unknown
+  ) {
+    if (event.toolCalls.length > 0) throw new TypeError('StepOutput cannot contain tool calls.');
+    try {
+      const committed = await this.#store.commitStepOutput({
+        sessionId: target.sessionId,
+        jobId: target.jobId,
+        workerId: this.#workerId,
+        attemptId: target.attemptId,
+        stepRunId: target.stepRunId,
+        messageId: this.#messageId(target.jobId, event.outputId),
+        outputId: event.outputId,
+        content: JSON.stringify(structuredOutput),
+        structuredOutput,
+        nowMs: this.#clock.nowMs(),
+      });
+      await this.#publish({ type: 'message.upserted', sessionId: target.sessionId, message: committed.message });
+      await this.#publish({ type: 'step_run.upserted', sessionId: target.sessionId, stepRun: committed.stepRun });
+      await this.#publish({ type: 'plan_step.upserted', sessionId: target.sessionId, step: committed.step });
+      await this.#publish({ type: 'plan.upserted', sessionId: target.sessionId, plan: committed.plan });
+      await this.#publish({ type: 'job.upserted', sessionId: target.sessionId, job: committed.job });
+      return committed;
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
+  async failStepRun(
+    target: AgentLoopTarget & { stepRunId: string },
+    error: AgentJobError,
+    retryStep: boolean
+  ) {
+    try {
+      const committed = await this.#store.failStepRun({
+        sessionId: target.sessionId,
+        jobId: target.jobId,
+        workerId: this.#workerId,
+        attemptId: target.attemptId,
+        stepRunId: target.stepRunId,
+        error,
+        retryStep,
+        nowMs: this.#clock.nowMs(),
+      });
+      await this.#publish({ type: 'step_run.upserted', sessionId: target.sessionId, stepRun: committed.stepRun });
+      await this.#publish({ type: 'plan_step.upserted', sessionId: target.sessionId, step: committed.step });
+      await this.#publish({ type: 'plan.upserted', sessionId: target.sessionId, plan: committed.plan });
+      await this.#publish({ type: 'job.upserted', sessionId: target.sessionId, job: committed.job });
+      return committed;
+    } catch (storeError) {
+      throw mapStoreError(storeError);
     }
   }
 

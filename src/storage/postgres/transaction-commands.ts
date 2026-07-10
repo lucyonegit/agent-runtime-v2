@@ -19,6 +19,15 @@ import {
   type CreateJobAndAppendUserMessageInput,
   type CreateJobAndAppendUserMessageResult,
   type CreateSessionInput,
+  type CreatePlanInput,
+  type CreatePlanResult,
+  type CreateStepRunInput,
+  type CreateStepRunResult,
+  type CommitStepOutputInput,
+  type CommitStepOutputResult,
+  type FailStepRunInput,
+  type FailStepRunResult,
+  type RouteJobInput,
   type FailJobInput,
   type RenewJobLeaseInput,
 } from '../agent-store.js';
@@ -26,11 +35,17 @@ import {
   mapAgentJobRow,
   mapAgentMessageRow,
   mapAgentSessionRow,
+  mapAgentPlanRow,
+  mapAgentPlanStepRow,
+  mapAgentStepRunRow,
   mapAgentToolInvocationRow,
   mapAgentUserInputRequestRow,
   type AgentJobRow,
   type AgentMessageRow,
   type AgentSessionRow,
+  type AgentPlanRow,
+  type AgentPlanStepRow,
+  type AgentStepRunRow,
   type AgentToolInvocationRow,
   type AgentUserInputRequestRow,
 } from './row-mappers.js';
@@ -929,6 +944,430 @@ export async function answerInputAndClaimResumeCommand(
   });
 }
 
+export async function routeJobCommand(
+  client: PoolClient,
+  input: RouteJobInput
+): Promise<AgentJob> {
+  const result = await client.query<AgentJobRow>(
+    `update agent_jobs
+     set strategy = $2,
+         stage = $3,
+         version = version + 1,
+         updated_at_ms = $6
+     where id = $1
+       and status in ('running', 'resuming')
+       and lease_owner = $4
+       and current_attempt_id = $5
+       and lease_expires_at_ms > $6
+     returning *`,
+    [
+      input.jobId,
+      input.strategy,
+      input.strategy === 'direct' ? 'direct_execution' : 'planning',
+      input.workerId,
+      input.attemptId,
+      input.nowMs,
+    ]
+  );
+  if (result.rows[0]) return mapAgentJobRow(result.rows[0]);
+  const job = await selectJob(client, input.jobId);
+  if (!job) throw jobNotFound(input.jobId);
+  assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+  throw new AgentStoreError(
+    'INVALID_JOB_STATE',
+    `Job ${JSON.stringify(input.jobId)} cannot be routed from status ${job.status}.`
+  );
+}
+
+export async function createPlanCommand(
+  client: PoolClient,
+  input: CreatePlanInput
+): Promise<CreatePlanResult> {
+  if (input.steps.length === 0) throw new TypeError('A Plan requires at least one step.');
+  if (new Set(input.steps.map(step => step.id)).size !== input.steps.length) {
+    throw new TypeError('PlanStep IDs must be unique.');
+  }
+  const initialJob = await selectJob(client, input.jobId);
+  if (!initialJob || initialJob.session_id !== input.sessionId) throw jobNotFound(input.jobId);
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    const jobResult = await client.query<AgentJobRow>(
+      `select * from agent_jobs where id = $1 for update`,
+      [input.jobId]
+    );
+    const job = requireRow(jobResult.rows[0], 'lock job for plan creation');
+    assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+    if (job.strategy !== 'planned' || job.stage !== 'planning') {
+      throw new AgentStoreError(
+        'INVALID_JOB_STATE',
+        `Job ${JSON.stringify(job.id)} is not in planned planning stage.`
+      );
+    }
+    const planResult = await client.query<AgentPlanRow>(
+      `insert into agent_plans(
+         id, session_id, job_id, title, goal, status, version, metadata,
+         created_at_ms, updated_at_ms
+       ) values ($1, $2, $3, $4, $5, 'active', 0, $6, $7, $7)
+       returning *`,
+      [
+        input.planId,
+        input.sessionId,
+        input.jobId,
+        input.title,
+        input.goal,
+        input.metadata ?? null,
+        input.nowMs,
+      ]
+    );
+    const stepRows: AgentPlanStepRow[] = [];
+    for (const [position, step] of input.steps.entries()) {
+      const stepResult = await client.query<AgentPlanStepRow>(
+        `insert into agent_plan_steps(
+           id, plan_id, position, title, instruction, status, version, metadata,
+           created_at_ms, updated_at_ms
+         ) values ($1, $2, $3, $4, $5, 'pending', 0, $6, $7, $7)
+         returning *`,
+        [step.id, input.planId, position, step.title, step.instruction, step.metadata ?? null, input.nowMs]
+      );
+      stepRows.push(requireRow(stepResult.rows[0], 'create plan step'));
+    }
+    const messageResult = await client.query<AgentMessageRow>(
+      `insert into agent_messages(
+         id, session_id, job_id, plan_id, attempt_id,
+         role, message_type, visibility, channel, content, metadata, created_at_ms
+       ) values (
+         $1, $2, $3, $4, $5,
+         'assistant', 'plan_created', 'ui', 'normal', $6, $7, $8
+       ) returning *`,
+      [
+        input.messageId,
+        input.sessionId,
+        input.jobId,
+        input.planId,
+        input.attemptId,
+        input.title,
+        JSON.stringify({ goal: input.goal, steps: input.steps }),
+        input.nowMs,
+      ]
+    );
+    const updatedJob = await client.query<AgentJobRow>(
+      `update agent_jobs
+       set stage = 'step_execution', version = version + 1, updated_at_ms = $2
+       where id = $1 returning *`,
+      [input.jobId, input.nowMs]
+    );
+    await touchSession(client, input.sessionId, input.nowMs);
+    return {
+      job: mapAgentJobRow(requireRow(updatedJob.rows[0], 'advance job to step execution')),
+      plan: mapAgentPlanRow(requireRow(planResult.rows[0], 'create plan')),
+      steps: stepRows.map(mapAgentPlanStepRow),
+      message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'create plan message')),
+    };
+  });
+}
+
+export async function createStepRunCommand(
+  client: PoolClient,
+  input: CreateStepRunInput
+): Promise<CreateStepRunResult> {
+  if (!Number.isSafeInteger(input.maxRunsPerStep) || input.maxRunsPerStep < 1) {
+    throw new RangeError('maxRunsPerStep must be a positive safe integer.');
+  }
+  const initialJob = await selectJob(client, input.jobId);
+  if (!initialJob || initialJob.session_id !== input.sessionId) throw jobNotFound(input.jobId);
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    const jobResult = await client.query<AgentJobRow>(
+      `select * from agent_jobs where id = $1 for update`,
+      [input.jobId]
+    );
+    const job = requireRow(jobResult.rows[0], 'lock job for step run');
+    assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+    if (job.strategy !== 'planned' || job.stage !== 'step_execution') {
+      throw new AgentStoreError('INVALID_JOB_STATE', 'Job is not ready for StepRun execution.');
+    }
+    const planResult = await client.query<AgentPlanRow>(
+      `select * from agent_plans where id = $1 and job_id = $2 for update`,
+      [input.planId, input.jobId]
+    );
+    const plan = planResult.rows[0];
+    if (!plan) throw new AgentStoreError('PLAN_NOT_FOUND', `Plan ${input.planId} was not found.`);
+    if (plan.status !== 'active') {
+      throw new AgentStoreError('INVALID_PLAN_STATE', `Plan ${input.planId} is ${plan.status}.`);
+    }
+    const stepResult = await client.query<AgentPlanStepRow>(
+      `select * from agent_plan_steps where id = $1 and plan_id = $2 for update`,
+      [input.stepId, input.planId]
+    );
+    const step = stepResult.rows[0];
+    if (!step) throw new AgentStoreError('PLAN_STEP_NOT_FOUND', `PlanStep ${input.stepId} was not found.`);
+    if (step.status !== 'pending') {
+      throw new AgentStoreError('INVALID_PLAN_STATE', `PlanStep ${input.stepId} is ${step.status}.`);
+    }
+    const previousRuns = await client.query<{ run_no: number; status: string }>(
+      `select run_no, status
+       from agent_step_runs
+       where step_id = $1
+       order by run_no desc
+       for update`,
+      [input.stepId]
+    );
+    const nextRunNo = (previousRuns.rows[0]?.run_no ?? 0) + 1;
+    if (nextRunNo > input.maxRunsPerStep) {
+      throw new AgentStoreError(
+        'INVALID_STEP_RUN_STATE',
+        `PlanStep ${input.stepId} exceeded max run count ${input.maxRunsPerStep}.`
+      );
+    }
+    if (previousRuns.rows[0] && previousRuns.rows[0].status !== 'failed') {
+      throw new AgentStoreError(
+        'INVALID_STEP_RUN_STATE',
+        'A new StepRun requires the previous run to be failed.'
+      );
+    }
+    const runResult = await client.query<AgentStepRunRow>(
+      `insert into agent_step_runs(
+         id, session_id, job_id, plan_id, step_id, run_no,
+         executor, status, current_attempt_id, attempt_no, version,
+         created_at_ms, updated_at_ms, started_at_ms
+       ) values (
+         $1, $2, $3, $4, $5, $6,
+         $7, 'running', $8, 1, 0,
+         $9, $9, $9
+       ) returning *`,
+      [
+        input.stepRunId,
+        input.sessionId,
+        input.jobId,
+        input.planId,
+        input.stepId,
+        nextRunNo,
+        input.executor,
+        input.attemptId,
+        input.nowMs,
+      ]
+    );
+    const updatedStep = await client.query<AgentPlanStepRow>(
+      `update agent_plan_steps
+       set status = 'running', version = version + 1, updated_at_ms = $2
+       where id = $1 returning *`,
+      [input.stepId, input.nowMs]
+    );
+    const updatedJob = await client.query<AgentJobRow>(
+      `update agent_jobs
+       set stage = 'step_execution', version = version + 1, updated_at_ms = $2
+       where id = $1 returning *`,
+      [input.jobId, input.nowMs]
+    );
+    return {
+      job: mapAgentJobRow(requireRow(updatedJob.rows[0], 'update job for step run')),
+      plan: mapAgentPlanRow(plan),
+      step: mapAgentPlanStepRow(requireRow(updatedStep.rows[0], 'start plan step')),
+      stepRun: mapAgentStepRunRow(requireRow(runResult.rows[0], 'create step run')),
+    };
+  });
+}
+
+export async function commitStepOutputCommand(
+  client: PoolClient,
+  input: CommitStepOutputInput
+): Promise<CommitStepOutputResult> {
+  const initialRun = await selectStepRun(client, input.stepRunId);
+  if (!initialRun || initialRun.job_id !== input.jobId || initialRun.session_id !== input.sessionId) {
+    throw new AgentStoreError('STEP_RUN_NOT_FOUND', `StepRun ${input.stepRunId} was not found.`);
+  }
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    const jobResult = await client.query<AgentJobRow>(
+      `select * from agent_jobs where id = $1 for update`, [input.jobId]
+    );
+    const job = requireRow(jobResult.rows[0], 'lock job for step output');
+    assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+    const planResult = await client.query<AgentPlanRow>(
+      `select * from agent_plans where id = $1 for update`, [initialRun.plan_id]
+    );
+    const stepResult = await client.query<AgentPlanStepRow>(
+      `select * from agent_plan_steps where id = $1 for update`, [initialRun.step_id]
+    );
+    const runResult = await client.query<AgentStepRunRow>(
+      `select * from agent_step_runs where id = $1 for update`, [input.stepRunId]
+    );
+    const plan = requireRow(planResult.rows[0], 'lock plan for step output');
+    const step = requireRow(stepResult.rows[0], 'lock step for output');
+    const run = requireRow(runResult.rows[0], 'lock step run for output');
+    if (
+      !['running', 'resuming'].includes(run.status)
+      || run.current_attempt_id !== input.attemptId
+      || step.status !== 'running'
+      || plan.status !== 'active'
+    ) {
+      throw new AgentStoreError('INVALID_STEP_RUN_STATE', 'StepRun is not active in this attempt.');
+    }
+    const messageResult = await client.query<AgentMessageRow>(
+      `insert into agent_messages(
+         id, session_id, job_id, plan_id, step_id, step_run_id,
+         attempt_id, output_id, role, message_type, visibility, channel,
+         content, metadata, created_at_ms
+       ) values (
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, 'assistant', 'step_output', 'ui', 'final',
+         $9, $10, $11
+       ) returning *`,
+      [
+        input.messageId,
+        input.sessionId,
+        input.jobId,
+        run.plan_id,
+        run.step_id,
+        run.id,
+        input.attemptId,
+        input.outputId,
+        input.content,
+        JSON.stringify({ structuredOutput: input.structuredOutput }),
+        input.nowMs,
+      ]
+    );
+    const updatedRun = await client.query<AgentStepRunRow>(
+      `update agent_step_runs
+       set status = 'completed', output_message_id = $2,
+           version = version + 1, updated_at_ms = $3, completed_at_ms = $3
+       where id = $1 returning *`,
+      [run.id, input.messageId, input.nowMs]
+    );
+    const updatedStep = await client.query<AgentPlanStepRow>(
+      `update agent_plan_steps
+       set status = 'completed', output_message_id = $2,
+           version = version + 1, updated_at_ms = $3, completed_at_ms = $3
+       where id = $1 returning *`,
+      [step.id, input.messageId, input.nowMs]
+    );
+    const remaining = await client.query<{ count: string }>(
+      `select count(*)::text as count
+       from agent_plan_steps
+       where plan_id = $1 and status <> 'completed'`,
+      [plan.id]
+    );
+    const hasPendingSteps = remaining.rows[0]?.count !== '0';
+    let finalPlan: AgentPlanRow;
+    if (hasPendingSteps) {
+      finalPlan = plan;
+    } else {
+      const completedPlan = await client.query<AgentPlanRow>(
+        `update agent_plans
+         set status = 'completed', version = version + 1,
+             updated_at_ms = $2, completed_at_ms = $2
+         where id = $1 returning *`,
+        [plan.id, input.nowMs]
+      );
+      finalPlan = requireRow(completedPlan.rows[0], 'complete plan');
+    }
+    const updatedJob = await client.query<AgentJobRow>(
+      `update agent_jobs
+       set stage = $2, version = version + 1, updated_at_ms = $3
+       where id = $1 returning *`,
+      [input.jobId, hasPendingSteps ? 'step_execution' : 'finalizing', input.nowMs]
+    );
+    await touchSession(client, input.sessionId, input.nowMs);
+    return {
+      job: mapAgentJobRow(requireRow(updatedJob.rows[0], 'advance job after step output')),
+      plan: mapAgentPlanRow(finalPlan),
+      step: mapAgentPlanStepRow(requireRow(updatedStep.rows[0], 'complete plan step')),
+      stepRun: mapAgentStepRunRow(requireRow(updatedRun.rows[0], 'complete step run')),
+      message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'create step output message')),
+      hasPendingSteps,
+    };
+  });
+}
+
+export async function failStepRunCommand(
+  client: PoolClient,
+  input: FailStepRunInput
+): Promise<FailStepRunResult> {
+  const initialRun = await selectStepRun(client, input.stepRunId);
+  if (!initialRun || initialRun.job_id !== input.jobId || initialRun.session_id !== input.sessionId) {
+    throw new AgentStoreError('STEP_RUN_NOT_FOUND', `StepRun ${input.stepRunId} was not found.`);
+  }
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    const jobResult = await client.query<AgentJobRow>(
+      `select * from agent_jobs where id = $1 for update`, [input.jobId]
+    );
+    let job = requireRow(jobResult.rows[0], 'lock job for step failure');
+    assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+    const planResult = await client.query<AgentPlanRow>(
+      `select * from agent_plans where id = $1 for update`, [initialRun.plan_id]
+    );
+    const stepResult = await client.query<AgentPlanStepRow>(
+      `select * from agent_plan_steps where id = $1 for update`, [initialRun.step_id]
+    );
+    const runResult = await client.query<AgentStepRunRow>(
+      `select * from agent_step_runs where id = $1 for update`, [input.stepRunId]
+    );
+    let plan = requireRow(planResult.rows[0], 'lock plan for step failure');
+    let step = requireRow(stepResult.rows[0], 'lock step for failure');
+    const run = requireRow(runResult.rows[0], 'lock step run for failure');
+    if (!['running', 'resuming'].includes(run.status) || run.current_attempt_id !== input.attemptId) {
+      throw new AgentStoreError('INVALID_STEP_RUN_STATE', 'StepRun is not active in this attempt.');
+    }
+    const failedRunResult = await client.query<AgentStepRunRow>(
+      `update agent_step_runs
+       set status = 'failed', error_code = $2, error_message = $3, error_details = $4,
+           version = version + 1, updated_at_ms = $5, completed_at_ms = $5
+       where id = $1 returning *`,
+      [run.id, input.error.code, input.error.message, input.error.details ?? null, input.nowMs]
+    );
+    if (input.retryStep) {
+      const resetStep = await client.query<AgentPlanStepRow>(
+        `update agent_plan_steps
+         set status = 'pending', error_code = $2, error_message = $3, error_details = $4,
+             version = version + 1, updated_at_ms = $5, completed_at_ms = null
+         where id = $1 returning *`,
+        [step.id, input.error.code, input.error.message, input.error.details ?? null, input.nowMs]
+      );
+      step = requireRow(resetStep.rows[0], 'reset failed step for retry');
+      const retryJob = await client.query<AgentJobRow>(
+        `update agent_jobs
+         set stage = 'step_execution', version = version + 1, updated_at_ms = $2
+         where id = $1 returning *`,
+        [job.id, input.nowMs]
+      );
+      job = requireRow(retryJob.rows[0], 'keep job active for step retry');
+    } else {
+      const failedStep = await client.query<AgentPlanStepRow>(
+        `update agent_plan_steps
+         set status = 'failed', error_code = $2, error_message = $3, error_details = $4,
+             version = version + 1, updated_at_ms = $5, completed_at_ms = $5
+         where id = $1 returning *`,
+        [step.id, input.error.code, input.error.message, input.error.details ?? null, input.nowMs]
+      );
+      step = requireRow(failedStep.rows[0], 'fail plan step');
+      const failedPlan = await client.query<AgentPlanRow>(
+        `update agent_plans
+         set status = 'failed', version = version + 1,
+             updated_at_ms = $2, completed_at_ms = $2
+         where id = $1 returning *`,
+        [plan.id, input.nowMs]
+      );
+      plan = requireRow(failedPlan.rows[0], 'fail plan');
+      const failedJob = await client.query<AgentJobRow>(
+        `update agent_jobs
+         set status = 'failed', lease_owner = null, lease_expires_at_ms = null,
+             error_code = $2, error_message = $3, error_details = $4,
+             version = version + 1, updated_at_ms = $5, completed_at_ms = $5
+         where id = $1 returning *`,
+        [job.id, input.error.code, input.error.message, input.error.details ?? null, input.nowMs]
+      );
+      job = requireRow(failedJob.rows[0], 'fail job after step failure');
+    }
+    return {
+      job: mapAgentJobRow(job),
+      plan: mapAgentPlanRow(plan),
+      step: mapAgentPlanStepRow(step),
+      stepRun: mapAgentStepRunRow(requireRow(failedRunResult.rows[0], 'fail step run')),
+    };
+  });
+}
+
 export async function failJobCommand(
   client: PoolClient,
   input: FailJobInput
@@ -1271,6 +1710,17 @@ async function selectToolInvocation(
      from agent_tool_invocations
      where job_id = $1 and tool_call_id = $2`,
     [jobId, toolCallId]
+  );
+  return result.rows[0];
+}
+
+async function selectStepRun(
+  client: PoolClient,
+  stepRunId: string
+): Promise<AgentStepRunRow | undefined> {
+  const result = await client.query<AgentStepRunRow>(
+    `select * from agent_step_runs where id = $1`,
+    [stepRunId]
   );
   return result.rows[0];
 }

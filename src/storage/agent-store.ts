@@ -2,8 +2,12 @@ import type {
   AgentJob,
   AgentJobError,
   AgentMessage,
+  AgentPlan,
+  AgentPlanStep,
   AgentSession,
   AgentSessionMode,
+  AgentStepRun,
+  AgentStepRunExecutor,
   AgentToolCall,
   AgentToolInvocation,
   AgentToolSideEffectLevel,
@@ -29,7 +33,12 @@ export type AgentStoreErrorCode =
   | 'INVALID_TOOL_INVOCATION_STATE'
   | 'USER_INPUT_REQUEST_NOT_FOUND'
   | 'INVALID_USER_INPUT_STATE'
-  | 'USER_INPUT_ANSWER_CONFLICT';
+  | 'USER_INPUT_ANSWER_CONFLICT'
+  | 'PLAN_NOT_FOUND'
+  | 'PLAN_STEP_NOT_FOUND'
+  | 'STEP_RUN_NOT_FOUND'
+  | 'INVALID_PLAN_STATE'
+  | 'INVALID_STEP_RUN_STATE';
 
 export class AgentStoreError extends Error {
   readonly code: AgentStoreErrorCode;
@@ -225,6 +234,102 @@ export interface AnswerInputAndClaimResumeResult {
   attemptId?: string;
 }
 
+export interface RouteJobInput {
+  jobId: string;
+  workerId: string;
+  attemptId: string;
+  strategy: 'direct' | 'planned';
+  nowMs: number;
+}
+
+export interface CreatePlanStepInput {
+  id: string;
+  title: string;
+  instruction: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreatePlanInput {
+  sessionId: string;
+  jobId: string;
+  workerId: string;
+  attemptId: string;
+  planId: string;
+  messageId: string;
+  title: string;
+  goal: string;
+  steps: CreatePlanStepInput[];
+  metadata?: Record<string, unknown>;
+  nowMs: number;
+}
+
+export interface CreatePlanResult {
+  job: AgentJob;
+  plan: AgentPlan;
+  steps: AgentPlanStep[];
+  message: AgentMessage;
+}
+
+export interface CreateStepRunInput {
+  sessionId: string;
+  jobId: string;
+  workerId: string;
+  attemptId: string;
+  planId: string;
+  stepId: string;
+  stepRunId: string;
+  executor: AgentStepRunExecutor;
+  maxRunsPerStep: number;
+  nowMs: number;
+}
+
+export interface CreateStepRunResult {
+  job: AgentJob;
+  plan: AgentPlan;
+  step: AgentPlanStep;
+  stepRun: AgentStepRun;
+}
+
+export interface CommitStepOutputInput {
+  sessionId: string;
+  jobId: string;
+  workerId: string;
+  attemptId: string;
+  stepRunId: string;
+  messageId: string;
+  outputId: string;
+  content: string;
+  structuredOutput: unknown;
+  nowMs: number;
+}
+
+export interface CommitStepOutputResult {
+  job: AgentJob;
+  plan: AgentPlan;
+  step: AgentPlanStep;
+  stepRun: AgentStepRun;
+  message: AgentMessage;
+  hasPendingSteps: boolean;
+}
+
+export interface FailStepRunInput {
+  sessionId: string;
+  jobId: string;
+  workerId: string;
+  attemptId: string;
+  stepRunId: string;
+  error: AgentJobError;
+  retryStep: boolean;
+  nowMs: number;
+}
+
+export interface FailStepRunResult {
+  job: AgentJob;
+  plan: AgentPlan;
+  step: AgentPlanStep;
+  stepRun: AgentStepRun;
+}
+
 export interface AgentStore {
   createSession(input: CreateSessionInput): Promise<AgentSession>;
   getSession(sessionId: string): Promise<AgentSession | undefined>;
@@ -234,6 +339,9 @@ export interface AgentStore {
     clientRequestId: string
   ): Promise<AgentJob | undefined>;
   getToolInvocation(jobId: string, toolCallId: string): Promise<AgentToolInvocation | undefined>;
+  getPlanByJobId(jobId: string): Promise<AgentPlan | undefined>;
+  listPlanSteps(planId: string): Promise<AgentPlanStep[]>;
+  listJobStepRuns(jobId: string): Promise<AgentStepRun[]>;
   listSessionMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
@@ -252,6 +360,11 @@ export interface AgentStore {
   answerInputAndClaimResume(
     input: AnswerInputAndClaimResumeInput
   ): Promise<AnswerInputAndClaimResumeResult>;
+  routeJob(input: RouteJobInput): Promise<AgentJob>;
+  createPlan(input: CreatePlanInput): Promise<CreatePlanResult>;
+  createStepRun(input: CreateStepRunInput): Promise<CreateStepRunResult>;
+  commitStepOutput(input: CommitStepOutputInput): Promise<CommitStepOutputResult>;
+  failStepRun(input: FailStepRunInput): Promise<FailStepRunResult>;
   failJob(input: FailJobInput): Promise<AgentJob>;
   cancelJob(input: CancelJobInput): Promise<AgentJob>;
 }

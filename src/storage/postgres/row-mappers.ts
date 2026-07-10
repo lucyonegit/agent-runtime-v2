@@ -8,9 +8,16 @@ import type {
   AgentMessageRole,
   AgentMessageType,
   AgentMessageVisibility,
+  AgentPlan,
+  AgentPlanStatus,
+  AgentPlanStep,
+  AgentPlanStepStatus,
   AgentSession,
   AgentSessionMode,
   AgentSessionStatus,
+  AgentStepRun,
+  AgentStepRunExecutor,
+  AgentStepRunStatus,
   AgentToolCall,
   AgentToolInvocation,
   AgentToolInvocationStatus,
@@ -131,6 +138,61 @@ export interface AgentUserInputRequestRow {
   created_at_ms: string | number;
   updated_at_ms: string | number;
   answered_at_ms: string | number | null;
+}
+
+export interface AgentPlanRow {
+  id: string;
+  session_id: string;
+  job_id: string;
+  title: string;
+  goal: string;
+  status: string;
+  version: number;
+  metadata: unknown;
+  created_at_ms: string | number;
+  updated_at_ms: string | number;
+  completed_at_ms: string | number | null;
+}
+
+export interface AgentPlanStepRow {
+  id: string;
+  plan_id: string;
+  position: number;
+  title: string;
+  instruction: string;
+  status: string;
+  output_message_id: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  error_details: unknown;
+  version: number;
+  metadata: unknown;
+  created_at_ms: string | number;
+  updated_at_ms: string | number;
+  completed_at_ms: string | number | null;
+}
+
+export interface AgentStepRunRow {
+  id: string;
+  session_id: string;
+  job_id: string;
+  plan_id: string;
+  step_id: string;
+  run_no: number;
+  executor: string;
+  status: string;
+  current_attempt_id: string | null;
+  attempt_no: number;
+  output_message_id: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  error_details: unknown;
+  version: number;
+  metadata: unknown;
+  created_at_ms: string | number;
+  updated_at_ms: string | number;
+  started_at_ms: string | number | null;
+  completed_at_ms: string | number | null;
 }
 
 export function mapAgentSessionRow(row: AgentSessionRow): AgentSession {
@@ -282,6 +344,91 @@ export function mapAgentUserInputRequestRow(
     ...(row.answered_at_ms === null
       ? {}
       : { answeredAtMs: mapBigint(row.answered_at_ms, 'agent_user_input_requests.answered_at_ms') }),
+  };
+}
+
+export function mapAgentPlanRow(row: AgentPlanRow): AgentPlan {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    jobId: row.job_id,
+    title: row.title,
+    goal: row.goal,
+    status: row.status as AgentPlanStatus,
+    version: row.version,
+    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_plans.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_plans.created_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_plans.updated_at_ms'),
+    ...(row.completed_at_ms === null
+      ? {}
+      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_plans.completed_at_ms') }),
+  };
+}
+
+export function mapAgentPlanStepRow(row: AgentPlanStepRow): AgentPlanStep {
+  return {
+    id: row.id,
+    planId: row.plan_id,
+    position: row.position,
+    title: row.title,
+    instruction: row.instruction,
+    status: row.status as AgentPlanStepStatus,
+    ...(row.output_message_id === null ? {} : { outputMessageId: row.output_message_id }),
+    ...(row.error_code === null || row.error_message === null
+      ? {}
+      : {
+          error: {
+            code: row.error_code,
+            message: row.error_message,
+            ...(row.error_details === null ? {} : { details: row.error_details }),
+          },
+        }),
+    version: row.version,
+    ...(row.metadata === null
+      ? {}
+      : { metadata: mapRecord(row.metadata, 'agent_plan_steps.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_plan_steps.created_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_plan_steps.updated_at_ms'),
+    ...(row.completed_at_ms === null
+      ? {}
+      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_plan_steps.completed_at_ms') }),
+  };
+}
+
+export function mapAgentStepRunRow(row: AgentStepRunRow): AgentStepRun {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    jobId: row.job_id,
+    planId: row.plan_id,
+    stepId: row.step_id,
+    runNo: row.run_no,
+    executor: row.executor as AgentStepRunExecutor,
+    status: row.status as AgentStepRunStatus,
+    ...(row.current_attempt_id === null ? {} : { currentAttemptId: row.current_attempt_id }),
+    attemptNo: row.attempt_no,
+    ...(row.output_message_id === null ? {} : { outputMessageId: row.output_message_id }),
+    ...(row.error_code === null || row.error_message === null
+      ? {}
+      : {
+          error: {
+            code: row.error_code,
+            message: row.error_message,
+            ...(row.error_details === null ? {} : { details: row.error_details }),
+          },
+        }),
+    version: row.version,
+    ...(row.metadata === null
+      ? {}
+      : { metadata: mapRecord(row.metadata, 'agent_step_runs.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_step_runs.created_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_step_runs.updated_at_ms'),
+    ...(row.started_at_ms === null
+      ? {}
+      : { startedAtMs: mapBigint(row.started_at_ms, 'agent_step_runs.started_at_ms') }),
+    ...(row.completed_at_ms === null
+      ? {}
+      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_step_runs.completed_at_ms') }),
   };
 }
 
