@@ -22,6 +22,7 @@ export interface ToolUserInputRequest {
   prompt: string;
   inputSchema: AgentUserInputSchema;
   title?: string;
+  sensitiveAnswer?: boolean;
 }
 
 export type LoopEvent =

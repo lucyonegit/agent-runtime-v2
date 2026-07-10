@@ -35,7 +35,7 @@ export interface BuildContextInput {
   stableContext?: string;
   messages: AgentMessage[];
   invocations: AgentToolInvocation[];
-  summaries?: Array<{ id: string; summary: string }>;
+  summaries?: Array<{ id: string; summary: string; sourceRowIdEnd?: number }>;
   model: {
     provider: string;
     name: string;
@@ -45,6 +45,7 @@ export interface BuildContextInput {
   toolSchemas?: AgentToolDefinition[];
   newCompressibleMessageCount?: number;
   compressionMessageThreshold?: number;
+  compressionSourcePurpose?: Exclude<ContextPurpose, 'context_compression'>;
 }
 
 export interface BuiltContext {
@@ -90,7 +91,9 @@ export class ContextBuilder {
       );
     }
     const groups = this.#filter.filter(builtGroups.groups, {
-      purpose: input.purpose,
+      purpose: input.purpose === 'context_compression'
+        ? input.compressionSourcePurpose ?? 'conversation'
+        : input.purpose,
       currentJobId: input.job.id,
       currentStepRunId: input.stepRun?.id,
     });
@@ -136,6 +139,7 @@ export class ContextBuilder {
         originalOrder: order++,
       });
     }
+    const maxCoveredRowId = Math.max(0, ...(input.summaries ?? []).map(summary => summary.sourceRowIdEnd ?? 0));
     for (const summary of input.summaries ?? []) {
       items.push({
         id: `summary:${summary.id}`,
@@ -155,6 +159,7 @@ export class ContextBuilder {
     for (const group of groups) {
       if (isDuplicateGoal(group, input.job.id, input.originalGoal)) continue;
       const messages = messagesInGroup(group);
+      if (maxCoveredRowId > 0 && messages.every(message => message.rowId <= maxCoveredRowId)) continue;
       const recency = Math.max(...messages.map(message => message.rowId));
       items.push({
         id: group.id,

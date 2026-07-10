@@ -1,6 +1,6 @@
 # Runtime 重构文档索引
 
-这组文档描述的是 **Agent Runtime V2 的目标重构**，不是“当前代码已经完全实现”的声明。推荐按以下顺序阅读：
+这组文档同时保留设计演进记录与 Agent Runtime V2 的 canonical 落地说明。推荐按以下顺序阅读：
 
 1. [决策记录与现状审计](./00-决策记录与现状审计.md)
    - 汇总此前讨论结论、否决方案、当前实现的根问题。
@@ -15,7 +15,9 @@
 6. [修订版分阶段实施计划](./05-修订版分阶段实施计划.md)
    - P0 一致性风险修订记录，保留作方案演进参考。
 7. [完整 Job + StepRun 架构设计](./06-完整Job-StepRun架构设计.md)
-   - 当前 canonical design candidate；包含命名、模块、表结构、状态机、事务、恢复、Context、SSE、API、测试和交付顺序。
+   - canonical design；包含命名、模块、表结构、状态机、事务、恢复、Context、SSE、API、测试和交付顺序。
+8. [实现验收与运维手册](./07-实现验收与运维手册.md)
+   - 当前实现入口、环境变量、启动、migration/reset、测试、HTTP 契约和故障处置。
 
 当 01–05 与 06 的目标命名、表结构或恢复语义冲突时，以 06 为准。
 
@@ -23,6 +25,6 @@
 
 `agent_messages` 是唯一会话事实时间线；`Job` 是工作流与 lease 边界；`StepRun` 是 PlanStep 的执行 checkpoint；`ToolInvocation` 保存每个工具调用的恢复状态；`ContextBuilder` 按 purpose 投影；UI 与 SSE 消费提交后的同一批实体。
 
-## 当前执行建议
+## 当前维护规则
 
-先审阅第 06 篇并确认 canonical design；确认后基于该设计另行生成逐任务实施计划。不要直接执行第 03 或第 05 篇，因为它们没有完整表达最终的 Job + StepRun 表结构与 ToolInvocation 恢复语义。
+架构或数据库语义变更先更新第 06 篇，再同步代码、migration、contract tests 与第 07 篇运维说明。不要基于第 03 或第 05 篇继续扩展旧 Task 模型。

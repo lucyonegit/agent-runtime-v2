@@ -93,9 +93,13 @@ export class RuntimeEventWriter {
           content: event.content,
           invocations: event.toolCalls.map(call => {
             const definition = this.#definitions.get(call.name);
+            const persistedCall = {
+              ...call,
+              args: redactToolArguments(call.args, definition?.sensitiveArgumentPaths ?? []),
+            };
             return {
               invocationId: this.#ids.toolInvocationId(),
-              call,
+              call: persistedCall,
               argumentsChecksum: checksumToolArguments(call.args),
               sideEffectLevel: definition?.sideEffectLevel ?? 'read_only',
               idempotencyKey: createToolIdempotencyKey(target.jobId, call.id),
@@ -224,6 +228,7 @@ export class RuntimeEventWriter {
           title: event.request.title,
           prompt: event.request.prompt,
           inputSchema: event.request.inputSchema,
+          ...(event.request.sensitiveAnswer ? { metadata: { sensitiveAnswer: true } } : {}),
         })),
         nowMs: this.#clock.nowMs(),
       });
@@ -330,6 +335,29 @@ export class RuntimeEventWriter {
       }
     }
   }
+}
+
+export function redactToolArguments(
+  arguments_: Record<string, unknown>,
+  sensitivePaths: string[]
+): Record<string, unknown> {
+  if (sensitivePaths.length === 0) return arguments_;
+  const copy = structuredClone(arguments_);
+  for (const path of sensitivePaths) {
+    const segments = path.startsWith('/')
+      ? path.slice(1).split('/').map(segment => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
+      : path.split('.');
+    let owner: unknown = copy;
+    for (let index = 0; index < segments.length - 1; index += 1) {
+      if (!owner || typeof owner !== 'object') break;
+      owner = (owner as Record<string, unknown>)[segments[index]!];
+    }
+    const key = segments.at(-1);
+    if (key && owner && typeof owner === 'object' && key in owner) {
+      (owner as Record<string, unknown>)[key] = '[REDACTED]';
+    }
+  }
+  return copy;
 }
 
 const randomWriterIds: RuntimeEventWriterIds = {

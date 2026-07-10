@@ -13,6 +13,8 @@ import { PlanSummarizer } from '../src/planner/plan-summarizer.js';
 import { SessionView } from '../src/view/session-view.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
+import { RuntimeJobExecutionService } from '../src/server/runtime/job-execution.service.js';
+import type { AgentLoopModelPort } from '../src/agent-loop/model-port.js';
 
 const databaseUrl = process.env.DATABASE_URL
   ?? 'postgresql://postgres:postgres@127.0.0.1:55433/agent_runtime_test';
@@ -1007,7 +1009,7 @@ describe('PostgresAgentStore Job transactions', () => {
       inputManifest: manifest, inputChecksum: 'checksum_2',
       maxContextTokens: 100, reservedOutputTokens: 10, estimatedInputTokens: 10, nowMs: 33,
     });
-    await expect(store.abandonStartedModelCalls(34)).resolves.toMatchObject([{
+    await expect(store.abandonStartedModelCalls(201)).resolves.toMatchObject([{
       id: 'model_call_2', status: 'failed', errorCode: 'model_call_abandoned',
     }]);
     expect(await store.getModelUsageStats('session_audit')).toMatchObject({
@@ -1038,6 +1040,97 @@ describe('PostgresAgentStore Job transactions', () => {
     expect((await pool!.query(
       `select status from agent_context_summaries where id = 'summary_audit_1'`
     )).rows[0]).toEqual({ status: 'superseded' });
+  });
+
+  it('executes direct and two-step planned Jobs through the production runtime service', async () => {
+    const now = Date.now();
+    const events: AgentRealtimeEvent[] = [];
+    const model: AgentLoopModelPort = {
+      invoke: async request => {
+        const text = request.messages.map(message => String(message.content)).join('\n');
+        const usage = { inputTokens: 12, outputTokens: 8, totalTokens: 20, source: 'provider' as const };
+        if (text.includes('Return JSON only: {"strategy"')) {
+          return { content: JSON.stringify({ strategy: text.includes('job_planned') ? 'planned' : 'direct' }), usage };
+        }
+        if (text.includes('Compress the supplied runtime history')) {
+          return { content: 'compressed factual runtime history', usage };
+        }
+        if (text.includes('Keep steps declarative and ordered')) {
+          return {
+            content: JSON.stringify({
+              title: 'Two step plan', goal: 'complete both steps',
+              steps: [
+                { title: 'First', instruction: 'Complete the first isolated step.' },
+                { title: 'Second', instruction: 'Complete the second isolated step.' },
+              ],
+            }),
+            usage,
+          };
+        }
+        if (text.includes('Execute only the current PlanStep')) {
+          return {
+            content: JSON.stringify({
+              schemaVersion: 1,
+              summary: text.includes('second isolated') ? 'second complete' : 'first complete',
+              artifacts: [], evidence: [], unresolved: [],
+            }),
+            usage,
+          };
+        }
+        if (text.includes('Write the final user-facing answer')) {
+          return { content: 'planned final answer', usage };
+        }
+        return { content: 'direct final answer', usage };
+      },
+    };
+    const executor = new RuntimeJobExecutionService({
+      store,
+      workerId: 'worker_runtime_e2e',
+      publisher: { publish: event => { events.push(event); } },
+      model,
+      provider: 'test',
+      modelName: 'deterministic-model',
+      tools: [],
+      jobLeaseMs: 60_000,
+      jobHeartbeatMs: 10_000,
+      compressionMessageThreshold: 1,
+    });
+
+    await store.createSession({ id: 'session_runtime_e2e', mode: 'agent', nowMs: now });
+    for (const id of ['job_direct', 'job_planned']) {
+      await createJob(store, 'session_runtime_e2e', id, `message_${id}`, now + 1);
+      const claimed = await store.claimJob({
+        jobId: id, expectedVersion: 0, workerId: 'worker_runtime_e2e',
+        attemptId: `attempt_${id}`, nowMs: now + 2, leaseUntilMs: now + 60_000,
+      });
+      expect(claimed.status).toBe('running');
+      await executor.execute(id);
+      expect(await store.getJob(id)).toMatchObject({ status: 'completed' });
+    }
+
+    const planned = await store.getPlanByJobId('job_planned');
+    expect(planned).toMatchObject({ status: 'completed', title: 'Two step plan' });
+    expect(await store.listPlanSteps(planned!.id)).toMatchObject([
+      { status: 'completed', outputMessageId: expect.any(String) },
+      { status: 'completed', outputMessageId: expect.any(String) },
+    ]);
+    expect(await store.listJobStepRuns('job_planned')).toMatchObject([
+      { runNo: 1, status: 'completed' },
+      { runNo: 1, status: 'completed' },
+    ]);
+    expect((await store.listSessionMessages('session_runtime_e2e')).at(-1)).toMatchObject({
+      messageType: 'plan_final', content: 'planned final answer',
+    });
+    expect(await store.getModelUsageStats('session_runtime_e2e')).toMatchObject({
+      totalModelCalls: 9,
+      totalActualInputTokens: 108,
+      totalActualOutputTokens: 72,
+      totalTokens: 180,
+    });
+    expect((await store.listModelCalls('job_planned')).some(call => call.callType === 'context.compress')).toBe(true);
+    expect(events.some(event => event.type === 'plan.upserted')).toBe(true);
+    expect(events.some(event => event.type === 'step_run.upserted')).toBe(true);
+    expect(events.some(event => event.type === 'model_usage.updated')).toBe(true);
   });
 
   it('fails descendants atomically, preserves side-effect uncertainty, and creates retry as a new Job', async () => {

@@ -16,6 +16,8 @@ export * from './planner/plan-summarizer.js';
 export * from './planner/planner-prompts.js';
 export * from './planner/step-output.js';
 export * from './planner/step-runner.js';
+export * from './orchestration/agent-runtime.js';
+export * from './orchestration/code-agent.js';
 export * from './runtime/execution-limits.js';
 export * from './runtime/agent-runner.js';
 export * from './runtime/audited-model-port.js';

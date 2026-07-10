@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentJob, AgentPlan, AgentPlanStep, AgentStepRun } from '../domain/index.js';
+import type { AgentJob, AgentPlan, AgentPlanStep, AgentRealtimeEvent, AgentStepRun } from '../domain/index.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { parseStepOutput, type StepOutputV1 } from './step-output.js';
 import { PlanSummarizer } from './plan-summarizer.js';
@@ -31,6 +31,7 @@ export interface PlanEngineOptions {
   ids?: PlanEngineIds;
   clock?: { nowMs(): number };
   maxStepRunsPerStep?: number;
+  publisher?: { publish(event: AgentRealtimeEvent): void | Promise<void> };
 }
 
 export class PlanEngine {
@@ -41,6 +42,7 @@ export class PlanEngine {
   readonly #ids: PlanEngineIds;
   readonly #clock: { nowMs(): number };
   readonly #maxStepRunsPerStep: number;
+  readonly #publisher?: PlanEngineOptions['publisher'];
 
   constructor(options: PlanEngineOptions) {
     this.#store = options.store;
@@ -50,6 +52,7 @@ export class PlanEngine {
     this.#ids = options.ids ?? randomPlanIds;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
     this.#maxStepRunsPerStep = options.maxStepRunsPerStep ?? 2;
+    this.#publisher = options.publisher;
   }
 
   async route(job: AgentJob, originalGoal: string) {
@@ -61,6 +64,7 @@ export class PlanEngine {
       strategy,
       nowMs: this.#clock.nowMs(),
     });
+    await this.#publish({ type: 'job.upserted', sessionId: job.sessionId, job: routedJob });
     if (strategy === 'direct') return { strategy, job: routedJob } as const;
     const spec = await this.#planner.createPlan({ goal: originalGoal });
     validatePlanSpec(spec);
@@ -76,6 +80,12 @@ export class PlanEngine {
       steps: spec.steps.map(step => ({ ...step, id: this.#ids.stepId() })),
       nowMs: this.#clock.nowMs(),
     });
+    await this.#publish({ type: 'job.upserted', sessionId: job.sessionId, job: created.job });
+    await this.#publish({ type: 'plan.upserted', sessionId: job.sessionId, plan: created.plan });
+    for (const step of created.steps) {
+      await this.#publish({ type: 'plan_step.upserted', sessionId: job.sessionId, step });
+    }
+    await this.#publish({ type: 'message.upserted', sessionId: job.sessionId, message: created.message });
     return { strategy, ...created } as const;
   }
 
@@ -90,7 +100,7 @@ export class PlanEngine {
     const steps = await this.#store.listPlanSteps(plan.id);
     const step = steps.find(candidate => candidate.status === 'pending');
     if (!step) return undefined;
-    return this.#store.createStepRun({
+    const created = await this.#store.createStepRun({
       sessionId: job.sessionId,
       jobId: job.id,
       workerId: this.#workerId,
@@ -102,6 +112,11 @@ export class PlanEngine {
       maxRunsPerStep: this.#maxStepRunsPerStep,
       nowMs: this.#clock.nowMs(),
     });
+    await this.#publish({ type: 'job.upserted', sessionId: job.sessionId, job: created.job });
+    await this.#publish({ type: 'plan.upserted', sessionId: job.sessionId, plan: created.plan });
+    await this.#publish({ type: 'plan_step.upserted', sessionId: job.sessionId, step: created.step });
+    await this.#publish({ type: 'step_run.upserted', sessionId: job.sessionId, stepRun: created.stepRun });
+    return created;
   }
 
   async finalize(
@@ -132,7 +147,7 @@ export class PlanEngine {
       currentDate,
       timezone,
     });
-    return this.#store.completeJobWithFinalMessage({
+    const completed = await this.#store.completeJobWithFinalMessage({
       sessionId: job.sessionId,
       jobId: job.id,
       workerId: this.#workerId,
@@ -143,6 +158,17 @@ export class PlanEngine {
       messageType: 'plan_final',
       nowMs: this.#clock.nowMs(),
     });
+    await this.#publish({ type: 'message.upserted', sessionId: job.sessionId, message: completed.message });
+    await this.#publish({ type: 'job.upserted', sessionId: job.sessionId, job: completed.job });
+    return completed;
+  }
+
+  async #publish(event: AgentRealtimeEvent): Promise<void> {
+    try {
+      await this.#publisher?.publish(event);
+    } catch {
+      // The durable SessionView remains authoritative when realtime delivery fails.
+    }
   }
 }
 

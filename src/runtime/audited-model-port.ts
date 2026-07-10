@@ -8,6 +8,7 @@ import type {
   ProviderTokenUsage,
 } from '../agent-loop/model-port.js';
 import type { AgentContextInputManifest, AgentModelCallType } from '../domain/index.js';
+import type { AgentRealtimeEvent } from '../domain/index.js';
 import type { AgentStore } from '../storage/agent-store.js';
 
 export interface AuditedModelPortOptions {
@@ -22,6 +23,7 @@ export interface AuditedModelPortOptions {
   maxContextTokens: number;
   reservedOutputTokens: number;
   baseManifest: AgentContextInputManifest;
+  publisher?: { publish(event: AgentRealtimeEvent): void | Promise<void> };
   ids?: { modelCallId(): string };
   clock?: { nowMs(): number };
 }
@@ -95,7 +97,7 @@ export class AuditedModelPort implements AgentLoopModelPort {
       throw error;
     } finally {
       if (!completed) {
-        await this.#options.store.completeModelCall({
+        const completed = await this.#options.store.completeModelCall({
           id: callId,
           status: 'cancelled',
           usageSource: usage?.source ?? 'unavailable',
@@ -103,6 +105,7 @@ export class AuditedModelPort implements AgentLoopModelPort {
           errorMessage: 'Model stream consumer stopped before completion.',
           nowMs: this.#clock.nowMs(),
         });
+        await this.#publishUsage(completed.usage);
       }
     }
   }
@@ -139,7 +142,7 @@ export class AuditedModelPort implements AgentLoopModelPort {
     usage: ProviderTokenUsage | undefined,
     result: { resultType: string; resultPayload: unknown; toolNames?: string[] }
   ): Promise<void> {
-    await this.#options.store.completeModelCall({
+    const completed = await this.#options.store.completeModelCall({
       id,
       status: 'completed',
       usageSource: usage?.source ?? 'unavailable',
@@ -151,10 +154,11 @@ export class AuditedModelPort implements AgentLoopModelPort {
       ...result,
       nowMs: this.#clock.nowMs(),
     });
+    await this.#publishUsage(completed.usage);
   }
 
   async #fail(id: string, error: unknown): Promise<void> {
-    await this.#options.store.completeModelCall({
+    const completed = await this.#options.store.completeModelCall({
       id,
       status: 'failed',
       usageSource: 'unavailable',
@@ -162,6 +166,19 @@ export class AuditedModelPort implements AgentLoopModelPort {
       errorMessage: error instanceof Error ? error.message : 'Model call failed.',
       nowMs: this.#clock.nowMs(),
     });
+    await this.#publishUsage(completed.usage);
+  }
+
+  async #publishUsage(stats: Awaited<ReturnType<AgentStore['completeModelCall']>>['usage']): Promise<void> {
+    try {
+      await this.#options.publisher?.publish({
+        type: 'model_usage.updated',
+        sessionId: this.#options.target.sessionId,
+        stats,
+      });
+    } catch {
+      // The durable SessionView remains authoritative when realtime delivery fails.
+    }
   }
 }
 

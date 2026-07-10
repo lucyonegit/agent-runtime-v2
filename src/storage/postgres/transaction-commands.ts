@@ -1474,7 +1474,18 @@ export async function abandonStartedModelCallsCommand(
 ) {
   return withPostgresTransaction(client, async () => {
     const started = await client.query<AgentModelCallRow>(
-      `select * from agent_model_calls where status = 'started' order by id for update`
+      `select call.*
+       from agent_model_calls call
+       join agent_jobs job on job.id = call.job_id
+       where call.status = 'started'
+         and (
+           job.status not in ('running', 'resuming')
+           or job.lease_expires_at_ms is null
+           or job.lease_expires_at_ms <= $1
+         )
+       order by call.id
+       for update of call`,
+      [nowMs]
     );
     const completed: AgentModelCallRow[] = [];
     for (const call of started.rows) {

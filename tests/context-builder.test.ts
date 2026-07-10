@@ -233,6 +233,34 @@ describe('ContextBuilder', () => {
       model: { provider: 'test', name: 'model', maxContextTokens: 1000, reservedOutputTokens: 100 },
     })).toThrow(IncompleteMessageGroupError);
   });
+
+  it('uses an active summary instead of re-including covered message groups', () => {
+    const old = message({
+      id: 'old_assistant', rowId: 2, role: 'assistant',
+      messageType: 'assistant_message', content: 'covered history',
+    });
+    const recent = message({
+      id: 'recent_assistant', rowId: 3, role: 'assistant',
+      messageType: 'assistant_message', content: 'recent tail',
+    });
+    const context = new ContextBuilder().build({
+      job: jobFixture,
+      attemptId: 'attempt_1',
+      purpose: 'job_execution',
+      systemPrompt: 'system',
+      systemPromptVersion: 'v1',
+      originalGoal: 'goal',
+      messages: [goalMessage, old, recent],
+      invocations: [],
+      summaries: [{ id: 'summary_covered', summary: 'compressed history', sourceRowIdEnd: 2 }],
+      model: { provider: 'test', name: 'model', maxContextTokens: 1000, reservedOutputTokens: 100 },
+    });
+
+    expect(context.messages.map(item => item.content)).toEqual([
+      'system', 'goal', 'Context summary:\ncompressed history', 'recent tail',
+    ]);
+    expect(context.inputManifest.messageGroupIds).toEqual(['message:recent_assistant']);
+  });
 });
 
 function message(overrides: Partial<AgentMessage> & Pick<AgentMessage, 'id'>): AgentMessage {
