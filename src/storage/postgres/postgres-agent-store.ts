@@ -1,9 +1,15 @@
 import type { Pool, PoolClient } from 'pg';
-import type { AgentJob, AgentMessage, AgentSession } from '../../domain/index.js';
+import type { AgentJob, AgentMessage, AgentSession, AgentToolInvocation } from '../../domain/index.js';
 import type {
   AgentStore,
   CancelJobInput,
   ClaimJobInput,
+  ClaimToolInvocationInput,
+  ClaimToolInvocationResult,
+  CommitModelToolCallsInput,
+  CommitModelToolCallsResult,
+  CommitToolResultInput,
+  CommitToolResultResult,
   CreateJobAndAppendUserMessageInput,
   CreateJobAndAppendUserMessageResult,
   CreateSessionInput,
@@ -13,6 +19,9 @@ import type {
 import {
   cancelJobCommand,
   claimJobCommand,
+  claimToolInvocationCommand,
+  commitModelToolCallsCommand,
+  commitToolResultCommand,
   createJobAndAppendUserMessageCommand,
   createSessionCommand,
   failJobCommand,
@@ -22,9 +31,11 @@ import {
   mapAgentJobRow,
   mapAgentMessageRow,
   mapAgentSessionRow,
+  mapAgentToolInvocationRow,
   type AgentJobRow,
   type AgentMessageRow,
   type AgentSessionRow,
+  type AgentToolInvocationRow,
 } from './row-mappers.js';
 
 export class PostgresAgentStore implements AgentStore {
@@ -67,6 +78,19 @@ export class PostgresAgentStore implements AgentStore {
     return result.rows[0] ? mapAgentJobRow(result.rows[0]) : undefined;
   }
 
+  async getToolInvocation(
+    jobId: string,
+    toolCallId: string
+  ): Promise<AgentToolInvocation | undefined> {
+    const result = await this.#pool.query<AgentToolInvocationRow>(
+      `select *
+       from agent_tool_invocations
+       where job_id = $1 and tool_call_id = $2`,
+      [jobId, toolCallId]
+    );
+    return result.rows[0] ? mapAgentToolInvocationRow(result.rows[0]) : undefined;
+  }
+
   async listSessionMessages(sessionId: string, afterRowId = 0): Promise<AgentMessage[]> {
     const result = await this.#pool.query<AgentMessageRow>(
       `select *
@@ -90,6 +114,22 @@ export class PostgresAgentStore implements AgentStore {
 
   async renewJobLease(input: RenewJobLeaseInput): Promise<AgentJob> {
     return this.#withClient(client => renewJobLeaseCommand(client, input));
+  }
+
+  async commitModelToolCalls(
+    input: CommitModelToolCallsInput
+  ): Promise<CommitModelToolCallsResult> {
+    return this.#withClient(client => commitModelToolCallsCommand(client, input));
+  }
+
+  async claimToolInvocation(
+    input: ClaimToolInvocationInput
+  ): Promise<ClaimToolInvocationResult> {
+    return this.#withClient(client => claimToolInvocationCommand(client, input));
+  }
+
+  async commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult> {
+    return this.#withClient(client => commitToolResultCommand(client, input));
   }
 
   async failJob(input: FailJobInput): Promise<AgentJob> {

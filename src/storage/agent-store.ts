@@ -4,6 +4,9 @@ import type {
   AgentMessage,
   AgentSession,
   AgentSessionMode,
+  AgentToolCall,
+  AgentToolInvocation,
+  AgentToolSideEffectLevel,
 } from '../domain/index.js';
 
 export type AgentStoreErrorCode =
@@ -16,7 +19,10 @@ export type AgentStoreErrorCode =
   | 'CONCURRENCY_CONFLICT'
   | 'INVALID_JOB_STATE'
   | 'INVALID_JOB_RETRY'
-  | 'JOB_LEASE_LOST';
+  | 'JOB_LEASE_LOST'
+  | 'TOOL_INVOCATION_NOT_FOUND'
+  | 'TOOL_INVOCATION_CONFLICT'
+  | 'INVALID_TOOL_INVOCATION_STATE';
 
 export class AgentStoreError extends Error {
   readonly code: AgentStoreErrorCode;
@@ -86,6 +92,67 @@ export interface CancelJobInput {
   nowMs: number;
 }
 
+export interface PendingToolInvocationInput {
+  invocationId: string;
+  call: AgentToolCall;
+  argumentsChecksum: string;
+  sideEffectLevel: AgentToolSideEffectLevel;
+  idempotencyKey: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CommitModelToolCallsInput {
+  sessionId: string;
+  jobId: string;
+  stepRunId?: string;
+  attemptId: string;
+  workerId: string;
+  outputId: string;
+  messageId: string;
+  content: string;
+  invocations: PendingToolInvocationInput[];
+  nowMs: number;
+}
+
+export interface CommitModelToolCallsResult {
+  message: AgentMessage;
+  invocations: AgentToolInvocation[];
+}
+
+export interface ClaimToolInvocationInput {
+  jobId: string;
+  toolCallId: string;
+  workerId: string;
+  attemptId: string;
+  nowMs: number;
+}
+
+export interface ClaimToolInvocationResult {
+  invocation: AgentToolInvocation;
+  claimed: boolean;
+}
+
+export type CommittedToolOutcome =
+  | { status: 'completed'; content: string; result?: unknown; durationMs: number }
+  | { status: 'failed'; code: string; message: string; details?: unknown; durationMs: number };
+
+export interface CommitToolResultInput {
+  sessionId: string;
+  jobId: string;
+  stepRunId?: string;
+  attemptId: string;
+  workerId: string;
+  toolCallId: string;
+  messageId: string;
+  outcome: CommittedToolOutcome;
+  nowMs: number;
+}
+
+export interface CommitToolResultResult {
+  message: AgentMessage;
+  invocation: AgentToolInvocation;
+}
+
 export interface AgentStore {
   createSession(input: CreateSessionInput): Promise<AgentSession>;
   getSession(sessionId: string): Promise<AgentSession | undefined>;
@@ -94,12 +161,16 @@ export interface AgentStore {
     sessionId: string,
     clientRequestId: string
   ): Promise<AgentJob | undefined>;
+  getToolInvocation(jobId: string, toolCallId: string): Promise<AgentToolInvocation | undefined>;
   listSessionMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
   ): Promise<CreateJobAndAppendUserMessageResult>;
   claimJob(input: ClaimJobInput): Promise<AgentJob>;
   renewJobLease(input: RenewJobLeaseInput): Promise<AgentJob>;
+  commitModelToolCalls(input: CommitModelToolCallsInput): Promise<CommitModelToolCallsResult>;
+  claimToolInvocation(input: ClaimToolInvocationInput): Promise<ClaimToolInvocationResult>;
+  commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult>;
   failJob(input: FailJobInput): Promise<AgentJob>;
   cancelJob(input: CancelJobInput): Promise<AgentJob>;
 }

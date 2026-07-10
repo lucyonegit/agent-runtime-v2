@@ -4,6 +4,12 @@ import {
   AgentStoreError,
   type CancelJobInput,
   type ClaimJobInput,
+  type ClaimToolInvocationInput,
+  type ClaimToolInvocationResult,
+  type CommitModelToolCallsInput,
+  type CommitModelToolCallsResult,
+  type CommitToolResultInput,
+  type CommitToolResultResult,
   type CreateJobAndAppendUserMessageInput,
   type CreateJobAndAppendUserMessageResult,
   type CreateSessionInput,
@@ -14,9 +20,11 @@ import {
   mapAgentJobRow,
   mapAgentMessageRow,
   mapAgentSessionRow,
+  mapAgentToolInvocationRow,
   type AgentJobRow,
   type AgentMessageRow,
   type AgentSessionRow,
+  type AgentToolInvocationRow,
 } from './row-mappers.js';
 import { lockAgentSession, withPostgresTransaction } from './sql.js';
 
@@ -216,6 +224,261 @@ export async function renewJobLeaseCommand(
     'renew lease',
     true
   );
+}
+
+export async function commitModelToolCallsCommand(
+  client: PoolClient,
+  input: CommitModelToolCallsInput
+): Promise<CommitModelToolCallsResult> {
+  if (input.invocations.length === 0) {
+    throw new TypeError('commitModelToolCalls requires at least one invocation.');
+  }
+  if (new Set(input.invocations.map(item => item.call.id)).size !== input.invocations.length) {
+    throw new TypeError('Tool-call IDs must be unique within one model output.');
+  }
+  const initialJob = await selectJob(client, input.jobId);
+  if (!initialJob) throw jobNotFound(input.jobId);
+  if (initialJob.session_id !== input.sessionId) throw jobNotFound(input.jobId);
+
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    const jobResult = await client.query<AgentJobRow>(
+      `select * from agent_jobs where id = $1 for update`,
+      [input.jobId]
+    );
+    const job = requireRow(jobResult.rows[0], 'lock job for model tool calls');
+    assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+    const step = await resolveStepRunScope(client, input.jobId, input.stepRunId);
+
+    const messageResult = await client.query<AgentMessageRow>(
+      `insert into agent_messages(
+         id, session_id, job_id, plan_id, step_id, step_run_id, attempt_id, output_id,
+         role, message_type, visibility, channel, content, tool_calls, created_at_ms
+       ) values (
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         'assistant', 'tool_call', 'ui', 'normal', $9, $10, $11
+       )
+       returning *`,
+      [
+        input.messageId,
+        input.sessionId,
+        input.jobId,
+        step?.planId ?? null,
+        step?.stepId ?? null,
+        input.stepRunId ?? null,
+        input.attemptId,
+        input.outputId,
+        input.content,
+        JSON.stringify(input.invocations.map(item => item.call)),
+        input.nowMs,
+      ]
+    );
+    const invocationRows: AgentToolInvocationRow[] = [];
+    for (const invocation of input.invocations) {
+      const result = await client.query<AgentToolInvocationRow>(
+        `insert into agent_tool_invocations(
+           id, session_id, job_id, plan_id, step_id, step_run_id, attempt_id,
+           call_message_id, tool_call_id, tool_name, arguments, arguments_checksum,
+           side_effect_level, idempotency_key, status, version, metadata,
+           created_at_ms, updated_at_ms
+         ) values (
+           $1, $2, $3, $4, $5, $6, $7,
+           $8, $9, $10, $11, $12,
+           $13, $14, 'pending', 0, $15,
+           $16, $16
+         )
+         returning *`,
+        [
+          invocation.invocationId,
+          input.sessionId,
+          input.jobId,
+          step?.planId ?? null,
+          step?.stepId ?? null,
+          input.stepRunId ?? null,
+          input.attemptId,
+          input.messageId,
+          invocation.call.id,
+          invocation.call.name,
+          JSON.stringify(invocation.call.args),
+          invocation.argumentsChecksum,
+          invocation.sideEffectLevel,
+          invocation.idempotencyKey,
+          invocation.metadata ?? null,
+          input.nowMs,
+        ]
+      );
+      invocationRows.push(requireRow(result.rows[0], 'create tool invocation'));
+    }
+    return {
+      message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'create tool-call message')),
+      invocations: invocationRows.map(mapAgentToolInvocationRow),
+    };
+  });
+}
+
+export async function claimToolInvocationCommand(
+  client: PoolClient,
+  input: ClaimToolInvocationInput
+): Promise<ClaimToolInvocationResult> {
+  const result = await client.query<AgentToolInvocationRow>(
+    `update agent_tool_invocations invocation
+     set status = 'running',
+         attempt_id = $4,
+         version = invocation.version + 1,
+         started_at_ms = coalesce(invocation.started_at_ms, $5),
+         updated_at_ms = $5
+     where invocation.job_id = $1
+       and invocation.tool_call_id = $2
+       and invocation.status = 'pending'
+       and exists (
+         select 1
+         from agent_jobs job
+         where job.id = invocation.job_id
+           and job.status in ('running', 'resuming')
+           and job.lease_owner = $3
+           and job.current_attempt_id = $4
+           and job.lease_expires_at_ms > $5
+       )
+     returning invocation.*`,
+    [input.jobId, input.toolCallId, input.workerId, input.attemptId, input.nowMs]
+  );
+  if (result.rows[0]) {
+    return { invocation: mapAgentToolInvocationRow(result.rows[0]), claimed: true };
+  }
+
+  const invocation = await selectToolInvocation(client, input.jobId, input.toolCallId);
+  if (!invocation) {
+    throw new AgentStoreError(
+      'TOOL_INVOCATION_NOT_FOUND',
+      `Tool invocation ${JSON.stringify(input.toolCallId)} was not found in Job ${JSON.stringify(input.jobId)}.`,
+      { jobId: input.jobId, toolCallId: input.toolCallId }
+    );
+  }
+  const job = await selectJob(client, input.jobId);
+  if (!job) throw jobNotFound(input.jobId);
+  assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+  if (['completed', 'failed', 'cancelled'].includes(invocation.status)) {
+    return { invocation: mapAgentToolInvocationRow(invocation), claimed: false };
+  }
+  throw new AgentStoreError(
+    'INVALID_TOOL_INVOCATION_STATE',
+    `Tool invocation ${JSON.stringify(input.toolCallId)} cannot be claimed from status ${invocation.status}.`,
+    { jobId: input.jobId, toolCallId: input.toolCallId, status: invocation.status }
+  );
+}
+
+export async function commitToolResultCommand(
+  client: PoolClient,
+  input: CommitToolResultInput
+): Promise<CommitToolResultResult> {
+  const initialInvocation = await selectToolInvocation(client, input.jobId, input.toolCallId);
+  if (!initialInvocation) {
+    throw new AgentStoreError(
+      'TOOL_INVOCATION_NOT_FOUND',
+      `Tool invocation ${JSON.stringify(input.toolCallId)} was not found.`,
+      { jobId: input.jobId, toolCallId: input.toolCallId }
+    );
+  }
+  if (initialInvocation.session_id !== input.sessionId) {
+    throw new AgentStoreError('TOOL_INVOCATION_NOT_FOUND', 'Tool invocation scope mismatch.');
+  }
+
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    const jobResult = await client.query<AgentJobRow>(
+      `select * from agent_jobs where id = $1 for update`,
+      [input.jobId]
+    );
+    const job = requireRow(jobResult.rows[0], 'lock job for tool result');
+    assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+    const invocationResult = await client.query<AgentToolInvocationRow>(
+      `select *
+       from agent_tool_invocations
+       where job_id = $1 and tool_call_id = $2
+       for update`,
+      [input.jobId, input.toolCallId]
+    );
+    const invocation = requireRow(invocationResult.rows[0], 'lock tool invocation');
+    if (invocation.status !== 'running' || invocation.attempt_id !== input.attemptId) {
+      throw new AgentStoreError(
+        'INVALID_TOOL_INVOCATION_STATE',
+        `Tool invocation ${JSON.stringify(input.toolCallId)} is not running in this attempt.`,
+        { status: invocation.status, invocationAttemptId: invocation.attempt_id }
+      );
+    }
+    if ((input.stepRunId ?? null) !== invocation.step_run_id) {
+      throw new AgentStoreError('TOOL_INVOCATION_CONFLICT', 'Tool result StepRun scope mismatch.');
+    }
+
+    const resultPayload = input.outcome.status === 'completed'
+      ? {
+          status: 'completed',
+          result: input.outcome.result,
+          durationMs: input.outcome.durationMs,
+        }
+      : {
+          status: 'failed',
+          error: input.outcome.message,
+          durationMs: input.outcome.durationMs,
+        };
+    const messageResult = await client.query<AgentMessageRow>(
+      `insert into agent_messages(
+         id, session_id, job_id, plan_id, step_id, step_run_id, attempt_id,
+         role, message_type, visibility, channel, content,
+         tool_call_id, tool_name, tool_result, created_at_ms
+       ) values (
+         $1, $2, $3, $4, $5, $6, $7,
+         'tool', 'tool_result', 'ui', 'normal', $8,
+         $9, $10, $11, $12
+       )
+       returning *`,
+      [
+        input.messageId,
+        input.sessionId,
+        input.jobId,
+        invocation.plan_id,
+        invocation.step_id,
+        invocation.step_run_id,
+        input.attemptId,
+        input.outcome.status === 'completed' ? input.outcome.content : input.outcome.message,
+        input.toolCallId,
+        invocation.tool_name,
+        JSON.stringify(resultPayload),
+        input.nowMs,
+      ]
+    );
+    const updatedInvocation = await client.query<AgentToolInvocationRow>(
+      `update agent_tool_invocations
+       set result_message_id = $3,
+           status = $4,
+           result_payload = $5,
+           error_code = $6,
+           error_message = $7,
+           error_details = $8,
+           version = version + 1,
+           completed_at_ms = $9,
+           updated_at_ms = $9
+       where job_id = $1 and tool_call_id = $2
+       returning *`,
+      [
+        input.jobId,
+        input.toolCallId,
+        input.messageId,
+        input.outcome.status,
+        input.outcome.status === 'completed' ? input.outcome.result ?? null : null,
+        input.outcome.status === 'failed' ? input.outcome.code : null,
+        input.outcome.status === 'failed' ? input.outcome.message : null,
+        input.outcome.status === 'failed' ? input.outcome.details ?? null : null,
+        input.nowMs,
+      ]
+    );
+    return {
+      message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'create tool-result message')),
+      invocation: mapAgentToolInvocationRow(
+        requireRow(updatedInvocation.rows[0], 'complete tool invocation')
+      ),
+    };
+  });
 }
 
 export async function failJobCommand(
@@ -548,6 +811,43 @@ async function selectJob(client: PoolClient, jobId: string): Promise<AgentJobRow
     [jobId]
   );
   return result.rows[0];
+}
+
+async function selectToolInvocation(
+  client: PoolClient,
+  jobId: string,
+  toolCallId: string
+): Promise<AgentToolInvocationRow | undefined> {
+  const result = await client.query<AgentToolInvocationRow>(
+    `select *
+     from agent_tool_invocations
+     where job_id = $1 and tool_call_id = $2`,
+    [jobId, toolCallId]
+  );
+  return result.rows[0];
+}
+
+async function resolveStepRunScope(
+  client: PoolClient,
+  jobId: string,
+  stepRunId: string | undefined
+): Promise<{ planId: string; stepId: string } | undefined> {
+  if (!stepRunId) return undefined;
+  const result = await client.query<{ plan_id: string; step_id: string }>(
+    `select plan_id, step_id
+     from agent_step_runs
+     where id = $1 and job_id = $2`,
+    [stepRunId, jobId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new AgentStoreError(
+      'TOOL_INVOCATION_CONFLICT',
+      `StepRun ${JSON.stringify(stepRunId)} does not belong to Job ${JSON.stringify(jobId)}.`,
+      { jobId, stepRunId }
+    );
+  }
+  return { planId: row.plan_id, stepId: row.step_id };
 }
 
 function jobNotFound(jobId: string): AgentStoreError {

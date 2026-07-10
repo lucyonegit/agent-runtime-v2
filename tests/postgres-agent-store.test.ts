@@ -1,6 +1,7 @@
 import { Pool, type PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { JobCoordinator } from '../src/runtime/job-coordinator.js';
+import { ToolExecutor } from '../src/runtime/tool-executor.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
 
@@ -173,6 +174,160 @@ describe('PostgresAgentStore Job transactions', () => {
     });
   });
 
+  it('commits tool calls before execution and atomically commits each tool result', async () => {
+    await store.createSession({ id: 'session_tools', mode: 'agent', nowMs: 10 });
+    await createJob(store, 'session_tools', 'job_tools', 'message_tools', 20);
+    const job = await store.claimJob({
+      jobId: 'job_tools',
+      expectedVersion: 0,
+      workerId: 'worker_tools',
+      attemptId: 'attempt_tools',
+      nowMs: 30,
+      leaseUntilMs: 100,
+    });
+    const committed = await store.commitModelToolCalls({
+      sessionId: 'session_tools',
+      jobId: job.id,
+      attemptId: job.currentAttemptId!,
+      workerId: job.leaseOwner!,
+      outputId: 'output_tools',
+      messageId: 'message_tool_calls',
+      content: '',
+      invocations: [
+        pendingInvocation('invocation_lookup', 'call_lookup', 'lookup'),
+        pendingInvocation('invocation_missing', 'call_missing', 'missing'),
+      ],
+      nowMs: 31,
+    });
+    expect(committed.message).toMatchObject({
+      messageType: 'tool_call',
+      toolCalls: [{ id: 'call_lookup' }, { id: 'call_missing' }],
+    });
+    expect(committed.invocations.map(invocation => invocation.status)).toEqual(['pending', 'pending']);
+
+    const executor = new ToolExecutor({
+      store,
+      workerId: 'worker_tools',
+      clock: { nowMs: () => 32 },
+      tools: [{
+        definition: {
+          name: 'lookup',
+          description: 'lookup',
+          schema: { type: 'object' },
+          sideEffectLevel: 'read_only',
+        },
+        execute: async arguments_ => ({
+          type: 'completed',
+          content: `found:${arguments_.query}`,
+          result: { found: true },
+        }),
+      }],
+    });
+    const lookupResult = await executor.execute({
+      call: { id: 'call_lookup', name: 'lookup', args: { query: 'docs' } },
+      target: {
+        sessionId: 'session_tools',
+        jobId: 'job_tools',
+        attemptId: 'attempt_tools',
+      },
+    });
+    expect(lookupResult).toMatchObject({ type: 'completed', content: 'found:docs' });
+    if (lookupResult.type !== 'completed') throw new Error('expected completed tool result');
+    expect(await store.getToolInvocation('job_tools', 'call_lookup')).toMatchObject({
+      status: 'running',
+      version: 1,
+    });
+
+    const lookupCommit = await store.commitToolResult({
+      sessionId: 'session_tools',
+      jobId: 'job_tools',
+      attemptId: 'attempt_tools',
+      workerId: 'worker_tools',
+      toolCallId: 'call_lookup',
+      messageId: 'message_lookup_result',
+      outcome: {
+        status: 'completed',
+        content: lookupResult.content,
+        result: lookupResult.result,
+        durationMs: 5,
+      },
+      nowMs: 37,
+    });
+    expect(lookupCommit.invocation).toMatchObject({
+      status: 'completed',
+      resultMessageId: 'message_lookup_result',
+      resultPayload: { found: true },
+    });
+    expect(lookupCommit.message).toMatchObject({
+      messageType: 'tool_result',
+      toolResult: { status: 'completed', result: { found: true }, durationMs: 5 },
+    });
+
+    const missingResult = await executor.execute({
+      call: { id: 'call_missing', name: 'missing', args: {} },
+      target: {
+        sessionId: 'session_tools',
+        jobId: 'job_tools',
+        attemptId: 'attempt_tools',
+      },
+    });
+    expect(missingResult).toMatchObject({ type: 'failed', code: 'tool_not_found' });
+    if (missingResult.type !== 'failed') throw new Error('expected failed tool result');
+    await expect(store.commitToolResult({
+      sessionId: 'session_tools',
+      jobId: 'job_tools',
+      attemptId: 'attempt_tools',
+      workerId: 'worker_tools',
+      toolCallId: 'call_missing',
+      messageId: 'message_missing_result',
+      outcome: { status: 'failed', ...missingResult, durationMs: 1 },
+      nowMs: 38,
+    })).resolves.toMatchObject({ invocation: { status: 'failed' } });
+  });
+
+  it('rejects ToolInvocation claim after the Job lease is lost', async () => {
+    await store.createSession({ id: 'session_tool_fence', mode: 'agent', nowMs: 10 });
+    await createJob(store, 'session_tool_fence', 'job_tool_fence', 'message_tool_fence', 20);
+    const job = await store.claimJob({
+      jobId: 'job_tool_fence',
+      expectedVersion: 0,
+      workerId: 'worker_owner',
+      attemptId: 'attempt_owner',
+      nowMs: 30,
+      leaseUntilMs: 40,
+    });
+    await store.commitModelToolCalls({
+      sessionId: 'session_tool_fence',
+      jobId: job.id,
+      attemptId: job.currentAttemptId!,
+      workerId: job.leaseOwner!,
+      outputId: 'output_fence',
+      messageId: 'message_fence_calls',
+      content: '',
+      invocations: [pendingInvocation('invocation_fence', 'call_fence', 'lookup')],
+      nowMs: 31,
+    });
+    const executor = new ToolExecutor({
+      store,
+      workerId: 'worker_owner',
+      clock: { nowMs: () => 41 },
+      tools: [],
+    });
+
+    await expect(executor.execute({
+      call: { id: 'call_fence', name: 'lookup', args: {} },
+      target: {
+        sessionId: 'session_tool_fence',
+        jobId: 'job_tool_fence',
+        attemptId: 'attempt_owner',
+      },
+    })).rejects.toMatchObject({ code: 'lease_lost' });
+    expect(await store.getToolInvocation('job_tool_fence', 'call_fence')).toMatchObject({
+      status: 'pending',
+      version: 0,
+    });
+  });
+
   it('fails descendants atomically, preserves side-effect uncertainty, and creates retry as a new Job', async () => {
     await store.createSession({ id: 'session_fail', mode: 'agent', nowMs: 10 });
     await createJob(store, 'session_fail', 'job_fail', 'message_fail', 20);
@@ -267,6 +422,24 @@ async function createJob(
     content: `hello ${jobId}`,
     nowMs,
   });
+}
+
+function pendingInvocation(
+  invocationId: string,
+  toolCallId: string,
+  toolName: string
+) {
+  return {
+    invocationId,
+    call: {
+      id: toolCallId,
+      name: toolName,
+      args: toolName === 'lookup' ? { query: 'docs' } : {},
+    },
+    argumentsChecksum: `${invocationId}_checksum`,
+    sideEffectLevel: 'read_only' as const,
+    idempotencyKey: `${invocationId}_idempotency`,
+  };
 }
 
 async function seedRunningDescendants(pool: Pool, attemptId: string): Promise<void> {

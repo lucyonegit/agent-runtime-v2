@@ -56,6 +56,16 @@ export interface ToolExecutorPort {
   execute(request: ToolExecutionRequest): Promise<ToolExecutionResult>;
 }
 
+export class FatalToolExecutionError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string, options: { cause?: unknown } = {}) {
+    super(message, { cause: options.cause });
+    this.name = 'FatalToolExecutionError';
+    this.code = code;
+  }
+}
+
 export interface AgentLoopOptions {
   model: AgentLoopModelPort;
   streaming?: boolean;
@@ -270,6 +280,7 @@ export class AgentLoop {
         signal: input.limits.signal,
       });
     } catch (error) {
+      if (error instanceof FatalToolExecutionError) throw error;
       const message = error instanceof Error ? error.message : 'Tool execution failed.';
       result = {
         type: 'failed',

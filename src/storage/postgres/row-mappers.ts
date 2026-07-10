@@ -12,7 +12,10 @@ import type {
   AgentSessionMode,
   AgentSessionStatus,
   AgentToolCall,
+  AgentToolInvocation,
+  AgentToolInvocationStatus,
   AgentToolResult,
+  AgentToolSideEffectLevel,
 } from '../../domain/index.js';
 
 export interface AgentSessionRow {
@@ -70,6 +73,35 @@ export interface AgentMessageRow {
   tool_result: unknown;
   metadata: unknown;
   created_at_ms: string | number;
+}
+
+export interface AgentToolInvocationRow {
+  id: string;
+  session_id: string;
+  job_id: string;
+  plan_id: string | null;
+  step_id: string | null;
+  step_run_id: string | null;
+  attempt_id: string;
+  call_message_id: string;
+  result_message_id: string | null;
+  tool_call_id: string;
+  tool_name: string;
+  arguments: unknown;
+  arguments_checksum: string;
+  side_effect_level: string;
+  idempotency_key: string;
+  status: string;
+  result_payload: unknown;
+  error_code: string | null;
+  error_message: string | null;
+  error_details: unknown;
+  version: number;
+  metadata: unknown;
+  created_at_ms: string | number;
+  started_at_ms: string | number | null;
+  completed_at_ms: string | number | null;
+  updated_at_ms: string | number;
 }
 
 export function mapAgentSessionRow(row: AgentSessionRow): AgentSession {
@@ -144,6 +176,51 @@ export function mapAgentMessageRow(row: AgentMessageRow): AgentMessage {
     ...(row.tool_result === null ? {} : { toolResult: row.tool_result as AgentToolResult }),
     ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_messages.metadata') }),
     createdAtMs: mapBigint(row.created_at_ms, 'agent_messages.created_at_ms'),
+  };
+}
+
+export function mapAgentToolInvocationRow(
+  row: AgentToolInvocationRow
+): AgentToolInvocation {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    jobId: row.job_id,
+    ...(row.plan_id === null ? {} : { planId: row.plan_id }),
+    ...(row.step_id === null ? {} : { stepId: row.step_id }),
+    ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
+    attemptId: row.attempt_id,
+    callMessageId: row.call_message_id,
+    ...(row.result_message_id === null ? {} : { resultMessageId: row.result_message_id }),
+    toolCallId: row.tool_call_id,
+    toolName: row.tool_name,
+    arguments: mapRecord(row.arguments, 'agent_tool_invocations.arguments'),
+    argumentsChecksum: row.arguments_checksum,
+    sideEffectLevel: row.side_effect_level as AgentToolSideEffectLevel,
+    idempotencyKey: row.idempotency_key,
+    status: row.status as AgentToolInvocationStatus,
+    ...(row.result_payload === null ? {} : { resultPayload: row.result_payload }),
+    ...(row.error_code === null || row.error_message === null
+      ? {}
+      : {
+          error: {
+            code: row.error_code,
+            message: row.error_message,
+            ...(row.error_details === null ? {} : { details: row.error_details }),
+          },
+        }),
+    version: row.version,
+    ...(row.metadata === null
+      ? {}
+      : { metadata: mapRecord(row.metadata, 'agent_tool_invocations.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_tool_invocations.created_at_ms'),
+    ...(row.started_at_ms === null
+      ? {}
+      : { startedAtMs: mapBigint(row.started_at_ms, 'agent_tool_invocations.started_at_ms') }),
+    ...(row.completed_at_ms === null
+      ? {}
+      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_tool_invocations.completed_at_ms') }),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_tool_invocations.updated_at_ms'),
   };
 }
 
