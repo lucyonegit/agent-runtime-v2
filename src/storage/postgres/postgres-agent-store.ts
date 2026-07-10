@@ -1,7 +1,12 @@
 import type { Pool, PoolClient } from 'pg';
 import type {
   AgentJob,
+  AgentContextOwnerType,
+  AgentContextPurpose,
+  AgentContextSummary,
   AgentMessage,
+  AgentModelCall,
+  AgentModelUsageStats,
   AgentPlan,
   AgentPlanStep,
   AgentSession,
@@ -36,6 +41,10 @@ import type {
   FailStepRunInput,
   FailStepRunResult,
   RouteJobInput,
+  StartModelCallInput,
+  CompleteModelCallInput,
+  CompleteModelCallResult,
+  ReplaceContextSummaryInput,
   FailJobInput,
   RenewJobLeaseInput,
 } from '../agent-store.js';
@@ -55,6 +64,10 @@ import {
   commitStepOutputCommand,
   failStepRunCommand,
   routeJobCommand,
+  startModelCallCommand,
+  completeModelCallCommand,
+  abandonStartedModelCallsCommand,
+  replaceContextSummaryCommand,
   failJobCommand,
   renewJobLeaseCommand,
 } from './transaction-commands.js';
@@ -65,6 +78,9 @@ import {
   mapAgentPlanRow,
   mapAgentPlanStepRow,
   mapAgentStepRunRow,
+  mapAgentModelCallRow,
+  mapAgentModelUsageStatsRow,
+  mapAgentContextSummaryRow,
   mapAgentToolInvocationRow,
   type AgentJobRow,
   type AgentMessageRow,
@@ -72,6 +88,9 @@ import {
   type AgentPlanRow,
   type AgentPlanStepRow,
   type AgentStepRunRow,
+  type AgentModelCallRow,
+  type AgentModelUsageStatsRow,
+  type AgentContextSummaryRow,
   type AgentToolInvocationRow,
 } from './row-mappers.js';
 
@@ -152,6 +171,37 @@ export class PostgresAgentStore implements AgentStore {
     return result.rows.map(mapAgentStepRunRow);
   }
 
+  async listModelCalls(jobId: string): Promise<AgentModelCall[]> {
+    const result = await this.#pool.query<AgentModelCallRow>(
+      `select * from agent_model_calls where job_id = $1 order by created_at_ms asc, id asc`,
+      [jobId]
+    );
+    return result.rows.map(mapAgentModelCallRow);
+  }
+
+  async getModelUsageStats(sessionId: string): Promise<AgentModelUsageStats | undefined> {
+    const result = await this.#pool.query<AgentModelUsageStatsRow>(
+      `select * from agent_model_usage_stats where session_id = $1`, [sessionId]
+    );
+    return result.rows[0] ? mapAgentModelUsageStatsRow(result.rows[0]) : undefined;
+  }
+
+  async listActiveContextSummaries(
+    ownerType: AgentContextOwnerType,
+    ownerId: string,
+    purpose: AgentContextPurpose,
+    contextRulesVersion: string
+  ): Promise<AgentContextSummary[]> {
+    const result = await this.#pool.query<AgentContextSummaryRow>(
+      `select * from agent_context_summaries
+       where owner_type = $1 and owner_id = $2 and purpose = $3
+         and context_rules_version = $4 and status = 'active'
+       order by source_row_id_end desc, id asc`,
+      [ownerType, ownerId, purpose, contextRulesVersion]
+    );
+    return result.rows.map(mapAgentContextSummaryRow);
+  }
+
   async listSessionMessages(sessionId: string, afterRowId = 0): Promise<AgentMessage[]> {
     const result = await this.#pool.query<AgentMessageRow>(
       `select *
@@ -229,6 +279,22 @@ export class PostgresAgentStore implements AgentStore {
 
   async failStepRun(input: FailStepRunInput): Promise<FailStepRunResult> {
     return this.#withClient(client => failStepRunCommand(client, input));
+  }
+
+  async startModelCall(input: StartModelCallInput): Promise<AgentModelCall> {
+    return this.#withClient(client => startModelCallCommand(client, input));
+  }
+
+  async completeModelCall(input: CompleteModelCallInput): Promise<CompleteModelCallResult> {
+    return this.#withClient(client => completeModelCallCommand(client, input));
+  }
+
+  async abandonStartedModelCalls(nowMs: number): Promise<AgentModelCall[]> {
+    return this.#withClient(client => abandonStartedModelCallsCommand(client, nowMs));
+  }
+
+  async replaceContextSummary(input: ReplaceContextSummaryInput): Promise<AgentContextSummary> {
+    return this.#withClient(client => replaceContextSummaryCommand(client, input));
   }
 
   async failJob(input: FailJobInput): Promise<AgentJob> {

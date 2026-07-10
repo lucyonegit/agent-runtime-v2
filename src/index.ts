@@ -18,6 +18,7 @@ export * from './planner/step-output.js';
 export * from './planner/step-runner.js';
 export * from './runtime/execution-limits.js';
 export * from './runtime/agent-runner.js';
+export * from './runtime/audited-model-port.js';
 export * from './runtime/job-coordinator.js';
 export * from './runtime/runtime-errors.js';
 export * from './runtime/runtime-event-writer.js';

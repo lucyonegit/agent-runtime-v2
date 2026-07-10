@@ -1,7 +1,16 @@
 import type {
   AgentJob,
+  AgentContextInputManifest,
+  AgentContextOwnerType,
+  AgentContextPurpose,
+  AgentContextSummary,
+  AgentContextSummaryType,
   AgentJobError,
   AgentMessage,
+  AgentModelCall,
+  AgentModelCallType,
+  AgentModelUsageSource,
+  AgentModelUsageStats,
   AgentPlan,
   AgentPlanStep,
   AgentSession,
@@ -330,6 +339,78 @@ export interface FailStepRunResult {
   stepRun: AgentStepRun;
 }
 
+export interface StartModelCallInput {
+  id: string;
+  sessionId: string;
+  jobId: string;
+  stepRunId?: string;
+  attemptId: string;
+  workerId: string;
+  logicalCallKey: string;
+  callAttemptNo: number;
+  callType: AgentModelCallType;
+  provider: string;
+  model: string;
+  contextRulesVersion: string;
+  inputManifest: AgentContextInputManifest;
+  inputChecksum: string;
+  maxContextTokens: number;
+  reservedOutputTokens: number;
+  estimatedInputTokens: number;
+  metadata?: Record<string, unknown>;
+  nowMs: number;
+}
+
+export interface CompleteModelCallInput {
+  id: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  usageSource: AgentModelUsageSource;
+  actualInputTokens?: number;
+  actualOutputTokens?: number;
+  actualTotalTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  outputId?: string;
+  resultType?: string;
+  resultPayload?: unknown;
+  toolNames?: string[];
+  errorCode?: string;
+  errorMessage?: string;
+  errorDetails?: unknown;
+  nowMs: number;
+}
+
+export interface CompleteModelCallResult {
+  call: AgentModelCall;
+  usage: AgentModelUsageStats;
+}
+
+export interface ReplaceContextSummaryInput {
+  id: string;
+  sessionId: string;
+  jobId?: string;
+  stepRunId?: string;
+  projectId?: string;
+  ownerType: AgentContextOwnerType;
+  ownerId: string;
+  purpose: AgentContextPurpose;
+  contextRulesVersion: string;
+  summaryType: AgentContextSummaryType;
+  sourceRowIdStart: number;
+  sourceRowIdEnd: number;
+  parentSummaryId?: string;
+  summary: string;
+  summaryFormat: 'markdown' | 'json';
+  sourceMessageCount: number;
+  sourceTokenCount?: number;
+  summaryTokenCount?: number;
+  model?: string;
+  compressionPromptVersion: string;
+  checksum: string;
+  metadata?: Record<string, unknown>;
+  nowMs: number;
+}
+
 export interface AgentStore {
   createSession(input: CreateSessionInput): Promise<AgentSession>;
   getSession(sessionId: string): Promise<AgentSession | undefined>;
@@ -342,6 +423,14 @@ export interface AgentStore {
   getPlanByJobId(jobId: string): Promise<AgentPlan | undefined>;
   listPlanSteps(planId: string): Promise<AgentPlanStep[]>;
   listJobStepRuns(jobId: string): Promise<AgentStepRun[]>;
+  listModelCalls(jobId: string): Promise<AgentModelCall[]>;
+  getModelUsageStats(sessionId: string): Promise<AgentModelUsageStats | undefined>;
+  listActiveContextSummaries(
+    ownerType: AgentContextOwnerType,
+    ownerId: string,
+    purpose: AgentContextPurpose,
+    contextRulesVersion: string
+  ): Promise<AgentContextSummary[]>;
   listSessionMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
@@ -365,6 +454,10 @@ export interface AgentStore {
   createStepRun(input: CreateStepRunInput): Promise<CreateStepRunResult>;
   commitStepOutput(input: CommitStepOutputInput): Promise<CommitStepOutputResult>;
   failStepRun(input: FailStepRunInput): Promise<FailStepRunResult>;
+  startModelCall(input: StartModelCallInput): Promise<AgentModelCall>;
+  completeModelCall(input: CompleteModelCallInput): Promise<CompleteModelCallResult>;
+  abandonStartedModelCalls(nowMs: number): Promise<AgentModelCall[]>;
+  replaceContextSummary(input: ReplaceContextSummaryInput): Promise<AgentContextSummary>;
   failJob(input: FailJobInput): Promise<AgentJob>;
   cancelJob(input: CancelJobInput): Promise<AgentJob>;
 }

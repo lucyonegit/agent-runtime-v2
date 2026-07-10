@@ -3,11 +3,22 @@ import type {
   AgentJobStage,
   AgentJobStatus,
   AgentJobStrategy,
+  AgentContextSummary,
+  AgentContextOwnerType,
+  AgentContextPurpose,
+  AgentContextSummaryStatus,
+  AgentContextSummaryType,
+  AgentContextInputManifest,
   AgentMessage,
   AgentMessageChannel,
   AgentMessageRole,
   AgentMessageType,
   AgentMessageVisibility,
+  AgentModelCall,
+  AgentModelCallStatus,
+  AgentModelCallType,
+  AgentModelUsageSource,
+  AgentModelUsageStats,
   AgentPlan,
   AgentPlanStatus,
   AgentPlanStep,
@@ -193,6 +204,90 @@ export interface AgentStepRunRow {
   updated_at_ms: string | number;
   started_at_ms: string | number | null;
   completed_at_ms: string | number | null;
+}
+
+export interface AgentContextSummaryRow {
+  id: string;
+  session_id: string;
+  job_id: string | null;
+  step_run_id: string | null;
+  project_id: string | null;
+  owner_type: string;
+  owner_id: string;
+  purpose: string;
+  context_rules_version: string;
+  summary_type: string;
+  status: string;
+  source_row_id_start: string | number;
+  source_row_id_end: string | number;
+  parent_summary_id: string | null;
+  replaces_summary_id: string | null;
+  summary: string;
+  summary_format: string;
+  source_message_count: number;
+  source_token_count: number | null;
+  summary_token_count: number | null;
+  model: string | null;
+  compression_prompt_version: string;
+  checksum: string;
+  version: number;
+  metadata: unknown;
+  created_at_ms: string | number;
+  updated_at_ms: string | number;
+}
+
+export interface AgentModelCallRow {
+  id: string;
+  session_id: string;
+  job_id: string;
+  step_run_id: string | null;
+  attempt_id: string;
+  logical_call_key: string;
+  call_attempt_no: number;
+  call_type: string;
+  status: string;
+  provider: string;
+  model: string;
+  context_rules_version: string;
+  input_manifest: unknown;
+  input_checksum: string;
+  max_context_tokens: number;
+  reserved_output_tokens: number;
+  estimated_input_tokens: number;
+  actual_input_tokens: number | null;
+  actual_output_tokens: number | null;
+  actual_total_tokens: number | null;
+  cache_read_input_tokens: number | null;
+  cache_write_input_tokens: number | null;
+  usage_source: string;
+  output_id: string | null;
+  result_type: string | null;
+  result_payload: unknown;
+  tool_names: unknown;
+  error_code: string | null;
+  error_message: string | null;
+  error_details: unknown;
+  metadata: unknown;
+  created_at_ms: string | number;
+  completed_at_ms: string | number | null;
+}
+
+export interface AgentModelUsageStatsRow {
+  session_id: string;
+  total_model_calls: number;
+  total_estimated_input_tokens: string | number;
+  total_actual_input_tokens: string | number;
+  total_actual_output_tokens: string | number;
+  total_cache_read_input_tokens: string | number;
+  total_cache_write_input_tokens: string | number;
+  total_tokens: string | number;
+  latest_model_call_id: string | null;
+  latest_model: string | null;
+  latest_context_usage_ratio: number | null;
+  max_context_tokens: number | null;
+  warning_level: string;
+  version: number;
+  updated_at_ms: string | number;
 }
 
 export function mapAgentSessionRow(row: AgentSessionRow): AgentSession {
@@ -429,6 +524,102 @@ export function mapAgentStepRunRow(row: AgentStepRunRow): AgentStepRun {
     ...(row.completed_at_ms === null
       ? {}
       : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_step_runs.completed_at_ms') }),
+  };
+}
+
+export function mapAgentContextSummaryRow(row: AgentContextSummaryRow): AgentContextSummary {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    ...(row.job_id === null ? {} : { jobId: row.job_id }),
+    ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
+    ...(row.project_id === null ? {} : { projectId: row.project_id }),
+    ownerType: row.owner_type as AgentContextOwnerType,
+    ownerId: row.owner_id,
+    purpose: row.purpose as AgentContextPurpose,
+    contextRulesVersion: row.context_rules_version,
+    summaryType: row.summary_type as AgentContextSummaryType,
+    status: row.status as AgentContextSummaryStatus,
+    sourceRowIdStart: mapBigint(row.source_row_id_start, 'agent_context_summaries.source_row_id_start'),
+    sourceRowIdEnd: mapBigint(row.source_row_id_end, 'agent_context_summaries.source_row_id_end'),
+    ...(row.parent_summary_id === null ? {} : { parentSummaryId: row.parent_summary_id }),
+    ...(row.replaces_summary_id === null ? {} : { replacesSummaryId: row.replaces_summary_id }),
+    summary: row.summary,
+    summaryFormat: row.summary_format as 'markdown' | 'json',
+    sourceMessageCount: row.source_message_count,
+    ...(row.source_token_count === null ? {} : { sourceTokenCount: row.source_token_count }),
+    ...(row.summary_token_count === null ? {} : { summaryTokenCount: row.summary_token_count }),
+    ...(row.model === null ? {} : { model: row.model }),
+    compressionPromptVersion: row.compression_prompt_version,
+    checksum: row.checksum,
+    version: row.version,
+    ...(row.metadata === null
+      ? {}
+      : { metadata: mapRecord(row.metadata, 'agent_context_summaries.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_context_summaries.created_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_context_summaries.updated_at_ms'),
+  };
+}
+
+export function mapAgentModelCallRow(row: AgentModelCallRow): AgentModelCall {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    jobId: row.job_id,
+    ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
+    attemptId: row.attempt_id,
+    logicalCallKey: row.logical_call_key,
+    callAttemptNo: row.call_attempt_no,
+    callType: row.call_type as AgentModelCallType,
+    status: row.status as AgentModelCallStatus,
+    provider: row.provider,
+    model: row.model,
+    contextRulesVersion: row.context_rules_version,
+    inputManifest: mapRecord(row.input_manifest, 'agent_model_calls.input_manifest') as unknown as AgentContextInputManifest,
+    inputChecksum: row.input_checksum,
+    maxContextTokens: row.max_context_tokens,
+    reservedOutputTokens: row.reserved_output_tokens,
+    estimatedInputTokens: row.estimated_input_tokens,
+    ...(row.actual_input_tokens === null ? {} : { actualInputTokens: row.actual_input_tokens }),
+    ...(row.actual_output_tokens === null ? {} : { actualOutputTokens: row.actual_output_tokens }),
+    ...(row.actual_total_tokens === null ? {} : { actualTotalTokens: row.actual_total_tokens }),
+    ...(row.cache_read_input_tokens === null ? {} : { cacheReadInputTokens: row.cache_read_input_tokens }),
+    ...(row.cache_write_input_tokens === null ? {} : { cacheWriteInputTokens: row.cache_write_input_tokens }),
+    usageSource: row.usage_source as AgentModelUsageSource,
+    ...(row.output_id === null ? {} : { outputId: row.output_id }),
+    ...(row.result_type === null ? {} : { resultType: row.result_type }),
+    ...(row.result_payload === null ? {} : { resultPayload: row.result_payload }),
+    ...(row.tool_names === null ? {} : { toolNames: row.tool_names as string[] }),
+    ...(row.error_code === null ? {} : { errorCode: row.error_code }),
+    ...(row.error_message === null ? {} : { errorMessage: row.error_message }),
+    ...(row.error_details === null ? {} : { errorDetails: row.error_details }),
+    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_model_calls.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_model_calls.created_at_ms'),
+    ...(row.completed_at_ms === null
+      ? {}
+      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_model_calls.completed_at_ms') }),
+  };
+}
+
+export function mapAgentModelUsageStatsRow(row: AgentModelUsageStatsRow): AgentModelUsageStats {
+  return {
+    sessionId: row.session_id,
+    totalModelCalls: row.total_model_calls,
+    totalEstimatedInputTokens: mapBigint(row.total_estimated_input_tokens, 'usage.estimated'),
+    totalActualInputTokens: mapBigint(row.total_actual_input_tokens, 'usage.actual_input'),
+    totalActualOutputTokens: mapBigint(row.total_actual_output_tokens, 'usage.actual_output'),
+    totalCacheReadInputTokens: mapBigint(row.total_cache_read_input_tokens, 'usage.cache_read'),
+    totalCacheWriteInputTokens: mapBigint(row.total_cache_write_input_tokens, 'usage.cache_write'),
+    totalTokens: mapBigint(row.total_tokens, 'usage.total'),
+    ...(row.latest_model_call_id === null ? {} : { latestModelCallId: row.latest_model_call_id }),
+    ...(row.latest_model === null ? {} : { latestModel: row.latest_model }),
+    ...(row.latest_context_usage_ratio === null
+      ? {}
+      : { latestContextUsageRatio: row.latest_context_usage_ratio }),
+    ...(row.max_context_tokens === null ? {} : { maxContextTokens: row.max_context_tokens }),
+    warningLevel: row.warning_level as AgentModelUsageStats['warningLevel'],
+    version: row.version,
+    updatedAtMs: mapBigint(row.updated_at_ms, 'usage.updated_at_ms'),
   };
 }
 

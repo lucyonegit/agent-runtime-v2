@@ -933,6 +933,89 @@ describe('PostgresAgentStore Job transactions', () => {
     expect(summarize).toHaveBeenCalledTimes(1);
   });
 
+  it('audits ModelCalls, accumulates usage, abandons orphaned calls, and replaces summaries', async () => {
+    await store.createSession({ id: 'session_audit', mode: 'agent', nowMs: 10 });
+    await createJob(store, 'session_audit', 'job_audit', 'message_audit', 20);
+    const job = await store.claimJob({
+      jobId: 'job_audit', expectedVersion: 0, workerId: 'worker_audit',
+      attemptId: 'attempt_audit', nowMs: 30, leaseUntilMs: 200,
+    });
+    const manifest = {
+      purpose: 'job_execution',
+      contextRulesVersion: 'context-v1',
+      systemPromptVersion: 'system-v1',
+      messageGroupIds: [],
+      summaryIds: [],
+      fixedPrefixChecksum: 'prefix',
+      estimatedBreakdown: {
+        system: 10, tools: 0, summaries: 0, messages: 70, reservedOutput: 10,
+      },
+    };
+    await store.startModelCall({
+      id: 'model_call_1', sessionId: 'session_audit', jobId: job.id,
+      attemptId: 'attempt_audit', workerId: 'worker_audit',
+      logicalCallKey: 'job.react:1', callAttemptNo: 1, callType: 'job.react',
+      provider: 'test', model: 'test-model', contextRulesVersion: 'context-v1',
+      inputManifest: manifest, inputChecksum: 'checksum_1',
+      maxContextTokens: 100, reservedOutputTokens: 10, estimatedInputTokens: 80, nowMs: 31,
+    });
+    const completed = await store.completeModelCall({
+      id: 'model_call_1', status: 'completed', usageSource: 'provider',
+      actualInputTokens: 95, actualOutputTokens: 5, actualTotalTokens: 100,
+      outputId: 'output_audit', resultType: 'text', resultPayload: { content: 'done' }, nowMs: 32,
+    });
+    expect(completed).toMatchObject({
+      call: { status: 'completed', actualTotalTokens: 100 },
+      usage: {
+        totalModelCalls: 1,
+        totalEstimatedInputTokens: 80,
+        totalActualInputTokens: 95,
+        totalActualOutputTokens: 5,
+        totalTokens: 100,
+        warningLevel: 'critical',
+      },
+    });
+    await store.startModelCall({
+      id: 'model_call_2', sessionId: 'session_audit', jobId: job.id,
+      attemptId: 'attempt_audit', workerId: 'worker_audit',
+      logicalCallKey: 'job.react:2', callAttemptNo: 1, callType: 'job.react',
+      provider: 'test', model: 'test-model', contextRulesVersion: 'context-v1',
+      inputManifest: manifest, inputChecksum: 'checksum_2',
+      maxContextTokens: 100, reservedOutputTokens: 10, estimatedInputTokens: 10, nowMs: 33,
+    });
+    await expect(store.abandonStartedModelCalls(34)).resolves.toMatchObject([{
+      id: 'model_call_2', status: 'failed', errorCode: 'model_call_abandoned',
+    }]);
+    expect(await store.getModelUsageStats('session_audit')).toMatchObject({
+      totalModelCalls: 2,
+      totalEstimatedInputTokens: 90,
+      totalTokens: 100,
+    });
+
+    const firstSummary = await store.replaceContextSummary({
+      id: 'summary_audit_1', sessionId: 'session_audit',
+      ownerType: 'session', ownerId: 'session_audit', purpose: 'conversation',
+      contextRulesVersion: 'context-v1', summaryType: 'rolling',
+      sourceRowIdStart: 1, sourceRowIdEnd: 1, summary: 'first', summaryFormat: 'markdown',
+      sourceMessageCount: 1, compressionPromptVersion: 'compress-v1', checksum: 'sum_1', nowMs: 35,
+    });
+    const secondSummary = await store.replaceContextSummary({
+      id: 'summary_audit_2', sessionId: 'session_audit',
+      ownerType: 'session', ownerId: 'session_audit', purpose: 'conversation',
+      contextRulesVersion: 'context-v1', summaryType: 'rolling',
+      sourceRowIdStart: 1, sourceRowIdEnd: 2, parentSummaryId: firstSummary.id,
+      summary: 'second', summaryFormat: 'markdown', sourceMessageCount: 2,
+      compressionPromptVersion: 'compress-v1', checksum: 'sum_2', nowMs: 36,
+    });
+    expect(secondSummary).toMatchObject({ replacesSummaryId: 'summary_audit_1', status: 'active' });
+    expect(await store.listActiveContextSummaries(
+      'session', 'session_audit', 'conversation', 'context-v1'
+    )).toEqual([secondSummary]);
+    expect((await pool!.query(
+      `select status from agent_context_summaries where id = 'summary_audit_1'`
+    )).rows[0]).toEqual({ status: 'superseded' });
+  });
+
   it('fails descendants atomically, preserves side-effect uncertainty, and creates retry as a new Job', async () => {
     await store.createSession({ id: 'session_fail', mode: 'agent', nowMs: 10 });
     await createJob(store, 'session_fail', 'job_fail', 'message_fail', 20);
