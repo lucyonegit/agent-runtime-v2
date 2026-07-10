@@ -1,0 +1,29 @@
+node_modules
+
+# Output
+dist
+
+# Logs
+logs
+
+# Uploads
+uploads
+
+# Env
+.env
+
+# Config
+config
+
+# Cache
+.cache
+
+# Other
+.DS_Store
+
+.agent-sandbox
+
+
+.git
+
+.superpowers
