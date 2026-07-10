@@ -142,6 +142,8 @@ function createCoordinator(store: AgentStore, nowMs: number): JobCoordinator {
 function createStore(): AgentStore {
   return {
     createSession: vi.fn<AgentStore['createSession']>(),
+    listSessions: vi.fn<AgentStore['listSessions']>(),
+    deleteSession: vi.fn<AgentStore['deleteSession']>(),
     getSession: vi.fn<AgentStore['getSession']>(),
     getJob: vi.fn<AgentStore['getJob']>(),
     getJobByClientRequestId: vi.fn<AgentStore['getJobByClientRequestId']>(),
@@ -153,6 +155,13 @@ function createStore(): AgentStore {
     getModelUsageStats: vi.fn<AgentStore['getModelUsageStats']>(),
     listActiveContextSummaries: vi.fn<AgentStore['listActiveContextSummaries']>(),
     listSessionMessages: vi.fn<AgentStore['listSessionMessages']>(),
+    listSessionJobs: vi.fn<AgentStore['listSessionJobs']>(),
+    listSessionPlans: vi.fn<AgentStore['listSessionPlans']>(),
+    listSessionPlanSteps: vi.fn<AgentStore['listSessionPlanSteps']>(),
+    listSessionStepRuns: vi.fn<AgentStore['listSessionStepRuns']>(),
+    listSessionToolInvocations: vi.fn<AgentStore['listSessionToolInvocations']>(),
+    listSessionUserInputRequests: vi.fn<AgentStore['listSessionUserInputRequests']>(),
+    listSessionCodeProjects: vi.fn<AgentStore['listSessionCodeProjects']>(),
     createJobAndAppendUserMessage: vi.fn<AgentStore['createJobAndAppendUserMessage']>(),
     claimJob: vi.fn<AgentStore['claimJob']>(),
     renewJobLease: vi.fn<AgentStore['renewJobLease']>(),

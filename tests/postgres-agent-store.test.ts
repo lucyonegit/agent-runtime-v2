@@ -10,6 +10,7 @@ import { checksumToolArguments } from '../src/runtime/transaction-commands.js';
 import { StepRunner } from '../src/planner/step-runner.js';
 import { PlanEngine } from '../src/planner/plan-engine.js';
 import { PlanSummarizer } from '../src/planner/plan-summarizer.js';
+import { SessionView } from '../src/view/session-view.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
 
@@ -587,6 +588,20 @@ describe('PostgresAgentStore Job transactions', () => {
       'message.upserted',
       'job.upserted',
     ]);
+    const directView = await new SessionView(store, { nowMs: () => 50 }).load('session_direct');
+    expect(directView).toMatchObject({
+      schemaVersion: 1,
+      generatedAtMs: 50,
+      cursor: { latestMessageRowId: 4 },
+      timeline: {
+        flat: [
+          { type: 'message' },
+          { type: 'tool_exchange', status: 'completed' },
+          { type: 'message' },
+        ],
+        groupedByStep: [{ type: 'job_group', job: { id: 'job_direct' } }],
+      },
+    });
   });
 
   it('runs direct HITL through waiting, answer-as-tool-result, resume claim, and final completion', async () => {
@@ -821,6 +836,15 @@ describe('PostgresAgentStore Job transactions', () => {
         ['run_two_1', 1, 'failed'],
         ['run_two_2', 2, 'completed'],
       ]);
+    const planView = await new SessionView(store).load('session_plan');
+    const planJobGroup = planView.timeline.groupedByStep[0];
+    expect(planJobGroup.items.filter(item => item.type === 'step_group').map(item => (
+      item.type === 'step_group' ? [item.step?.id, item.stepRun?.runNo, item.status] : []
+    ))).toEqual([
+      ['step_one', 1, 'completed'],
+      ['step_two', 1, 'failed'],
+      ['step_two', 2, 'completed'],
+    ]);
   });
 
   it('repairs one invalid StepOutput, commits only validated JSON, and summarizes the Plan', async () => {

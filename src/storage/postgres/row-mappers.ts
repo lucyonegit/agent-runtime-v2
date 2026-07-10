@@ -4,6 +4,8 @@ import type {
   AgentJobStatus,
   AgentJobStrategy,
   AgentContextSummary,
+  AgentCodeProject,
+  AgentCodeProjectStatus,
   AgentContextOwnerType,
   AgentContextPurpose,
   AgentContextSummaryStatus,
@@ -230,6 +232,21 @@ export interface AgentContextSummaryRow {
   model: string | null;
   compression_prompt_version: string;
   checksum: string;
+  version: number;
+  metadata: unknown;
+  created_at_ms: string | number;
+  updated_at_ms: string | number;
+}
+
+export interface AgentCodeProjectRow {
+  id: string;
+  session_id: string;
+  title: string;
+  status: string;
+  sandbox_relative_path: string;
+  framework: string | null;
+  language: string | null;
+  package_manager: string | null;
   version: number;
   metadata: unknown;
   created_at_ms: string | number;
@@ -558,6 +575,23 @@ export function mapAgentContextSummaryRow(row: AgentContextSummaryRow): AgentCon
       : { metadata: mapRecord(row.metadata, 'agent_context_summaries.metadata') }),
     createdAtMs: mapBigint(row.created_at_ms, 'agent_context_summaries.created_at_ms'),
     updatedAtMs: mapBigint(row.updated_at_ms, 'agent_context_summaries.updated_at_ms'),
+  };
+}
+
+export function mapAgentCodeProjectRow(row: AgentCodeProjectRow): AgentCodeProject {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    title: row.title,
+    status: row.status as AgentCodeProjectStatus,
+    sandboxRelativePath: row.sandbox_relative_path,
+    ...(row.framework === null ? {} : { framework: row.framework }),
+    ...(row.language === null ? {} : { language: row.language }),
+    ...(row.package_manager === null ? {} : { packageManager: row.package_manager }),
+    version: row.version,
+    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_code_projects.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_code_projects.created_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_code_projects.updated_at_ms'),
   };
 }
 

@@ -1,6 +1,7 @@
 import type {
   AgentJob,
   AgentContextInputManifest,
+  AgentCodeProject,
   AgentContextOwnerType,
   AgentContextPurpose,
   AgentContextSummary,
@@ -413,6 +414,8 @@ export interface ReplaceContextSummaryInput {
 
 export interface AgentStore {
   createSession(input: CreateSessionInput): Promise<AgentSession>;
+  listSessions(): Promise<AgentSession[]>;
+  deleteSession(sessionId: string): Promise<boolean>;
   getSession(sessionId: string): Promise<AgentSession | undefined>;
   getJob(jobId: string): Promise<AgentJob | undefined>;
   getJobByClientRequestId(
@@ -432,6 +435,13 @@ export interface AgentStore {
     contextRulesVersion: string
   ): Promise<AgentContextSummary[]>;
   listSessionMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
+  listSessionJobs(sessionId: string): Promise<AgentJob[]>;
+  listSessionPlans(sessionId: string): Promise<AgentPlan[]>;
+  listSessionPlanSteps(sessionId: string): Promise<AgentPlanStep[]>;
+  listSessionStepRuns(sessionId: string): Promise<AgentStepRun[]>;
+  listSessionToolInvocations(sessionId: string): Promise<AgentToolInvocation[]>;
+  listSessionUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
+  listSessionCodeProjects(sessionId: string): Promise<AgentCodeProject[]>;
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
   ): Promise<CreateJobAndAppendUserMessageResult>;

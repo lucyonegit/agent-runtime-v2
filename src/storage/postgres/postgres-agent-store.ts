@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 import type {
   AgentJob,
   AgentContextOwnerType,
+  AgentCodeProject,
   AgentContextPurpose,
   AgentContextSummary,
   AgentMessage,
@@ -12,6 +13,7 @@ import type {
   AgentSession,
   AgentStepRun,
   AgentToolInvocation,
+  AgentUserInputRequest,
 } from '../../domain/index.js';
 import type {
   AgentStore,
@@ -81,6 +83,8 @@ import {
   mapAgentModelCallRow,
   mapAgentModelUsageStatsRow,
   mapAgentContextSummaryRow,
+  mapAgentCodeProjectRow,
+  mapAgentUserInputRequestRow,
   mapAgentToolInvocationRow,
   type AgentJobRow,
   type AgentMessageRow,
@@ -91,6 +95,8 @@ import {
   type AgentModelCallRow,
   type AgentModelUsageStatsRow,
   type AgentContextSummaryRow,
+  type AgentCodeProjectRow,
+  type AgentUserInputRequestRow,
   type AgentToolInvocationRow,
 } from './row-mappers.js';
 
@@ -103,6 +109,18 @@ export class PostgresAgentStore implements AgentStore {
 
   async createSession(input: CreateSessionInput): Promise<AgentSession> {
     return this.#withClient(client => createSessionCommand(client, input));
+  }
+
+  async listSessions(): Promise<AgentSession[]> {
+    const result = await this.#pool.query<AgentSessionRow>(
+      `select * from agent_sessions order by updated_at_ms desc, id asc`
+    );
+    return result.rows.map(mapAgentSessionRow);
+  }
+
+  async deleteSession(sessionId: string): Promise<boolean> {
+    const result = await this.#pool.query(`delete from agent_sessions where id = $1`, [sessionId]);
+    return result.rowCount === 1;
   }
 
   async getSession(sessionId: string): Promise<AgentSession | undefined> {
@@ -211,6 +229,62 @@ export class PostgresAgentStore implements AgentStore {
       [sessionId, afterRowId]
     );
     return result.rows.map(mapAgentMessageRow);
+  }
+
+  async listSessionJobs(sessionId: string): Promise<AgentJob[]> {
+    const result = await this.#pool.query<AgentJobRow>(
+      `select * from agent_jobs where session_id = $1 order by created_at_ms asc, id asc`, [sessionId]
+    );
+    return result.rows.map(mapAgentJobRow);
+  }
+
+  async listSessionPlans(sessionId: string): Promise<AgentPlan[]> {
+    const result = await this.#pool.query<AgentPlanRow>(
+      `select * from agent_plans where session_id = $1 order by created_at_ms asc, id asc`, [sessionId]
+    );
+    return result.rows.map(mapAgentPlanRow);
+  }
+
+  async listSessionPlanSteps(sessionId: string): Promise<AgentPlanStep[]> {
+    const result = await this.#pool.query<AgentPlanStepRow>(
+      `select step.* from agent_plan_steps step
+       join agent_plans plan on plan.id = step.plan_id
+       where plan.session_id = $1
+       order by plan.created_at_ms asc, step.position asc`, [sessionId]
+    );
+    return result.rows.map(mapAgentPlanStepRow);
+  }
+
+  async listSessionStepRuns(sessionId: string): Promise<AgentStepRun[]> {
+    const result = await this.#pool.query<AgentStepRunRow>(
+      `select * from agent_step_runs where session_id = $1
+       order by created_at_ms asc, run_no asc, id asc`, [sessionId]
+    );
+    return result.rows.map(mapAgentStepRunRow);
+  }
+
+  async listSessionToolInvocations(sessionId: string): Promise<AgentToolInvocation[]> {
+    const result = await this.#pool.query<AgentToolInvocationRow>(
+      `select * from agent_tool_invocations where session_id = $1
+       order by created_at_ms asc, id asc`, [sessionId]
+    );
+    return result.rows.map(mapAgentToolInvocationRow);
+  }
+
+  async listSessionUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]> {
+    const result = await this.#pool.query<AgentUserInputRequestRow>(
+      `select * from agent_user_input_requests where session_id = $1
+       order by created_at_ms asc, id asc`, [sessionId]
+    );
+    return result.rows.map(mapAgentUserInputRequestRow);
+  }
+
+  async listSessionCodeProjects(sessionId: string): Promise<AgentCodeProject[]> {
+    const result = await this.#pool.query<AgentCodeProjectRow>(
+      `select * from agent_code_projects where session_id = $1
+       order by updated_at_ms desc, id asc`, [sessionId]
+    );
+    return result.rows.map(mapAgentCodeProjectRow);
   }
 
   async createJobAndAppendUserMessage(
