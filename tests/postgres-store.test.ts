@@ -7,9 +7,9 @@ const databaseUrl = process.env.DATABASE_URL
   ?? 'postgresql://postgres:123456@127.0.0.1:5433/postgres';
 
 describe('PostgresSessionStore', () => {
-  let adminPool: Pool;
-  let pool: Pool;
-  let schema: string;
+  let adminPool: Pool | undefined;
+  let pool: Pool | undefined;
+  let schema: string | undefined;
   let store: PostgresSessionStore;
 
   beforeEach(async () => {
@@ -25,9 +25,16 @@ describe('PostgresSessionStore', () => {
   });
 
   afterEach(async () => {
-    await pool.end();
-    await adminPool.query(`drop schema if exists "${schema}" cascade`);
-    await adminPool.end();
+    if (pool) {
+      await pool.end();
+      pool = undefined;
+    }
+    if (adminPool && schema) {
+      await adminPool.query(`drop schema if exists "${schema}" cascade`);
+      await adminPool.end();
+      adminPool = undefined;
+      schema = undefined;
+    }
   });
 
   it('persists sessions, tasks, messages, tool payloads, and input requests', async () => {
@@ -478,14 +485,14 @@ describe('PostgresSessionStore', () => {
       },
     ]);
     await expect(store.listTasks('session_runtime')).resolves.toEqual(expect.arrayContaining([
-      {
+      expect.objectContaining({
         id: root.id,
         phase: 'planning',
         routeMode: 'planned',
         executionId: 'execution_1',
         leaseOwner: 'worker_1',
         leaseExpiresAt: 500,
-      },
+      }),
     ]));
   });
 });

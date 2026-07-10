@@ -9,7 +9,9 @@
     "serve": "node dist/server/main.js",
     "dev:server": "npm run build && node dist/server/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --exclude 'dist/**'"
+    "test": "vitest run --exclude 'dist/**' --exclude 'tests/postgres-store.test.ts'",
+    "test:postgres": "bash scripts/test-postgres.sh",
+    "test:all": "npm test && npm run test:postgres"
   },
   "dependencies": {
     "@langchain/core": "^1.2.1",
