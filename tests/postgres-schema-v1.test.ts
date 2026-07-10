@@ -75,4 +75,158 @@ describe('canonical PostgreSQL schema v1', () => {
       applied_at_ms: '1000',
     }]);
   });
+
+  it('allows only one active Job per Session', async () => {
+    await insertSession(client!, 'session_jobs');
+    await insertJob(client!, 'job_1', 'session_jobs');
+
+    await expect(insertJob(client!, 'job_2', 'session_jobs')).rejects.toMatchObject({ code: '23505' });
+
+    await client!.query(
+      `update agent_jobs
+       set status = 'failed', completed_at_ms = 20, updated_at_ms = 20
+       where id = 'job_1'`
+    );
+    await expect(insertJob(client!, 'job_2', 'session_jobs')).resolves.toBeUndefined();
+  });
+
+  it('allows only one active StepRun per PlanStep and per Job', async () => {
+    await seedPlan(client!, 'run');
+    await insertStepRun(client!, 'run_1', 'job_run', 'plan_run', 'step_run_1', 1);
+
+    await expect(
+      insertStepRun(client!, 'run_2', 'job_run', 'plan_run', 'step_run_1', 2)
+    ).rejects.toMatchObject({ code: '23505' });
+    await expect(
+      insertStepRun(client!, 'run_3', 'job_run', 'plan_run', 'step_run_2', 1)
+    ).rejects.toMatchObject({ code: '23505' });
+  });
+
+  it('rejects malformed tool protocol messages', async () => {
+    await insertSession(client!, 'session_messages');
+    await insertJob(client!, 'job_messages', 'session_messages');
+
+    await expect(client!.query(
+      `insert into agent_messages(
+         id, session_id, job_id, role, message_type, visibility, content, created_at_ms
+       ) values (
+         'msg_bad_call', 'session_messages', 'job_messages',
+         'assistant', 'tool_call', 'ui', '', 10
+       )`
+    )).rejects.toMatchObject({ code: '23514' });
+
+    await expect(client!.query(
+      `insert into agent_messages(
+         id, session_id, job_id, role, message_type, visibility, content, created_at_ms
+       ) values (
+         'msg_bad_result', 'session_messages', 'job_messages',
+         'tool', 'tool_result', 'ui', '', 11
+       )`
+    )).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('enforces one active summary and one started logical model call', async () => {
+    await insertSession(client!, 'session_unique');
+    await insertJob(client!, 'job_unique', 'session_unique');
+
+    await insertSummary(client!, 'summary_1', 'session_unique');
+    await expect(insertSummary(client!, 'summary_2', 'session_unique'))
+      .rejects.toMatchObject({ code: '23505' });
+
+    await insertModelCall(client!, 'call_1', 'job_unique', 1);
+    await expect(insertModelCall(client!, 'call_2', 'job_unique', 2))
+      .rejects.toMatchObject({ code: '23505' });
+  });
 });
+
+async function insertSession(client: PoolClient, id: string): Promise<void> {
+  await client.query(
+    `insert into agent_sessions(id, mode, status, version, created_at_ms, updated_at_ms)
+     values ($1, 'agent', 'active', 0, 1, 1)`,
+    [id]
+  );
+}
+
+async function insertJob(client: PoolClient, id: string, sessionId: string): Promise<void> {
+  await client.query(
+    `insert into agent_jobs(
+       id, session_id, stage, status, attempt_no, version, created_at_ms, updated_at_ms
+     ) values ($1, $2, 'routing', 'created', 0, 0, 2, 2)`,
+    [id, sessionId]
+  );
+}
+
+async function seedPlan(client: PoolClient, suffix: string): Promise<void> {
+  const sessionId = `session_${suffix}`;
+  const jobId = `job_${suffix}`;
+  const planId = `plan_${suffix}`;
+  await insertSession(client, sessionId);
+  await insertJob(client, jobId, sessionId);
+  await client.query(
+    `insert into agent_plans(
+       id, session_id, job_id, title, goal, status, version, created_at_ms, updated_at_ms
+     ) values ($1, $2, $3, 'Plan', 'Goal', 'active', 0, 3, 3)`,
+    [planId, sessionId, jobId]
+  );
+  for (const position of [0, 1]) {
+    await client.query(
+      `insert into agent_plan_steps(
+         id, plan_id, position, title, instruction, status, version, created_at_ms, updated_at_ms
+       ) values ($1, $2, $3, $4, $5, 'pending', 0, 4, 4)`,
+      [`step_${suffix}_${position + 1}`, planId, position, `Step ${position + 1}`, `Do ${position + 1}`]
+    );
+  }
+}
+
+async function insertStepRun(
+  client: PoolClient,
+  id: string,
+  jobId: string,
+  planId: string,
+  stepId: string,
+  runNo: number
+): Promise<void> {
+  await client.query(
+    `insert into agent_step_runs(
+       id, session_id, job_id, plan_id, step_id, run_no,
+       executor, status, attempt_no, version, created_at_ms, updated_at_ms
+     ) values ($1, 'session_run', $2, $3, $4, $5, 'agent', 'created', 0, 0, 5, 5)`,
+    [id, jobId, planId, stepId, runNo]
+  );
+}
+
+async function insertSummary(client: PoolClient, id: string, sessionId: string): Promise<void> {
+  await client.query(
+    `insert into agent_context_summaries(
+       id, session_id, owner_type, owner_id, purpose, context_rules_version,
+       summary_type, status, source_row_id_start, source_row_id_end, summary,
+       summary_format, source_message_count, compression_prompt_version,
+       checksum, version, created_at_ms, updated_at_ms
+     ) values (
+       $1, $2, 'session', $2, 'conversation', 'v1', 'rolling', 'active',
+       1, 1, 'summary', 'markdown', 1, 'compress-v1', $1, 0, 6, 6
+     )`,
+    [id, sessionId]
+  );
+}
+
+async function insertModelCall(
+  client: PoolClient,
+  id: string,
+  jobId: string,
+  callAttemptNo: number
+): Promise<void> {
+  await client.query(
+    `insert into agent_model_calls(
+       id, session_id, job_id, attempt_id, logical_call_key, call_attempt_no,
+       call_type, status, provider, model, context_rules_version, input_manifest,
+       input_checksum, max_context_tokens, reserved_output_tokens,
+       estimated_input_tokens, usage_source, created_at_ms
+     ) values (
+       $1, 'session_unique', $2, 'attempt_1', 'route', $3,
+       'planner.route', 'started', 'test', 'test-model', 'v1', '{}'::jsonb,
+       'checksum', 1000, 100, 10, 'estimated', 7
+     )`,
+    [id, jobId, callAttemptNo]
+  );
+}
