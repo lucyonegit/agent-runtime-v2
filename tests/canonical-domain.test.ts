@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   ACTIVE_JOB_STATUSES,
   ACTIVE_STEP_RUN_STATUSES,
+  AGENT_CONTEXT_OWNER_TYPES,
+  AGENT_CONTEXT_PURPOSES,
   AGENT_MESSAGE_CHANNELS,
+  AGENT_MODEL_CALL_TYPES,
+  AGENT_REALTIME_ENTITY_EVENT_TYPES,
   AGENT_TOOL_INVOCATION_STATUSES,
   canTransitionJob,
   isValidAnswerModeForSource,
@@ -56,5 +60,31 @@ describe('canonical runtime domain', () => {
     expect(isValidAnswerModeForSource('tool', 'as_tool_result')).toBe(true);
     expect(isValidAnswerModeForSource('tool', 'as_user_message')).toBe(false);
     expect(isValidAnswerModeForSource('agent', 'as_user_message')).toBe(true);
+  });
+
+  it('uses the final context owner and purpose dictionaries', () => {
+    expect(AGENT_CONTEXT_OWNER_TYPES).toEqual(['session', 'job', 'step_run', 'code_project']);
+    expect(AGENT_CONTEXT_PURPOSES).toEqual([
+      'conversation',
+      'job_execution',
+      'step_execution',
+      'plan_final',
+      'code_execution',
+    ]);
+  });
+
+  it('uses stable model-call and realtime event dictionaries', () => {
+    expect(AGENT_MODEL_CALL_TYPES).toContain('step.output_repair');
+    expect(AGENT_MODEL_CALL_TYPES).toContain('context.compress');
+    expect(AGENT_REALTIME_ENTITY_EVENT_TYPES).toEqual([
+      'message.upserted',
+      'job.upserted',
+      'plan.upserted',
+      'plan_step.upserted',
+      'step_run.upserted',
+      'tool_invocation.upserted',
+      'user_input.upserted',
+      'model_usage.updated',
+    ]);
   });
 });
