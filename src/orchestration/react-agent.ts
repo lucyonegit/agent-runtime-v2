@@ -138,6 +138,12 @@ export class ReactAgent {
       await this.emitUserMessageCreated(userMessage);
     }
 
+    await this.config.store.answerInputRequest(input.requestId, {
+      value: input.value,
+      messageId: toolMessageId,
+      answeredAt,
+    });
+
     const remainingPendingRequests = await this.listPendingInputRequests(input.sessionId, task.id);
     const latestTask = (await this.config.store.listTasks(input.sessionId)).find(item => item.id === task.id) ?? task;
     if (remainingPendingRequests.length > 0) {
@@ -381,7 +387,7 @@ export class ReactAgent {
           now: this.now(),
           waitingRequestId: waitingRequestIds[0],
           waitingRequestIds,
-    });
+        });
     const updated = await this.config.store.updateTask(task.id, waiting);
     await this.emitTaskStatusChanged(updated);
     return {
@@ -418,14 +424,8 @@ export class ReactAgent {
       },
       createdAt: this.now(),
       metadata: { inputRequestId: request.id },
-      });
-    }
-
-    await this.config.store.answerInputRequest(input.requestId, {
-      value: input.value,
-      messageId: toolMessageId,
-      answeredAt,
     });
+  }
 
   private async appendSystemPrompt(sessionId: string, task: AgentTask): Promise<AgentMessage> {
     return this.config.store.appendMessage({
