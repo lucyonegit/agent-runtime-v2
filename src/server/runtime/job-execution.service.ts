@@ -427,6 +427,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
         jobId: job.id,
         stepRunId,
         attemptId: job.currentAttemptId!,
+        attemptNo: job.attemptNo,
       },
       callType,
       logicalCallKey,

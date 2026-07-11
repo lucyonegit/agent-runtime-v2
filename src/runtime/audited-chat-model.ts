@@ -17,7 +17,13 @@ export interface AuditedChatModelOptions {
   delegate: Runnable<BaseLanguageModelInput, AIMessageChunk>;
   store: AgentStore;
   workerId: string;
-  target: { sessionId: string; jobId: string; stepRunId?: string; attemptId: string };
+  target: {
+    sessionId: string;
+    jobId: string;
+    stepRunId?: string;
+    attemptId: string;
+    attemptNo: number;
+  };
   callType: AgentModelCallType;
   logicalCallKey: string;
   provider: string;
@@ -113,7 +119,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       attemptId: this.#options.target.attemptId,
       workerId: this.#options.workerId,
       logicalCallKey: `${this.#options.logicalCallKey}:${this.#logicalCallNo}`,
-      callAttemptNo: 1,
+      callAttemptNo: this.#options.target.attemptNo,
       callType: this.#options.callType,
       provider: this.#options.provider,
       model: this.#options.model,

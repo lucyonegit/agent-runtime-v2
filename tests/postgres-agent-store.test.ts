@@ -12,6 +12,7 @@ import type { ChatResult } from '@langchain/core/outputs';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { JobCoordinator } from '../src/runtime/job-coordinator.js';
+import { AuditedChatModel } from '../src/runtime/audited-chat-model.js';
 import { ToolExecutor } from '../src/runtime/tool-executor.js';
 import { AgentLoop } from '../src/agent-loop/agent-loop.js';
 import { AgentRunner } from '../src/runtime/agent-runner.js';
@@ -764,10 +765,15 @@ describe('PostgresAgentStore Job transactions', () => {
     const waitingRunner = new AgentRunner({
       loop: new AgentLoop({
         streaming: false,
-        model: new TestChatRunnable(async () => new AIMessageChunk({
-          content: '',
-          tool_calls: [{ id: 'call_hitl', name: 'choose', args: {} }],
-        })),
+        model: auditedTestModel({
+          store,
+          job: claimed,
+          delegate: new TestChatRunnable(async () => new AIMessageChunk({
+            content: '',
+            tool_calls: [{ id: 'call_hitl', name: 'choose', args: {} }],
+          })),
+          nowMs: 35,
+        }),
         clock: { nowMs: () => 35 },
       }),
       writer,
@@ -806,7 +812,12 @@ describe('PostgresAgentStore Job transactions', () => {
     const resumeRunner = new AgentRunner({
       loop: new AgentLoop({
         streaming: false,
-        model: new TestChatRunnable(async () => new AIMessageChunk('resumed final answer')),
+        model: auditedTestModel({
+          store,
+          job: answered.job,
+          delegate: new TestChatRunnable(async () => new AIMessageChunk('resumed final answer')),
+          nowMs: 41,
+        }),
         clock: { nowMs: () => 41 },
       }),
       writer,
@@ -827,6 +838,22 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     expect((await store.listSessionMessages('session_hitl')).map(message => message.messageType))
       .toEqual(['user_message', 'tool_call', 'tool_result', 'assistant_message']);
+    expect((await store.listModelCalls('job_hitl')).map(call => ({
+      logicalCallKey: call.logicalCallKey,
+      callAttemptNo: call.callAttemptNo,
+      attemptId: call.attemptId,
+    }))).toEqual([
+      {
+        logicalCallKey: 'job.react:1',
+        callAttemptNo: 1,
+        attemptId: 'attempt_hitl_1',
+      },
+      {
+        logicalCallKey: 'job.react:1',
+        callAttemptNo: 2,
+        attemptId: 'attempt_hitl_2',
+      },
+    ]);
   });
 
   it('advances a two-step Plan with explicit StepRun retry into plan_final completion', async () => {
@@ -1358,6 +1385,47 @@ function inputMessages(input: BaseLanguageModelInput): BaseMessage[] {
   if (Array.isArray(input)) return input.map(coerceMessageLikeToMessage);
   if (typeof input === 'string') return [coerceMessageLikeToMessage(['human', input])];
   return input.toChatMessages();
+}
+
+function auditedTestModel(input: {
+  store: PostgresAgentStore;
+  job: { sessionId: string; id: string; currentAttemptId?: string; attemptNo: number };
+  delegate: TestChatRunnable;
+  nowMs: number;
+}): AuditedChatModel {
+  return new AuditedChatModel({
+    delegate: input.delegate,
+    store: input.store,
+    workerId: 'worker_hitl',
+    target: {
+      sessionId: input.job.sessionId,
+      jobId: input.job.id,
+      attemptId: input.job.currentAttemptId!,
+      attemptNo: input.job.attemptNo,
+    },
+    callType: 'job.react',
+    logicalCallKey: 'job.react',
+    provider: 'test',
+    model: 'test-model',
+    maxContextTokens: 1_000,
+    reservedOutputTokens: 100,
+    baseManifest: {
+      purpose: 'job_execution',
+      contextRulesVersion: 'context-v1',
+      systemPromptVersion: 'system-v1',
+      messageGroupIds: [],
+      summaryIds: [],
+      fixedPrefixChecksum: 'prefix',
+      estimatedBreakdown: {
+        system: 10,
+        tools: 10,
+        summaries: 0,
+        messages: 10,
+        reservedOutput: 100,
+      },
+    },
+    clock: { nowMs: () => input.nowMs },
+  });
 }
 
 function completedRuntimeTool(
