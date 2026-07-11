@@ -7,6 +7,7 @@ import { AgentRuntime } from '../orchestration/agent-runtime.js';
 import { PostgresAgentStore } from '../storage/postgres/postgres-agent-store.js';
 import { assertAgentRuntimeSchemaVersion } from '../storage/postgres/migrations.js';
 import { AgentHttpModule } from './http/agent-http.module.js';
+import { AGENT_CORS_OPTIONS } from './http/cors-options.js';
 import { RuntimeExceptionFilter } from './http/runtime-exception.filter.js';
 import { removeSessionSandbox } from '../tools/index.js';
 import { createDefaultTools } from './runtime/default-tools.js';
@@ -62,7 +63,7 @@ const app = await NestFactory.create<NestFastifyApplication>(
   { logger: ['error', 'warn', 'log'] }
 );
 app.useGlobalFilters(new RuntimeExceptionFilter());
-app.enableCors({ origin: true, credentials: true });
+app.enableCors(AGENT_CORS_OPTIONS);
 app.enableShutdownHooks();
 const port = numberEnv('PORT', 3000);
 await app.listen(port, process.env.HOST ?? '127.0.0.1');
