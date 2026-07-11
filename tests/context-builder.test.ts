@@ -127,13 +127,13 @@ describe('ContextFilter', () => {
 });
 
 describe('TokenBudget', () => {
-  it('never splits an item and rejects mandatory overflow', () => {
+  it('never drops mustKeep items and rejects mustKeep overflow', () => {
     const budget = new TokenBudget();
     expect(() => budget.select([{
       id: 'system',
       value: 'system',
       estimatedTokens: 91,
-      mandatory: true,
+      mustKeep: true,
       priority: 1,
       recency: 1,
       originalOrder: 0,
@@ -142,19 +142,19 @@ describe('TokenBudget', () => {
 
     const selection = budget.select([
       {
-        id: 'mandatory', value: 'mandatory', estimatedTokens: 20,
-        mandatory: true, priority: 100, recency: 0, originalOrder: 0,
+        id: 'must_keep', value: 'must_keep', estimatedTokens: 20,
+        mustKeep: true, priority: 100, recency: 0, originalOrder: 0,
       },
       {
         id: 'whole_tool_exchange', value: 'tool', estimatedTokens: 70,
-        mandatory: false, priority: 90, recency: 2, originalOrder: 1,
+        mustKeep: false, priority: 90, recency: 2, originalOrder: 1,
       },
       {
         id: 'small_recent', value: 'small', estimatedTokens: 10,
-        mandatory: false, priority: 80, recency: 3, originalOrder: 2,
+        mustKeep: false, priority: 80, recency: 3, originalOrder: 2,
       },
     ], { maxContextTokens: 100, reservedOutputTokens: 10 });
-    expect(selection.selected.map(item => item.id)).toEqual(['mandatory', 'small_recent']);
+    expect(selection.selected.map(item => item.id)).toEqual(['must_keep', 'small_recent']);
     expect(selection.dropped.map(item => item.id)).toEqual(['whole_tool_exchange']);
   });
 });
@@ -195,19 +195,19 @@ describe('ContextBuilder', () => {
 
     expect(context.messages.map(message_ => message_.content)).toEqual([
       'system',
-      'goal',
       'do step',
       'Context summary:\nstable summary',
+      'goal',
       '',
       'result:lookup',
     ]);
     expect(context.inputManifest).toMatchObject({
       purpose: 'step_execution',
-      contextRulesVersion: 'job-step-run-context-v1',
+      contextRulesVersion: 'job-step-run-context-v2',
       systemPromptVersion: 'system-v1',
-      messageGroupIds: ['tool_exchange:call_context'],
+      messageGroupIds: ['message:goal', 'tool_exchange:call_context'],
       summaryIds: ['summary_1'],
-      includedRowIdStart: 2,
+      includedRowIdStart: 1,
       includedRowIdEnd: 3,
       toolSchemaChecksum: expect.any(String),
       fixedPrefixChecksum: expect.any(String),
@@ -258,9 +258,88 @@ describe('ContextBuilder', () => {
     });
 
     expect(context.messages.map(item => item.content)).toEqual([
-      'system', 'goal', 'Context summary:\ncompressed history', 'recent tail',
+      'system', 'Context summary:\ncompressed history', 'goal', 'recent tail',
     ]);
-    expect(context.inputManifest.messageGroupIds).toEqual(['message:recent_assistant']);
+    expect(context.inputManifest.messageGroupIds).toEqual([
+      'message:goal',
+      'message:recent_assistant',
+    ]);
+  });
+
+  it('keeps cross-Job conversation in row order with the current user message last', () => {
+    const previousUser = message({
+      id: 'previous_user', rowId: 10, jobId: 'job_previous',
+      content: '你有哪些工具？',
+    });
+    const previousAssistant = message({
+      id: 'previous_assistant', rowId: 11, jobId: 'job_previous',
+      role: 'assistant', messageType: 'assistant_message', content: '工具列表',
+    });
+    const currentUser = message({
+      id: 'current_user', rowId: 12, content: '现在几点了？',
+    });
+    const context = new ContextBuilder().build({
+      job: jobFixture,
+      attemptId: 'attempt_1',
+      purpose: 'job_execution',
+      systemPrompt: 'system',
+      systemPromptVersion: 'v1',
+      originalGoal: '现在几点了？',
+      messages: [currentUser, previousAssistant, previousUser],
+      invocations: [],
+      model: { provider: 'test', name: 'model', maxContextTokens: 1000, reservedOutputTokens: 100 },
+    });
+
+    expect(context.messages.map(item => item.content)).toEqual([
+      'system',
+      '你有哪些工具？',
+      '工具列表',
+      '现在几点了？',
+    ]);
+    expect(context.inputManifest.messageGroupIds).toEqual([
+      'message:previous_user',
+      'message:previous_assistant',
+      'message:current_user',
+    ]);
+    expect(context.mustKeepMessageIds).toEqual(['current_user']);
+    expect(context.compressibleMessageIds).toEqual([
+      'previous_user',
+      'previous_assistant',
+    ]);
+  });
+
+  it('keeps the current user message even when a summary covers its row', () => {
+    const previousUser = message({
+      id: 'previous_user', rowId: 20, jobId: 'job_previous', content: '旧问题',
+    });
+    const currentUser = message({
+      id: 'current_user', rowId: 21, content: '当前问题',
+    });
+    const context = new ContextBuilder().build({
+      job: jobFixture,
+      attemptId: 'attempt_1',
+      purpose: 'job_execution',
+      systemPrompt: 'system',
+      systemPromptVersion: 'v1',
+      originalGoal: '当前问题',
+      messages: [previousUser, currentUser],
+      invocations: [],
+      summaries: [{
+        id: 'summary_covering_current',
+        summary: '压缩后的历史',
+        sourceRowIdEnd: currentUser.rowId,
+      }],
+      model: { provider: 'test', name: 'model', maxContextTokens: 1000, reservedOutputTokens: 100 },
+    });
+
+    expect(context.messages.map(item => item.content)).toEqual([
+      'system',
+      'Context summary:\n压缩后的历史',
+      '当前问题',
+    ]);
+    expect(context.inputManifest.messageGroupIds).toEqual(['message:current_user']);
+    expect(context.mustKeepMessageIds).toEqual(['current_user']);
+    expect(context.compressibleMessageIds).toEqual([]);
   });
 });
 

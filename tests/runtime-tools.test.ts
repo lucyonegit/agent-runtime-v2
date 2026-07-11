@@ -55,6 +55,8 @@ describe('LangChain runtime tools', () => {
       .resolves.toMatchObject({ expression: '(2 + 3) * 4', result: 20 });
     await expect(invoke('get_current_time', { timeZone: 'Asia/Shanghai' }))
       .resolves.toMatchObject({ timeZone: 'Asia/Shanghai', iso: expect.any(String) });
+    await expect(invoke('get_current_time', {}))
+      .resolves.toMatchObject({ timeZone: 'Asia/Shanghai', iso: expect.any(String) });
     await expect(invoke('calculate', { expression: 'process.exit()' }))
       .rejects.toThrow('Only simple numeric expressions');
   });

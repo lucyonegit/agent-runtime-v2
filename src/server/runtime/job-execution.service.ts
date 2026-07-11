@@ -7,6 +7,7 @@ import type { StructuredToolInterface } from '@langchain/core/tools';
 import { AgentLoop } from '../../agent-loop/agent-loop.js';
 import { ContextBuilder } from '../../context/context-builder.js';
 import type { BuiltContext } from '../../context/context-builder.js';
+import { CONTEXT_RULES_VERSION } from '../../context/context-purpose.js';
 import type { AgentJob, AgentModelCallType } from '../../domain/index.js';
 import type { JobExecutionService } from '../../orchestration/agent-runtime.js';
 import { PlanEngine } from '../../planner/plan-engine.js';
@@ -284,7 +285,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
         stepRun ? 'step_run' : 'job',
         stepRun?.id ?? job.id,
         purpose,
-        'job-step-run-context-v1'
+        CONTEXT_RULES_VERSION
       ),
     ]);
     const buildInput = {
@@ -314,6 +315,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       toolSchemas: this.#options.tools.map(tool => tool.tool),
       newCompressibleMessageCount: messages.filter(message => (
         message.rowId > Math.max(0, ...summaries.map(summary => summary.sourceRowIdEnd))
+        && !isCurrentJobGoalMessage(message, job.id, originalGoal)
       )).length,
       compressionMessageThreshold: this.#options.compressionMessageThreshold,
     } satisfies Parameters<ContextBuilder['build']>[0];
@@ -330,13 +332,14 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     built: BuiltContext,
     stepRunId?: string
   ): Promise<BuiltContext> {
-    const start = built.inputManifest.includedRowIdStart;
-    const end = built.inputManifest.includedRowIdEnd;
-    if (start === undefined || end === undefined) return built;
-    const sourceMessages = buildInput.messages.filter(message => message.rowId >= start && message.rowId <= end);
+    const compressibleIds = new Set(built.compressibleMessageIds);
+    const sourceMessages = buildInput.messages.filter(message => compressibleIds.has(message.id));
     if (sourceMessages.length === 0) return built;
+    const start = Math.min(...sourceMessages.map(message => message.rowId));
+    const end = Math.max(...sourceMessages.map(message => message.rowId));
     const compressionContext = this.#context.build({
       ...buildInput,
+      messages: sourceMessages,
       purpose: 'context_compression',
       compressionSourcePurpose: purpose,
       systemPrompt: 'Compress the supplied runtime history into a concise factual summary. Preserve decisions, constraints, tool outcomes, unresolved issues, and identifiers. Do not add facts.',
@@ -492,6 +495,16 @@ export class RuntimeJobExecutionService implements JobExecutionService {
 
 function isTerminal(job: AgentJob): boolean {
   return ['completed', 'failed', 'cancelled'].includes(job.status);
+}
+
+function isCurrentJobGoalMessage(
+  message: { jobId: string; messageType: string; content: string },
+  jobId: string,
+  originalGoal: string
+): boolean {
+  return message.jobId === jobId
+    && message.messageType === 'user_message'
+    && message.content === originalGoal;
 }
 
 function outputId(): string {

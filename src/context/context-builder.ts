@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
+import { SystemMessage, type BaseMessage } from '@langchain/core/messages';
 import type {
   AgentContextInputManifest,
   AgentJob,
@@ -54,6 +54,8 @@ export interface BuiltContext {
   estimatedInputTokens: number;
   contextRulesVersion: string;
   summaryIds: string[];
+  mustKeepMessageIds: string[];
+  compressibleMessageIds: string[];
   compressionRecommended: boolean;
 }
 
@@ -99,29 +101,28 @@ export class ContextBuilder {
     });
     const items: Array<TokenBudgetItem<ContextItem>> = [];
     let order = 0;
-    const addMandatoryMessage = (id: string, message: BaseMessage, text: string) => {
+    const addMustKeepMessage = (id: string, message: BaseMessage, text: string) => {
       items.push({
         id,
         value: { kind: 'message', message, category: 'system' },
         estimatedTokens: estimateTextTokens(text),
-        mandatory: true,
+        mustKeep: true,
         priority: 1_000,
         recency: 0,
         originalOrder: order++,
       });
     };
-    addMandatoryMessage('mandatory:system', new SystemMessage(input.systemPrompt), input.systemPrompt);
+    addMustKeepMessage('must_keep:system', new SystemMessage(input.systemPrompt), input.systemPrompt);
     if (input.stableContext) {
-      addMandatoryMessage(
-        'mandatory:stable',
+      addMustKeepMessage(
+        'must_keep:stable',
         new SystemMessage(input.stableContext),
         input.stableContext
       );
     }
-    addMandatoryMessage('mandatory:goal', new HumanMessage(input.originalGoal), input.originalGoal);
     if (input.currentInstruction) {
-      addMandatoryMessage(
-        'mandatory:instruction',
+      addMustKeepMessage(
+        'must_keep:instruction',
         new SystemMessage(input.currentInstruction),
         input.currentInstruction
       );
@@ -134,10 +135,10 @@ export class ContextBuilder {
         schema: tool.schema,
       })));
       items.push({
-        id: 'mandatory:tools',
+        id: 'must_keep:tools',
         value: { kind: 'tools', category: 'tools' },
         estimatedTokens: estimateTextTokens(serializedTools),
-        mandatory: true,
+        mustKeep: true,
         priority: 1_000,
         recency: 0,
         originalOrder: order++,
@@ -154,23 +155,27 @@ export class ContextBuilder {
           category: 'summaries',
         },
         estimatedTokens: estimateTextTokens(summary.summary),
-        mandatory: false,
+        mustKeep: false,
         priority: 60,
         recency: order,
         originalOrder: order++,
       });
     }
     for (const group of groups) {
-      if (isDuplicateGoal(group, input.job.id, input.originalGoal)) continue;
       const messages = messagesInGroup(group);
-      if (maxCoveredRowId > 0 && messages.every(message => message.rowId <= maxCoveredRowId)) continue;
+      const mustKeep = isCurrentGoalGroup(group, input.job.id, input.originalGoal);
+      if (
+        !mustKeep
+        && maxCoveredRowId > 0
+        && messages.every(message => message.rowId <= maxCoveredRowId)
+      ) continue;
       const recency = Math.max(...messages.map(message => message.rowId));
       items.push({
         id: group.id,
         value: { kind: 'group', group, category: 'messages' },
         estimatedTokens: estimateTextTokens(canonicalJson(messages)),
-        mandatory: false,
-        priority: groupPriority(group, input),
+        mustKeep,
+        priority: mustKeep ? 1_000 : groupPriority(group, input),
         recency,
         originalOrder: order++,
       });
@@ -202,6 +207,16 @@ export class ContextBuilder {
     const selectedRows = selection.selected
       .filter(item => item.value.kind === 'group')
       .flatMap(item => item.value.kind === 'group' ? messagesInGroup(item.value.group) : []);
+    const mustKeepMessageIds = selection.selected
+      .filter(item => item.mustKeep && item.value.kind === 'group')
+      .flatMap(item => item.value.kind === 'group'
+        ? messagesInGroup(item.value.group).map(message => message.id)
+        : []);
+    const compressibleMessageIds = selection.selected
+      .filter(item => !item.mustKeep && item.value.kind === 'group')
+      .flatMap(item => item.value.kind === 'group'
+        ? messagesInGroup(item.value.group).map(message => message.id)
+        : []);
     const toolSchemaChecksum = toolSchemas.length > 0 ? sha256(canonicalJson(
       toolSchemas.map(tool => ({ name: tool.name, description: tool.description, schema: tool.schema }))
     )) : undefined;
@@ -234,6 +249,8 @@ export class ContextBuilder {
       estimatedInputTokens: selection.estimatedInputTokens,
       contextRulesVersion: CONTEXT_RULES_VERSION,
       summaryIds,
+      mustKeepMessageIds,
+      compressibleMessageIds,
       compressionRecommended: this.#summaries.shouldCompress({
         purpose: input.purpose,
         candidateTokens: selection.candidateTokens,
@@ -253,7 +270,7 @@ function groupPriority(group: MessageGroup, input: BuildContextInput): number {
   return 40;
 }
 
-function isDuplicateGoal(group: MessageGroup, jobId: string, goal: string): boolean {
+function isCurrentGoalGroup(group: MessageGroup, jobId: string, goal: string): boolean {
   const messages = messagesInGroup(group);
   return group.type === 'single'
     && messages[0]?.jobId === jobId

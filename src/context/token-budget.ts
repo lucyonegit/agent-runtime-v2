@@ -2,7 +2,7 @@ export interface TokenBudgetItem<T> {
   id: string;
   value: T;
   estimatedTokens: number;
-  mandatory: boolean;
+  mustKeep: boolean;
   priority: number;
   recency: number;
   originalOrder: number;
@@ -36,18 +36,18 @@ export class TokenBudget {
       throw new ContextOverflowError('Reserved output tokens consume the entire model context.');
     }
     const safeInputLimit = Math.floor(hardInputLimit * 0.9);
-    const mandatory = items.filter(item => item.mandatory);
-    const mandatoryTokens = sumTokens(mandatory);
-    if (mandatoryTokens > hardInputLimit) {
+    const mustKeepItems = items.filter(item => item.mustKeep);
+    const mustKeepTokens = sumTokens(mustKeepItems);
+    if (mustKeepTokens > hardInputLimit) {
       throw new ContextOverflowError(
-        `Mandatory context requires ${mandatoryTokens} tokens, above hard limit ${hardInputLimit}.`
+        `Must-keep context requires ${mustKeepTokens} tokens, above hard limit ${hardInputLimit}.`
       );
     }
 
-    const selected = [...mandatory];
-    let selectedTokens = mandatoryTokens;
+    const selected = [...mustKeepItems];
+    let selectedTokens = mustKeepTokens;
     const optional = items
-      .filter(item => !item.mandatory)
+      .filter(item => !item.mustKeep)
       .sort((left, right) => (
         right.priority - left.priority
         || right.recency - left.recency

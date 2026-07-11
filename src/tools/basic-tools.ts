@@ -5,13 +5,13 @@ import { jsonToolOutput, stringArgument } from './tool-utils.js';
 export function createBasicTools(): RuntimeTool[] {
   const getCurrentTime = new DynamicStructuredTool({
     name: 'get_current_time',
-    description: 'Get the current date and time for an IANA time zone.',
+    description: 'Get the current date and time. When the user omits a time zone, call this tool without asking; it defaults to Asia/Shanghai.',
     schema: {
       type: 'object',
       properties: {
         timeZone: {
           type: 'string',
-          description: 'IANA time zone, for example Asia/Shanghai.',
+          description: 'IANA time zone, for example Asia/Shanghai. Omit it to use Asia/Shanghai.',
         },
       },
       additionalProperties: false,

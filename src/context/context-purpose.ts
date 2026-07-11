@@ -9,4 +9,4 @@ export const CONTEXT_PURPOSES = [
 
 export type ContextPurpose = typeof CONTEXT_PURPOSES[number];
 
-export const CONTEXT_RULES_VERSION = 'job-step-run-context-v1';
+export const CONTEXT_RULES_VERSION = 'job-step-run-context-v2';
