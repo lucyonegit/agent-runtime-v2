@@ -96,7 +96,10 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     const planner = this.#createPlanEngine(job, jobContext);
 
     if (!job.strategy || job.stage === 'planning' && !await this.#options.store.getPlanByJobId(job.id)) {
-      const routed = await planner.route(job, originalGoal);
+      const routed = await planner.route(job, originalGoal, {
+        ...currentTemporalContext(),
+        availableTools: this.#options.tools.map(item => item.tool.name),
+      });
       job = routed.job;
       if (routed.strategy === 'planned' && 'plan' in routed) job = routed.job;
     }
@@ -148,11 +151,12 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       const current = await this.#requireOwnedJob(job.id);
       if (current.status === 'waiting_user_input' || isTerminal(current)) return;
       if (current.stage === 'finalizing') {
+        const temporalContext = currentTemporalContext();
         await engine.finalize(
           current,
           originalGoal,
-          new Date().toISOString().slice(0, 10),
-          Intl.DateTimeFormat().resolvedOptions().timeZone
+          temporalContext.currentDate,
+          temporalContext.timezone
         );
         return;
       }
@@ -495,6 +499,18 @@ export class RuntimeJobExecutionService implements JobExecutionService {
 
 function isTerminal(job: AgentJob): boolean {
   return ['completed', 'failed', 'cancelled'].includes(job.status);
+}
+
+function currentTemporalContext(): { currentDate: string; timezone: string } {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return { currentDate: `${values.year}-${values.month}-${values.day}`, timezone };
 }
 
 function isCurrentJobGoalMessage(

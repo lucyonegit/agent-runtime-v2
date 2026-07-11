@@ -6,13 +6,17 @@ import { PlanSummarizer } from './plan-summarizer.js';
 
 export interface PlanSpec {
   title: string;
-  goal: string;
   steps: Array<{ title: string; instruction: string }>;
 }
 
 export interface PlanEnginePort {
   route(input: { goal: string }): Promise<'direct' | 'planned'>;
-  createPlan(input: { goal: string }): Promise<PlanSpec>;
+  createPlan(input: {
+    goal: string;
+    currentDate: string;
+    timezone: string;
+    availableTools: string[];
+  }): Promise<PlanSpec>;
 }
 
 export interface PlanEngineIds {
@@ -55,7 +59,11 @@ export class PlanEngine {
     this.#publisher = options.publisher;
   }
 
-  async route(job: AgentJob, originalGoal: string) {
+  async route(
+    job: AgentJob,
+    originalGoal: string,
+    planningContext: { currentDate: string; timezone: string; availableTools: string[] }
+  ) {
     const strategy = await this.#planner.route({ goal: originalGoal });
     const routedJob = await this.#store.routeJob({
       jobId: job.id,
@@ -66,7 +74,7 @@ export class PlanEngine {
     });
     await this.#publish({ type: 'job.upserted', sessionId: job.sessionId, job: routedJob });
     if (strategy === 'direct') return { strategy, job: routedJob } as const;
-    const spec = await this.#planner.createPlan({ goal: originalGoal });
+    const spec = await this.#planner.createPlan({ goal: originalGoal, ...planningContext });
     validatePlanSpec(spec);
     const created = await this.#store.createPlan({
       sessionId: job.sessionId,
@@ -76,7 +84,7 @@ export class PlanEngine {
       planId: this.#ids.planId(),
       messageId: this.#ids.messageId(),
       title: spec.title,
-      goal: spec.goal,
+      goal: originalGoal,
       steps: spec.steps.map(step => ({ ...step, id: this.#ids.stepId() })),
       nowMs: this.#clock.nowMs(),
     });
@@ -172,7 +180,7 @@ export class PlanEngine {
 }
 
 function validatePlanSpec(spec: PlanSpec): void {
-  if (!spec.title.trim() || !spec.goal.trim()) throw new Error('Plan title and goal must be non-empty.');
+  if (!spec.title.trim()) throw new Error('Plan title must be non-empty.');
   if (spec.steps.length === 0) throw new Error('Plan must contain at least one step.');
   for (const step of spec.steps) {
     if (!step.title.trim() || !step.instruction.trim()) {

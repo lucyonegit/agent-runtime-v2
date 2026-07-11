@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentPlan, AgentPlanStep } from '../src/domain/index.js';
 import { PlanSummarizer } from '../src/planner/plan-summarizer.js';
 import {
+  STEP_OUTPUT_INSTRUCTION,
+  STEP_OUTPUT_REPAIR_INSTRUCTION,
+} from '../src/planner/planner-prompts.js';
+import {
   parseStepOutput,
   StepOutputValidationError,
   type StepOutputV1,
@@ -25,6 +29,15 @@ describe('StepOutputV1', () => {
       artifacts: [{ type: 'unknown', ref: '' }],
       unresolved: [{ description: '', impact: 'urgent' }],
     })).toThrow(/artifacts\[0\].type|unresolved\[0\].impact/);
+  });
+
+  it('publishes the complete nested schema to execution and repair models', () => {
+    for (const instruction of [STEP_OUTPUT_INSTRUCTION, STEP_OUTPUT_REPAIR_INSTRUCTION]) {
+      expect(instruction).toContain('"type":"file|url|record|text"');
+      expect(instruction).toContain('"sourceMessageIds":["message-id"]');
+      expect(instruction).toContain('"impact":"low|medium|high"');
+      expect(instruction).toContain('recommendedAction');
+    }
   });
 });
 

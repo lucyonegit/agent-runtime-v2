@@ -87,15 +87,19 @@ async function assertPublicUrl(url: URL): Promise<void> {
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
     throw new Error('Local network URLs are not allowed.');
   }
-  const addresses = isIP(hostname)
+  const hostnameIsIp = isIP(hostname) !== 0;
+  const addresses = hostnameIsIp
     ? [{ address: hostname }]
     : await lookup(hostname, { all: true, verbatim: true });
-  if (addresses.length === 0 || addresses.some(item => isPrivateAddress(item.address))) {
+  const allowProxyFakeIp = !hostnameIsIp
+    && process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS?.toLowerCase() === 'true';
+  if (addresses.length === 0
+    || addresses.some(item => isPrivateAddress(item.address, allowProxyFakeIp))) {
     throw new Error('Private or unresolved network addresses are not allowed.');
   }
 }
 
-function isPrivateAddress(address: string): boolean {
+export function isPrivateAddress(address: string, allowProxyFakeIp = false): boolean {
   const normalized = address.toLowerCase();
   if (normalized.includes(':')) {
     return normalized === '::' || normalized === '::1'
@@ -110,7 +114,7 @@ function isPrivateAddress(address: string): boolean {
     || a === 172 && b! >= 16 && b! <= 31
     || a === 192 && b === 168
     || a === 100 && b! >= 64 && b! <= 127
-    || a === 198 && (b === 18 || b === 19)
+    || !allowProxyFakeIp && a === 198 && (b === 18 || b === 19)
     || a! >= 224;
 }
 

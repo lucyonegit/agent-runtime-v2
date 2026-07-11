@@ -8,6 +8,7 @@ import type {
   RuntimeToolContext,
   RuntimeUserInputArtifact,
 } from '../src/runtime/tool-executor.js';
+import { isPrivateAddress } from '../src/tools/browser-tools.js';
 import { createRuntimeTools, removeSessionSandbox } from '../src/tools/index.js';
 
 describe('LangChain runtime tools', () => {
@@ -155,6 +156,21 @@ describe('LangChain runtime tools', () => {
     }
     await expect(invoke('browse_url', { url: 'http://127.0.0.1:3000/private' }))
       .rejects.toThrow('Private or unresolved network addresses');
+  });
+
+  it('allows proxy fake DNS addresses only through the explicit hostname path', async () => {
+    expect(isPrivateAddress('198.18.2.210')).toBe(true);
+    expect(isPrivateAddress('198.18.2.210', true)).toBe(false);
+    expect(isPrivateAddress('127.0.0.1', true)).toBe(true);
+    const previous = process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS;
+    process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS = 'true';
+    try {
+      await expect(invoke('browse_url', { url: 'http://198.18.2.210/private' }))
+        .rejects.toThrow('Private or unresolved network addresses');
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS;
+      else process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS = previous;
+    }
   });
 
   async function invoke(name: string, args: Record<string, unknown>): Promise<unknown> {

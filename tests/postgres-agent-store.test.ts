@@ -923,7 +923,7 @@ describe('PostgresAgentStore Job transactions', () => {
       workerId: 'worker_step_runner',
       planner: {
         route: async () => 'planned',
-        createPlan: async () => ({ title: 'unused', goal: 'unused', steps: [] }),
+        createPlan: async () => ({ title: 'unused', steps: [] }),
       },
       summarizer: new PlanSummarizer({ summarize }),
       ids: {
@@ -1048,10 +1048,10 @@ describe('PostgresAgentStore Job transactions', () => {
         if (text.includes('Compress the supplied runtime history')) {
           return new AIMessage({ content: 'compressed factual runtime history', usage_metadata: usage });
         }
-        if (text.includes('Keep steps declarative and ordered')) {
+        if (text.includes('Do not invent facts, sources, dates, URLs, evidence, or conclusions')) {
           return new AIMessage({
             content: JSON.stringify({
-              title: 'Two step plan', goal: 'complete both steps',
+              title: 'Two step plan',
               steps: [
                 { title: 'First', instruction: 'Complete the first isolated step.' },
                 { title: 'Second', instruction: 'Complete the second isolated step.' },

@@ -1157,7 +1157,8 @@ export async function createStepRunCommand(
     );
     const updatedStep = await client.query<AgentPlanStepRow>(
       `update agent_plan_steps
-       set status = 'running', version = version + 1, updated_at_ms = $2
+       set status = 'running', error_code = null, error_message = null, error_details = null,
+           version = version + 1, updated_at_ms = $2
        where id = $1 returning *`,
       [input.stepId, input.nowMs]
     );
