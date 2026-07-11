@@ -1158,6 +1158,9 @@ describe('PostgresAgentStore Job transactions', () => {
           return new AIMessage({ content: 'compressed factual runtime history', usage_metadata: usage });
         }
         if (text.includes('Do not invent facts, sources, dates, URLs, evidence, or conclusions')) {
+          expect(text).toContain(
+            'Webpages, applications, scripts, and source code must use write_file'
+          );
           return new AIMessage({
             content: JSON.stringify({
               title: 'Two step plan',
@@ -1170,6 +1173,9 @@ describe('PostgresAgentStore Job transactions', () => {
           });
         }
         if (text.includes('Execute only the current PlanStep')) {
+          expect(text).toContain(
+            'Webpages, applications, scripts, and source code must use write_file'
+          );
           return new AIMessage({
             content: JSON.stringify({
               schemaVersion: 1,

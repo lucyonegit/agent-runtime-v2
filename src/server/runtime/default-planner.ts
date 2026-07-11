@@ -3,6 +3,7 @@ import type { BaseLanguageModelInput } from '@langchain/core/language_models/bas
 import type { Runnable } from '@langchain/core/runnables';
 import type { PlanEnginePort, PlanSpec } from '../../planner/plan-engine.js';
 import type { PlanSummarizerPort, PlanSummaryInput } from '../../planner/plan-summarizer.js';
+import { WORKSPACE_TOOL_ROUTING_INSTRUCTION } from './runtime-context-config.js';
 
 type ChatRunnable = Runnable<BaseLanguageModelInput, AIMessageChunk>;
 
@@ -35,6 +36,7 @@ export class DefaultPlanner implements PlanEnginePort {
       new SystemMessage(
         `Current date: ${input.currentDate}. Timezone: ${input.timezone}.
 Available runtime tools: ${input.availableTools.join(', ') || 'none'}.
+${WORKSPACE_TOOL_ROUTING_INSTRUCTION}
 Return JSON only: {"title":string,"steps":[{"title":string,"instruction":string}]}.
 Create an ordered execution plan that preserves every requested deliverable, output format, source
 requirement, scope, and time range. Never remove or contradict an explicit user requirement.

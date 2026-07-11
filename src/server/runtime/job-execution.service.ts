@@ -28,6 +28,7 @@ import { DefaultPlanner, DefaultPlanSummarizer } from './default-planner.js';
 import {
   JOB_EXECUTION_SYSTEM_PROMPT,
   RUNTIME_SYSTEM_PROMPT_VERSION,
+  WORKSPACE_TOOL_ROUTING_INSTRUCTION,
 } from './runtime-context-config.js';
 
 export interface RuntimeJobExecutionOptions {
@@ -306,7 +307,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
         : { kind: 'job' as const, jobId: job.id, originalGoal },
       purpose,
       systemPrompt: purpose === 'step_execution'
-        ? `Execute only the current PlanStep. ${STEP_OUTPUT_INSTRUCTION}`
+        ? `Execute only the current PlanStep. ${WORKSPACE_TOOL_ROUTING_INSTRUCTION} ${STEP_OUTPUT_INSTRUCTION}`
         : JOB_EXECUTION_SYSTEM_PROMPT,
       systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
       currentInstruction,

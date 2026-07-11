@@ -24,11 +24,15 @@ describe('ContextPreviewService', () => {
       sessionId: 'session_1',
       basedOnLatestJobId: 'job_1',
       contextRulesVersion: CONTEXT_RULES_VERSION,
-      systemPromptVersion: 'runtime-system-v1',
+      systemPromptVersion: 'runtime-system-v2',
       limits: { maxContextTokens: 4_000, reservedOutputTokens: 200 },
     });
     expect(preview.messages).toEqual([
-      { index: 0, type: 'system', content: 'Act as a reliable tool-using agent. Complete the user goal.' },
+      {
+        index: 0,
+        type: 'system',
+        content: 'Act as a reliable tool-using agent. Complete the user goal. Webpages, applications, scripts, and source code must use write_file with paths under code/. Use write_article only for non-code prose articles and reports.',
+      },
       { index: 1, type: 'human', content: '查资料' },
       {
         index: 2,
