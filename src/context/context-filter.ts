@@ -1,4 +1,3 @@
-import type { AgentMessage } from '../domain/index.js';
 import type { ContextPurpose } from './context-purpose.js';
 import { messagesInGroup, type MessageGroup } from './message-group-builder.js';
 
@@ -35,13 +34,13 @@ export class ContextFilter {
             jobId === input.currentJobId
             && (!stepRunId || stepRunId === input.currentStepRunId)
           )
-            || (group.type === 'single' && isConversationMessage(messages[0]));
+            || jobId !== input.currentJobId;
         case 'code_execution':
           return jobId === input.currentJobId
             && (!stepRunId || stepRunId === input.currentStepRunId);
         case 'conversation':
         case 'context_compression':
-          return group.type === 'single' && isConversationMessage(messages[0]);
+          return true;
       }
     });
   }
@@ -52,8 +51,4 @@ function findOriginalGoal(groups: MessageGroup[], jobId: string): MessageGroup |
     const message = messagesInGroup(group)[0];
     return message?.jobId === jobId && message.messageType === 'user_message';
   });
-}
-
-function isConversationMessage(message: AgentMessage | undefined): boolean {
-  return message?.messageType === 'user_message' || message?.messageType === 'assistant_message';
 }

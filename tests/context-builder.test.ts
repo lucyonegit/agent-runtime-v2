@@ -203,7 +203,7 @@ describe('ContextBuilder', () => {
     ]);
     expect(context.inputManifest).toMatchObject({
       purpose: 'step_execution',
-      contextRulesVersion: 'job-step-run-context-v2',
+      contextRulesVersion: 'job-step-run-context-v3',
       systemPromptVersion: 'system-v1',
       messageGroupIds: ['message:goal', 'tool_exchange:call_context'],
       summaryIds: ['summary_1'],
@@ -305,6 +305,90 @@ describe('ContextBuilder', () => {
     expect(context.compressibleMessageIds).toEqual([
       'previous_user',
       'previous_assistant',
+    ]);
+  });
+
+  it('keeps complete historical Plan execution and matched tools in cross-Job context', () => {
+    const previousUser = message({
+      id: 'previous_user', rowId: 10, jobId: 'job_previous', content: '调查并生成报告',
+    });
+    const planCreated = message({
+      id: 'plan_created', rowId: 11, jobId: 'job_previous', role: 'assistant',
+      messageType: 'plan_created', content: '调查计划',
+    });
+    const previousCall = {
+      ...toolCallMessage('previous_call', 'run_previous', [
+        { id: 'call_search', name: 'web_search', args: { query: 'news' } },
+      ]),
+      rowId: 12,
+      jobId: 'job_previous',
+    };
+    const previousResult = {
+      ...toolResultMessage('previous_result', 13, 'call_search', 'web_search'),
+      jobId: 'job_previous',
+      stepRunId: 'run_previous',
+    };
+    const previousOutput = message({
+      id: 'previous_output', rowId: 14, jobId: 'job_previous', role: 'assistant',
+      messageType: 'step_output', stepRunId: 'run_previous', content: 'structured step output',
+    });
+    const planFinal = message({
+      id: 'plan_final', rowId: 15, jobId: 'job_previous', role: 'assistant',
+      messageType: 'plan_final', channel: 'final', content: '最终报告',
+    });
+    const currentUser = message({
+      id: 'current_user', rowId: 16, content: '第二步具体做了什么？',
+    });
+    const previousInvocation = {
+      ...invocation(
+        'previous_invocation', previousCall, previousResult,
+        'call_search', 'web_search', 'completed'
+      ),
+      jobId: 'job_previous',
+      stepRunId: 'run_previous',
+    };
+
+    const context = new ContextBuilder().build({
+      job: jobFixture,
+      attemptId: 'attempt_1',
+      purpose: 'job_execution',
+      systemPrompt: 'system',
+      systemPromptVersion: 'v1',
+      originalGoal: currentUser.content,
+      messages: [
+        currentUser, previousOutput, previousResult, planFinal,
+        previousCall, planCreated, previousUser,
+      ],
+      invocations: [previousInvocation],
+      model: { provider: 'test', name: 'model', maxContextTokens: 4_000, reservedOutputTokens: 200 },
+    });
+
+    expect(context.inputManifest.messageGroupIds).toEqual([
+      'message:previous_user',
+      'message:plan_created',
+      'tool_exchange:previous_call',
+      'step_output:previous_output',
+      'message:plan_final',
+      'message:current_user',
+    ]);
+    expect(context.messages.map(item => item.content)).toEqual([
+      'system',
+      '调查并生成报告',
+      '调查计划',
+      '',
+      'result:web_search',
+      'structured step output',
+      '最终报告',
+      '第二步具体做了什么？',
+    ]);
+    expect(context.mustKeepMessageIds).toEqual(['current_user']);
+    expect(context.compressibleMessageIds).toEqual([
+      'previous_user',
+      'plan_created',
+      'previous_call',
+      'previous_result',
+      'previous_output',
+      'plan_final',
     ]);
   });
 
