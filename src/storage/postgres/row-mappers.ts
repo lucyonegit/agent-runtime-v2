@@ -4,8 +4,6 @@ import type {
   AgentJobStatus,
   AgentJobStrategy,
   AgentContextSummary,
-  AgentCodeProject,
-  AgentCodeProjectStatus,
   AgentContextOwnerType,
   AgentContextPurpose,
   AgentContextSummaryStatus,
@@ -26,10 +24,8 @@ import type {
   AgentPlanStep,
   AgentPlanStepStatus,
   AgentSession,
-  AgentSessionMode,
   AgentSessionStatus,
   AgentStepRun,
-  AgentStepRunExecutor,
   AgentStepRunStatus,
   AgentToolCall,
   AgentToolInvocation,
@@ -46,7 +42,6 @@ import type {
 export interface AgentSessionRow {
   id: string;
   title: string | null;
-  mode: string;
   status: string;
   version: number;
   created_at_ms: string | number;
@@ -56,7 +51,6 @@ export interface AgentSessionRow {
 export interface AgentJobRow {
   id: string;
   session_id: string;
-  project_id: string | null;
   retry_of_job_id: string | null;
   client_request_id: string | null;
   strategy: string | null;
@@ -192,7 +186,6 @@ export interface AgentStepRunRow {
   plan_id: string;
   step_id: string;
   run_no: number;
-  executor: string;
   status: string;
   current_attempt_id: string | null;
   attempt_no: number;
@@ -213,7 +206,6 @@ export interface AgentContextSummaryRow {
   session_id: string;
   job_id: string | null;
   step_run_id: string | null;
-  project_id: string | null;
   owner_type: string;
   owner_id: string;
   purpose: string;
@@ -232,21 +224,6 @@ export interface AgentContextSummaryRow {
   model: string | null;
   compression_prompt_version: string;
   checksum: string;
-  version: number;
-  metadata: unknown;
-  created_at_ms: string | number;
-  updated_at_ms: string | number;
-}
-
-export interface AgentCodeProjectRow {
-  id: string;
-  session_id: string;
-  title: string;
-  status: string;
-  sandbox_relative_path: string;
-  framework: string | null;
-  language: string | null;
-  package_manager: string | null;
   version: number;
   metadata: unknown;
   created_at_ms: string | number;
@@ -311,7 +288,6 @@ export function mapAgentSessionRow(row: AgentSessionRow): AgentSession {
   return {
     id: row.id,
     ...(row.title === null ? {} : { title: row.title }),
-    mode: row.mode as AgentSessionMode,
     status: row.status as AgentSessionStatus,
     version: row.version,
     createdAtMs: mapBigint(row.created_at_ms, 'agent_sessions.created_at_ms'),
@@ -323,7 +299,6 @@ export function mapAgentJobRow(row: AgentJobRow): AgentJob {
   return {
     id: row.id,
     sessionId: row.session_id,
-    ...(row.project_id === null ? {} : { projectId: row.project_id }),
     ...(row.retry_of_job_id === null ? {} : { retryOfJobId: row.retry_of_job_id }),
     ...(row.client_request_id === null ? {} : { clientRequestId: row.client_request_id }),
     ...(row.strategy === null ? {} : { strategy: row.strategy as AgentJobStrategy }),
@@ -515,7 +490,6 @@ export function mapAgentStepRunRow(row: AgentStepRunRow): AgentStepRun {
     planId: row.plan_id,
     stepId: row.step_id,
     runNo: row.run_no,
-    executor: row.executor as AgentStepRunExecutor,
     status: row.status as AgentStepRunStatus,
     ...(row.current_attempt_id === null ? {} : { currentAttemptId: row.current_attempt_id }),
     attemptNo: row.attempt_no,
@@ -550,7 +524,6 @@ export function mapAgentContextSummaryRow(row: AgentContextSummaryRow): AgentCon
     sessionId: row.session_id,
     ...(row.job_id === null ? {} : { jobId: row.job_id }),
     ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
-    ...(row.project_id === null ? {} : { projectId: row.project_id }),
     ownerType: row.owner_type as AgentContextOwnerType,
     ownerId: row.owner_id,
     purpose: row.purpose as AgentContextPurpose,
@@ -575,23 +548,6 @@ export function mapAgentContextSummaryRow(row: AgentContextSummaryRow): AgentCon
       : { metadata: mapRecord(row.metadata, 'agent_context_summaries.metadata') }),
     createdAtMs: mapBigint(row.created_at_ms, 'agent_context_summaries.created_at_ms'),
     updatedAtMs: mapBigint(row.updated_at_ms, 'agent_context_summaries.updated_at_ms'),
-  };
-}
-
-export function mapAgentCodeProjectRow(row: AgentCodeProjectRow): AgentCodeProject {
-  return {
-    id: row.id,
-    sessionId: row.session_id,
-    title: row.title,
-    status: row.status as AgentCodeProjectStatus,
-    sandboxRelativePath: row.sandbox_relative_path,
-    ...(row.framework === null ? {} : { framework: row.framework }),
-    ...(row.language === null ? {} : { language: row.language }),
-    ...(row.package_manager === null ? {} : { packageManager: row.package_manager }),
-    version: row.version,
-    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_code_projects.metadata') }),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_code_projects.created_at_ms'),
-    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_code_projects.updated_at_ms'),
   };
 }
 

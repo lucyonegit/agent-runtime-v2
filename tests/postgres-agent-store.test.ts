@@ -69,7 +69,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('atomically creates a Job, user message, and Session version update', async () => {
-    await store.createSession({ id: 'session_create', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_create', nowMs: 10 });
 
     const result = await createJob(store, 'session_create', 'job_create', 'message_create', 20);
 
@@ -91,7 +91,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('rolls back every write when a Session already has an active Job', async () => {
-    await store.createSession({ id: 'session_conflict', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_conflict', nowMs: 10 });
     await createJob(store, 'session_conflict', 'job_first', 'message_first', 20);
 
     await expect(
@@ -104,7 +104,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('replays an identical clientRequestId and rejects payload drift', async () => {
-    await store.createSession({ id: 'session_idempotent', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_idempotent', nowMs: 10 });
     const coordinator = new JobCoordinator({
       store,
       workerId: 'worker_idempotent',
@@ -135,7 +135,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('allows exactly one concurrent claim and rejects stale or foreign renewals', async () => {
-    await store.createSession({ id: 'session_claim', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_claim', nowMs: 10 });
     await createJob(store, 'session_claim', 'job_claim', 'message_claim', 20);
 
     const claims = await Promise.allSettled([
@@ -201,7 +201,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('commits tool calls before execution and atomically commits each tool result', async () => {
-    await store.createSession({ id: 'session_tools', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_tools', nowMs: 10 });
     await createJob(store, 'session_tools', 'job_tools', 'message_tools', 20);
     const job = await store.claimJob({
       jobId: 'job_tools',
@@ -303,7 +303,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('rejects ToolInvocation claim after the Job lease is lost', async () => {
-    await store.createSession({ id: 'session_tool_fence', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_tool_fence', nowMs: 10 });
     await createJob(store, 'session_tool_fence', 'job_tool_fence', 'message_tool_fence', 20);
     const job = await store.claimJob({
       jobId: 'job_tool_fence',
@@ -346,7 +346,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('answers multiple tool inputs atomically and gives resume ownership to exactly one answer', async () => {
-    await store.createSession({ id: 'session_inputs', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_inputs', nowMs: 10 });
     await createJob(store, 'session_inputs', 'job_inputs', 'message_inputs', 20);
     const job = await store.claimJob({
       jobId: 'job_inputs',
@@ -481,7 +481,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('runs a direct Job from model tool call through durable result to atomic final completion', async () => {
-    await store.createSession({ id: 'session_direct', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_direct', nowMs: 10 });
     await createJob(store, 'session_direct', 'job_direct', 'message_direct', 20);
     const claimed = await store.claimJob({
       jobId: 'job_direct',
@@ -605,7 +605,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('runs direct HITL through waiting, answer-as-tool-result, resume claim, and final completion', async () => {
-    await store.createSession({ id: 'session_hitl', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_hitl', nowMs: 10 });
     await createJob(store, 'session_hitl', 'job_hitl', 'message_hitl', 20);
     const claimed = await store.claimJob({
       jobId: 'job_hitl',
@@ -721,7 +721,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('advances a two-step Plan with explicit StepRun retry into plan_final completion', async () => {
-    await store.createSession({ id: 'session_plan', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_plan', nowMs: 10 });
     await createJob(store, 'session_plan', 'job_plan', 'message_plan_goal', 20);
     let job = await store.claimJob({
       jobId: 'job_plan',
@@ -760,7 +760,7 @@ describe('PostgresAgentStore Job transactions', () => {
     let firstRun = await store.createStepRun({
       sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
       attemptId: 'attempt_plan', planId: 'plan_work', stepId: 'step_one',
-      stepRunId: 'run_one_1', executor: 'agent', maxRunsPerStep: 2, nowMs: 33,
+      stepRunId: 'run_one_1', maxRunsPerStep: 2, nowMs: 33,
     });
     expect(firstRun.stepRun).toMatchObject({ runNo: 1, status: 'running' });
     const firstOutput = await store.commitStepOutput({
@@ -779,7 +779,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const secondRun = await store.createStepRun({
       sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
       attemptId: 'attempt_plan', planId: 'plan_work', stepId: 'step_two',
-      stepRunId: 'run_two_1', executor: 'agent', maxRunsPerStep: 2, nowMs: 35,
+      stepRunId: 'run_two_1', maxRunsPerStep: 2, nowMs: 35,
     });
     const failedForRetry = await store.failStepRun({
       sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
@@ -795,7 +795,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const retryRun = await store.createStepRun({
       sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
       attemptId: 'attempt_plan', planId: 'plan_work', stepId: 'step_two',
-      stepRunId: 'run_two_2', executor: 'agent', maxRunsPerStep: 2, nowMs: 37,
+      stepRunId: 'run_two_2', maxRunsPerStep: 2, nowMs: 37,
     });
     expect(retryRun.stepRun).toMatchObject({ runNo: 2, status: 'running' });
     const lastOutput = await store.commitStepOutput({
@@ -837,7 +837,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('repairs one invalid StepOutput, commits only validated JSON, and summarizes the Plan', async () => {
-    await store.createSession({ id: 'session_step_runner', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_step_runner', nowMs: 10 });
     await createJob(store, 'session_step_runner', 'job_step_runner', 'message_step_goal', 20);
     let job = await store.claimJob({
       jobId: 'job_step_runner', expectedVersion: 0, workerId: 'worker_step_runner',
@@ -856,7 +856,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const started = await store.createStepRun({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_step_runner',
       attemptId: 'attempt_step_runner', planId: plan.plan.id, stepId: plan.steps[0].id,
-      stepRunId: 'run_step_runner', executor: 'agent', maxRunsPerStep: 2, nowMs: 33,
+      stepRunId: 'run_step_runner', maxRunsPerStep: 2, nowMs: 33,
     });
     let writerMessageNo = 1;
     const writer = new RuntimeEventWriter({
@@ -947,7 +947,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('audits ModelCalls, accumulates usage, abandons orphaned calls, and replaces summaries', async () => {
-    await store.createSession({ id: 'session_audit', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_audit', nowMs: 10 });
     await createJob(store, 'session_audit', 'job_audit', 'message_audit', 20);
     const job = await store.claimJob({
       jobId: 'job_audit', expectedVersion: 0, workerId: 'worker_audit',
@@ -1088,7 +1088,7 @@ describe('PostgresAgentStore Job transactions', () => {
       compressionMessageThreshold: 1,
     });
 
-    await store.createSession({ id: 'session_runtime_e2e', mode: 'agent', nowMs: now });
+    await store.createSession({ id: 'session_runtime_e2e', nowMs: now });
     for (const id of ['job_direct', 'job_planned']) {
       await createJob(store, 'session_runtime_e2e', id, `message_${id}`, now + 1);
       const claimed = await store.claimJob({
@@ -1126,7 +1126,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('fails descendants atomically, preserves side-effect uncertainty, and creates retry as a new Job', async () => {
-    await store.createSession({ id: 'session_fail', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_fail', nowMs: 10 });
     await createJob(store, 'session_fail', 'job_fail', 'message_fail', 20);
     const claimed = await store.claimJob({
       jobId: 'job_fail',
@@ -1190,7 +1190,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('cancels a created Job without requiring a lease', async () => {
-    await store.createSession({ id: 'session_cancel', mode: 'agent', nowMs: 10 });
+    await store.createSession({ id: 'session_cancel', nowMs: 10 });
     await createJob(store, 'session_cancel', 'job_cancel', 'message_cancel', 20);
 
     await expect(store.cancelJob({
@@ -1341,11 +1341,11 @@ async function seedRunningDescendants(pool: Pool, attemptId: string): Promise<vo
     );
     await client.query(
       `insert into agent_step_runs(
-         id, session_id, job_id, plan_id, step_id, run_no, executor, status,
+         id, session_id, job_id, plan_id, step_id, run_no, status,
          current_attempt_id, attempt_no, version, created_at_ms, updated_at_ms, started_at_ms
        ) values (
          'run_fail', 'session_fail', 'job_fail', 'plan_fail', 'step_fail', 1,
-         'agent', 'running', $1, 1, 0, 33, 33, 33
+         'running', $1, 1, 0, 33, 33, 33
        )`,
       [attemptId]
     );

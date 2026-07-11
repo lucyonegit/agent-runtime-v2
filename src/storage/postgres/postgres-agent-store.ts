@@ -2,7 +2,6 @@ import type { Pool, PoolClient } from 'pg';
 import type {
   AgentJob,
   AgentContextOwnerType,
-  AgentCodeProject,
   AgentContextPurpose,
   AgentContextSummary,
   AgentMessage,
@@ -83,7 +82,6 @@ import {
   mapAgentModelCallRow,
   mapAgentModelUsageStatsRow,
   mapAgentContextSummaryRow,
-  mapAgentCodeProjectRow,
   mapAgentUserInputRequestRow,
   mapAgentToolInvocationRow,
   type AgentJobRow,
@@ -95,7 +93,6 @@ import {
   type AgentModelCallRow,
   type AgentModelUsageStatsRow,
   type AgentContextSummaryRow,
-  type AgentCodeProjectRow,
   type AgentUserInputRequestRow,
   type AgentToolInvocationRow,
 } from './row-mappers.js';
@@ -277,14 +274,6 @@ export class PostgresAgentStore implements AgentStore {
        order by created_at_ms asc, id asc`, [sessionId]
     );
     return result.rows.map(mapAgentUserInputRequestRow);
-  }
-
-  async listSessionCodeProjects(sessionId: string): Promise<AgentCodeProject[]> {
-    const result = await this.#pool.query<AgentCodeProjectRow>(
-      `select * from agent_code_projects where session_id = $1
-       order by updated_at_ms desc, id asc`, [sessionId]
-    );
-    return result.rows.map(mapAgentCodeProjectRow);
   }
 
   async createJobAndAppendUserMessage(

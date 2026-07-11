@@ -11,7 +11,6 @@ export const AGENT_STEP_RUN_STATUSES = [
 ] as const;
 
 export type AgentStepRunStatus = typeof AGENT_STEP_RUN_STATUSES[number];
-export type AgentStepRunExecutor = 'agent' | 'code';
 
 export const ACTIVE_STEP_RUN_STATUSES = [
   'created',
@@ -27,7 +26,6 @@ export interface AgentStepRun {
   planId: string;
   stepId: string;
   runNo: number;
-  executor: AgentStepRunExecutor;
   status: AgentStepRunStatus;
   currentAttemptId?: string;
   attemptNo: number;

@@ -6,12 +6,12 @@ import { createFilesystemTools } from './filesystem-tools.js';
 import { createHitlTools } from './hitl-tools.js';
 
 export {
-  codeProjectRoot,
-  removeCodeProjectSandbox,
+  SESSION_WORKSPACE_AREAS,
   removeSessionSandbox,
-  resolveSessionAreaPath,
+  resolveWorkspaceAreaPath,
   resolveWorkspacePath,
-  sessionAreaRoot,
+  sessionWorkspaceRoot,
+  workspaceAreaRoot,
   workspaceRoot,
 } from './sandbox.js';
 

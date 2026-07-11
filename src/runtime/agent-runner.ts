@@ -55,7 +55,6 @@ export class AgentRunner {
     const target = {
       sessionId: input.job.sessionId,
       jobId: input.job.id,
-      projectId: input.job.projectId,
       attemptId: input.job.currentAttemptId,
     };
     const finalCandidates = new Map<string, Extract<LoopEvent, {

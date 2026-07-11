@@ -15,7 +15,6 @@ create table agent_schema_versions (
 create table agent_sessions (
   id text primary key,
   title text,
-  mode text not null check (mode in ('agent', 'code')),
   status text not null check (status in ('active', 'archived')),
   version integer not null default 0 check (version >= 0),
   created_at_ms bigint not null,
@@ -25,29 +24,9 @@ create table agent_sessions (
 create index idx_agent_sessions_updated
   on agent_sessions(status, updated_at_ms desc, id asc);
 
-create table agent_code_projects (
-  id text primary key,
-  session_id text not null references agent_sessions(id) on delete cascade,
-  title text not null,
-  status text not null check (status in ('active', 'archived', 'deleted')),
-  sandbox_relative_path text not null,
-  framework text,
-  language text,
-  package_manager text,
-  version integer not null default 0 check (version >= 0),
-  metadata jsonb,
-  created_at_ms bigint not null,
-  updated_at_ms bigint not null,
-  unique (session_id, sandbox_relative_path)
-);
-
-create index idx_agent_code_projects_session
-  on agent_code_projects(session_id, status, updated_at_ms desc);
-
 create table agent_jobs (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
-  project_id text references agent_code_projects(id) on delete set null,
   retry_of_job_id text references agent_jobs(id) on delete set null,
   client_request_id text,
 
@@ -108,10 +87,6 @@ create index idx_agent_jobs_recovery
   on agent_jobs(status, lease_expires_at_ms)
   where status in ('running', 'resuming');
 
-create index idx_agent_jobs_project
-  on agent_jobs(project_id, status, updated_at_ms desc)
-  where project_id is not null;
-
 create table agent_plans (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
@@ -163,7 +138,6 @@ create table agent_step_runs (
   step_id text not null references agent_plan_steps(id) on delete cascade,
   run_no integer not null check (run_no > 0),
 
-  executor text not null check (executor in ('agent', 'code')),
   status text not null check (
     status in (
       'created',
@@ -445,10 +419,9 @@ create table agent_context_summaries (
   session_id text not null references agent_sessions(id) on delete cascade,
   job_id text references agent_jobs(id) on delete cascade,
   step_run_id text references agent_step_runs(id) on delete cascade,
-  project_id text references agent_code_projects(id) on delete cascade,
 
   owner_type text not null check (
-    owner_type in ('session', 'job', 'step_run', 'code_project')
+    owner_type in ('session', 'job', 'step_run')
   ),
   owner_id text not null,
   purpose text not null check (
@@ -460,8 +433,8 @@ create table agent_context_summaries (
       'rolling',
       'job',
       'tool_history',
-      'project_invariants',
-      'project_index',
+      'workspace_invariants',
+      'workspace_index',
       'working_set'
     )
   ),
@@ -487,10 +460,9 @@ create table agent_context_summaries (
 
   check (source_row_id_start <= source_row_id_end),
   check (
-    (owner_type = 'session' and owner_id = session_id and job_id is null and step_run_id is null and project_id is null)
-    or (owner_type = 'job' and owner_id = job_id and job_id is not null and step_run_id is null and project_id is null)
-    or (owner_type = 'step_run' and owner_id = step_run_id and step_run_id is not null and project_id is null)
-    or (owner_type = 'code_project' and owner_id = project_id and project_id is not null and step_run_id is null)
+    (owner_type = 'session' and owner_id = session_id and job_id is null and step_run_id is null)
+    or (owner_type = 'job' and owner_id = job_id and job_id is not null and step_run_id is null)
+    or (owner_type = 'step_run' and owner_id = step_run_id and step_run_id is not null)
   )
 );
 
@@ -530,8 +502,7 @@ create table agent_model_calls (
       'step.react',
       'step.output_repair',
       'plan.finalize',
-      'context.compress',
-      'code.react'
+      'context.compress'
     )
   ),
   status text not null check (status in ('started', 'completed', 'failed', 'cancelled')),

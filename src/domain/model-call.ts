@@ -6,7 +6,6 @@ export const AGENT_MODEL_CALL_TYPES = [
   'step.output_repair',
   'plan.finalize',
   'context.compress',
-  'code.react',
 ] as const;
 
 export type AgentModelCallType = typeof AGENT_MODEL_CALL_TYPES[number];

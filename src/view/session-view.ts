@@ -25,7 +25,6 @@ export class SessionView {
       toolInvocations,
       userInputRequests,
       modelUsage,
-      codeProjects,
     ] = await Promise.all([
       this.store.listSessionJobs(sessionId),
       this.store.listSessionPlans(sessionId),
@@ -35,7 +34,6 @@ export class SessionView {
       this.store.listSessionToolInvocations(sessionId),
       this.store.listSessionUserInputRequests(sessionId),
       this.store.getModelUsageStats(sessionId),
-      this.store.listSessionCodeProjects(sessionId),
     ]);
     const visibleMessages = allMessages.filter(message => message.visibility === 'ui');
     const projected = projectSensitiveAnswers(visibleMessages, toolInvocations, userInputRequests);
@@ -61,7 +59,6 @@ export class SessionView {
       toolInvocations: projected.invocations,
       userInputRequests: projected.requests,
       ...(modelUsage ? { modelUsage } : {}),
-      codeProjects,
       timeline,
       cursor: {
         latestMessageRowId: messages.length > 0

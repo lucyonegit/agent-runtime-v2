@@ -161,7 +161,6 @@ function createStore(): AgentStore {
     listSessionStepRuns: vi.fn<AgentStore['listSessionStepRuns']>(),
     listSessionToolInvocations: vi.fn<AgentStore['listSessionToolInvocations']>(),
     listSessionUserInputRequests: vi.fn<AgentStore['listSessionUserInputRequests']>(),
-    listSessionCodeProjects: vi.fn<AgentStore['listSessionCodeProjects']>(),
     createJobAndAppendUserMessage: vi.fn<AgentStore['createJobAndAppendUserMessage']>(),
     claimJob: vi.fn<AgentStore['claimJob']>(),
     renewJobLease: vi.fn<AgentStore['renewJobLease']>(),
@@ -187,7 +186,6 @@ function createStore(): AgentStore {
 
 const sessionFixture: AgentSession = {
   id: 'session_1',
-  mode: 'agent',
   status: 'active',
   version: 1,
   createdAtMs: 1,

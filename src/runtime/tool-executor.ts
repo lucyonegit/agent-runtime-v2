@@ -19,7 +19,6 @@ import { checksumToolArguments } from './transaction-commands.js';
 export interface RuntimeToolContext {
   sessionId: string;
   jobId: string;
-  projectId?: string;
   sandboxRoot: string;
   stepRunId?: string;
   attemptId: string;
@@ -107,7 +106,6 @@ export class ToolExecutor implements ToolExecutorPort {
     const context: RuntimeToolContext = {
       sessionId: request.target.sessionId,
       jobId: request.target.jobId,
-      projectId: request.target.projectId,
       sandboxRoot: this.#sandboxRoot,
       stepRunId: request.target.stepRunId,
       attemptId: request.target.attemptId,

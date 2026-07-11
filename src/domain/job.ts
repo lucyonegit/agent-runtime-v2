@@ -39,7 +39,6 @@ export interface AgentJobError {
 export interface AgentJob {
   id: string;
   sessionId: string;
-  projectId?: string;
   retryOfJobId?: string;
   clientRequestId?: string;
   strategy?: AgentJobStrategy;

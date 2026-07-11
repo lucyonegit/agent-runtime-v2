@@ -10,14 +10,12 @@ describe('PostgreSQL row mappers', () => {
     expect(mapAgentSessionRow({
       id: 'session_1',
       title: null,
-      mode: 'agent',
       status: 'active',
       version: 0,
       created_at_ms: '1000',
       updated_at_ms: '1001',
     })).toEqual({
       id: 'session_1',
-      mode: 'agent',
       status: 'active',
       version: 0,
       createdAtMs: 1000,
@@ -27,7 +25,6 @@ describe('PostgreSQL row mappers', () => {
     expect(mapAgentJobRow({
       id: 'job_1',
       session_id: 'session_1',
-      project_id: null,
       retry_of_job_id: null,
       client_request_id: null,
       strategy: null,
@@ -90,7 +87,6 @@ describe('PostgreSQL row mappers', () => {
     expect(() => mapAgentSessionRow({
       id: 'session_unsafe',
       title: null,
-      mode: 'agent',
       status: 'active',
       version: 0,
       created_at_ms: '9007199254740992',

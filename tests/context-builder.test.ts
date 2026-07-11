@@ -367,7 +367,6 @@ const stepRunFixture: AgentStepRun = {
   planId: 'plan_1',
   stepId: 'step_1',
   runNo: 1,
-  executor: 'agent',
   status: 'running',
   currentAttemptId: 'attempt_1',
   attemptNo: 1,

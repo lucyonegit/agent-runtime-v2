@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentJob, AgentRealtimeEvent, AgentSessionMode } from '../domain/index.js';
+import type { AgentJob, AgentRealtimeEvent } from '../domain/index.js';
 import { JobCoordinator } from '../runtime/job-coordinator.js';
 import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
 import type { AgentStore } from '../storage/agent-store.js';
@@ -16,6 +16,7 @@ export interface AgentRuntimeOptions {
   jobLeaseMs?: number;
   publisher: RuntimeEventPublisher;
   executor: JobExecutionService;
+  removeSessionWorkspace?: (sessionId: string) => Promise<void>;
   clock?: { nowMs(): number };
   ids?: {
     sessionId(): string;
@@ -29,6 +30,7 @@ export class AgentRuntime {
   readonly #store: AgentStore;
   readonly #publisher: RuntimeEventPublisher;
   readonly #executor: JobExecutionService;
+  readonly #removeSessionWorkspace?: (sessionId: string) => Promise<void>;
   readonly #clock: { nowMs(): number };
   readonly #ids: NonNullable<AgentRuntimeOptions['ids']>;
   readonly #coordinator: JobCoordinator;
@@ -38,6 +40,7 @@ export class AgentRuntime {
     this.#store = options.store;
     this.#publisher = options.publisher;
     this.#executor = options.executor;
+    this.#removeSessionWorkspace = options.removeSessionWorkspace;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
     this.#ids = options.ids ?? randomRuntimeIds;
     this.#coordinator = new JobCoordinator({
@@ -57,11 +60,10 @@ export class AgentRuntime {
     this.#view = new SessionView(options.store, this.#clock);
   }
 
-  async createSession(input: { title?: string; mode?: AgentSessionMode }) {
+  async createSession(input: { title?: string }) {
     return this.#store.createSession({
       id: this.#ids.sessionId(),
       title: input.title,
-      mode: input.mode ?? 'agent',
       nowMs: this.#clock.nowMs(),
     });
   }
@@ -74,20 +76,20 @@ export class AgentRuntime {
     return this.#view.load(sessionId);
   }
 
-  deleteSession(sessionId: string) {
-    return this.#store.deleteSession(sessionId);
+  async deleteSession(sessionId: string) {
+    const deleted = await this.#store.deleteSession(sessionId);
+    if (deleted) await this.#removeSessionWorkspace?.(sessionId);
+    return deleted;
   }
 
   async createJob(input: {
     sessionId: string;
     message: string;
-    projectId?: string;
     clientRequestId: string;
   }) {
     const created = await this.#coordinator.createJob({
       sessionId: input.sessionId,
       content: input.message,
-      projectId: input.projectId,
       clientRequestId: input.clientRequestId,
     });
     await this.#publishMany([

@@ -1,7 +1,6 @@
 import type {
   AgentJob,
   AgentContextInputManifest,
-  AgentCodeProject,
   AgentContextOwnerType,
   AgentContextPurpose,
   AgentContextSummary,
@@ -15,9 +14,7 @@ import type {
   AgentPlan,
   AgentPlanStep,
   AgentSession,
-  AgentSessionMode,
   AgentStepRun,
-  AgentStepRunExecutor,
   AgentToolCall,
   AgentToolInvocation,
   AgentToolSideEffectLevel,
@@ -69,7 +66,6 @@ export class AgentStoreError extends Error {
 export interface CreateSessionInput {
   id: string;
   title?: string;
-  mode: AgentSessionMode;
   nowMs: number;
 }
 
@@ -78,7 +74,6 @@ export interface CreateJobAndAppendUserMessageInput {
   jobId: string;
   userMessageId: string;
   content: string;
-  projectId?: string;
   retryOfJobId?: string;
   clientRequestId?: string;
   jobMetadata?: Record<string, unknown>;
@@ -288,7 +283,6 @@ export interface CreateStepRunInput {
   planId: string;
   stepId: string;
   stepRunId: string;
-  executor: AgentStepRunExecutor;
   maxRunsPerStep: number;
   nowMs: number;
 }
@@ -391,7 +385,6 @@ export interface ReplaceContextSummaryInput {
   sessionId: string;
   jobId?: string;
   stepRunId?: string;
-  projectId?: string;
   ownerType: AgentContextOwnerType;
   ownerId: string;
   purpose: AgentContextPurpose;
@@ -441,7 +434,6 @@ export interface AgentStore {
   listSessionStepRuns(sessionId: string): Promise<AgentStepRun[]>;
   listSessionToolInvocations(sessionId: string): Promise<AgentToolInvocation[]>;
   listSessionUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
-  listSessionCodeProjects(sessionId: string): Promise<AgentCodeProject[]>;
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
   ): Promise<CreateJobAndAppendUserMessageResult>;

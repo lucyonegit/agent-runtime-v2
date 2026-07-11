@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { RuntimeTool } from '../runtime/tool-executor.js';
-import { resolveSessionAreaPath } from './sandbox.js';
+import { resolveWorkspaceAreaPath } from './sandbox.js';
 import { jsonToolOutput, runtimeContext, stringArgument } from './tool-utils.js';
 
 const formatExtensions: Record<string, string> = {
@@ -14,7 +14,7 @@ const formatExtensions: Record<string, string> = {
 export function createArtifactTools(): RuntimeTool[] {
   const writeArticle = new DynamicStructuredTool({
     name: 'write_article',
-    description: 'Write an article, report, document, or long-form text into the session artifacts sandbox.',
+    description: 'Write an article, report, document, or long-form text into workspace/artifacts.',
     schema: {
       type: 'object',
       properties: {
@@ -35,7 +35,7 @@ export function createArtifactTools(): RuntimeTool[] {
       if (!title) throw new Error('Article title is required.');
       if (!extension) throw new Error(`Unsupported article format: ${format}`);
       const fileName = `${sanitizeFileName(title)}${extension}`;
-      const filePath = await resolveSessionAreaPath(
+      const filePath = await resolveWorkspaceAreaPath(
         runtimeContext(config),
         'artifacts',
         fileName

@@ -19,7 +19,7 @@ export class AgentController {
   ) {}
 
   @Post('sessions')
-  createSession(@Body() body: { title?: string; mode?: 'agent' | 'code' }) {
+  createSession(@Body() body: { title?: string }) {
     return this.runtime.createSession(body ?? {});
   }
 
@@ -43,7 +43,7 @@ export class AgentController {
   @Post('sessions/:sessionId/jobs')
   createJob(
     @Param('sessionId') sessionId: string,
-    @Body() body: { message: string; projectId?: string; clientRequestId: string }
+    @Body() body: { message: string; clientRequestId: string }
   ) {
     assertNonEmpty(body?.message, 'message');
     assertNonEmpty(body?.clientRequestId, 'clientRequestId');

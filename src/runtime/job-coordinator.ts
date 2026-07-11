@@ -30,7 +30,6 @@ export interface JobCoordinatorOptions {
 export interface CreateCoordinatedJobInput {
   sessionId: string;
   content: string;
-  projectId?: string;
   clientRequestId?: string;
   jobMetadata?: Record<string, unknown>;
   messageMetadata?: Record<string, unknown>;
@@ -78,7 +77,6 @@ export class JobCoordinator {
         jobId: input.jobId ?? this.#ids.jobId(),
         userMessageId: input.userMessageId ?? this.#ids.messageId(),
         content: input.content,
-        projectId: input.projectId,
         clientRequestId: input.clientRequestId,
         jobMetadata: input.jobMetadata,
         messageMetadata: input.messageMetadata,
@@ -197,7 +195,6 @@ export class JobCoordinator {
         jobId: input.jobId ?? this.#ids.jobId(),
         userMessageId: input.userMessageId ?? this.#ids.messageId(),
         content,
-        projectId: source.projectId,
         retryOfJobId: source.id,
         clientRequestId: input.clientRequestId,
         jobMetadata: source.metadata,
@@ -246,7 +243,6 @@ export class JobCoordinator {
     }
     if (
       message.content !== input.content
-      || job.projectId !== input.projectId
       || job.retryOfJobId !== undefined
     ) {
       throw new RuntimeError(

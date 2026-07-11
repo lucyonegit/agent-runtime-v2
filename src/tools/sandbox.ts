@@ -2,29 +2,36 @@ import { lstat, mkdir, realpath, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import type { RuntimeToolContext } from '../runtime/tool-executor.js';
 
-export type SessionSandboxArea = 'workspace' | 'artifacts' | 'downloads' | 'tmp';
+export const SESSION_WORKSPACE_AREAS = [
+  'code',
+  'docs',
+  'artifacts',
+  'downloads',
+  'tmp',
+] as const;
 
-export function sessionAreaRoot(
-  context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>,
-  area: SessionSandboxArea
+export type SessionWorkspaceArea = typeof SESSION_WORKSPACE_AREAS[number];
+
+export function sessionWorkspaceRoot(
+  context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>
 ): string {
   assertSafeId(context.sessionId, 'session');
-  return resolve(context.sandboxRoot, 'sessions', context.sessionId, area);
+  return resolve(context.sandboxRoot, 'sessions', context.sessionId, 'workspace');
 }
 
-export function codeProjectRoot(
-  context: Pick<RuntimeToolContext, 'sandboxRoot' | 'projectId'>
+export function workspaceAreaRoot(
+  context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>,
+  area: SessionWorkspaceArea
 ): string {
-  if (!context.projectId) throw new Error('projectId is required for a code project sandbox.');
-  assertSafeId(context.projectId, 'code project');
-  return resolve(context.sandboxRoot, 'code-projects', context.projectId);
+  return resolve(sessionWorkspaceRoot(context), area);
 }
 
 export async function workspaceRoot(context: RuntimeToolContext): Promise<string> {
-  const root = context.projectId
-    ? codeProjectRoot(context)
-    : sessionAreaRoot(context, 'workspace');
+  const root = sessionWorkspaceRoot(context);
   await mkdir(root, { recursive: true });
+  await Promise.all(SESSION_WORKSPACE_AREAS.map(area => (
+    mkdir(workspaceAreaRoot(context, area), { recursive: true })
+  )));
   return root;
 }
 
@@ -36,30 +43,25 @@ export async function resolveWorkspacePath(
   return resolveContainedPath(await workspaceRoot(context), userPath, options);
 }
 
-export async function resolveSessionAreaPath(
+export async function resolveWorkspaceAreaPath(
   context: RuntimeToolContext,
-  area: Exclude<SessionSandboxArea, 'workspace'>,
+  area: SessionWorkspaceArea,
   userPath: string,
   options: { mustExist?: boolean } = {}
 ): Promise<string> {
-  const root = sessionAreaRoot(context, area);
-  await mkdir(root, { recursive: true });
-  return resolveContainedPath(root, userPath, options);
+  await workspaceRoot(context);
+  return resolveContainedPath(workspaceAreaRoot(context, area), userPath, options);
 }
 
 export async function removeSessionSandbox(input: {
   sandboxRoot: string;
   sessionId: string;
 }): Promise<void> {
-  const root = sessionAreaRoot(input, 'workspace');
-  await rm(resolve(root, '..'), { recursive: true, force: true });
-}
-
-export async function removeCodeProjectSandbox(input: {
-  sandboxRoot: string;
-  projectId: string;
-}): Promise<void> {
-  await rm(codeProjectRoot(input), { recursive: true, force: true });
+  assertSafeId(input.sessionId, 'session');
+  await rm(resolve(input.sandboxRoot, 'sessions', input.sessionId), {
+    recursive: true,
+    force: true,
+  });
 }
 
 async function resolveContainedPath(

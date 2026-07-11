@@ -8,6 +8,7 @@ import { PostgresAgentStore } from '../storage/postgres/postgres-agent-store.js'
 import { assertAgentRuntimeSchemaVersion } from '../storage/postgres/migrations.js';
 import { AgentHttpModule } from './http/agent-http.module.js';
 import { RuntimeExceptionFilter } from './http/runtime-exception.filter.js';
+import { removeSessionSandbox } from '../tools/index.js';
 import { createDefaultTools } from './runtime/default-tools.js';
 import { RuntimeJobExecutionService } from './runtime/job-execution.service.js';
 import { createLangChainChatModel } from './runtime/langchain-model-provider.js';
@@ -29,6 +30,7 @@ await store.abandonStartedModelCalls(Date.now());
 const events = new RuntimeEventBus();
 const modelConfig = resolveModelRuntimeConfig(process.env);
 const model = createLangChainChatModel(modelConfig);
+const sandboxRoot = process.env.AGENT_SANDBOX_ROOT ?? '.agent-sandbox';
 const jobLeaseMs = numberEnv('JOB_LEASE_MS', 20 * 60_000);
 const jobHeartbeatMs = numberEnv('JOB_HEARTBEAT_MS', Math.max(1_000, Math.floor(jobLeaseMs / 3)));
 if (jobHeartbeatMs >= jobLeaseMs) throw new Error('JOB_HEARTBEAT_MS must be shorter than JOB_LEASE_MS.');
@@ -40,7 +42,7 @@ const executor = new RuntimeJobExecutionService({
   provider: modelConfig.provider,
   modelName: modelConfig.modelName,
   tools: createDefaultTools(),
-  sandboxRoot: process.env.AGENT_SANDBOX_ROOT ?? '.agent-sandbox',
+  sandboxRoot,
   maxContextTokens: numberEnv('MODEL_MAX_CONTEXT_TOKENS', 128_000),
   reservedOutputTokens: numberEnv('MODEL_RESERVED_OUTPUT_TOKENS', 4_096),
   jobLeaseMs,
@@ -52,6 +54,7 @@ const runtime = new AgentRuntime({
   publisher: events,
   executor,
   jobLeaseMs,
+  removeSessionWorkspace: sessionId => removeSessionSandbox({ sandboxRoot, sessionId }),
 });
 const app = await NestFactory.create<NestFastifyApplication>(
   AgentHttpModule.forRoot(runtime, events),

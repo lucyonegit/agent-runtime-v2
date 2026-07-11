@@ -1,5 +1,4 @@
 import type {
-  AgentCodeProject,
   AgentJob,
   AgentMessage,
   AgentModelUsageStats,
@@ -51,7 +50,6 @@ export interface SessionViewV1 {
   toolInvocations: AgentToolInvocation[];
   userInputRequests: AgentUserInputRequest[];
   modelUsage?: AgentModelUsageStats;
-  codeProjects: AgentCodeProject[];
   timeline: {
     flat: FlatTimelineItem[];
     groupedByStep: JobTimelineGroup[];

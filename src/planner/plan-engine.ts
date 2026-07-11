@@ -108,7 +108,6 @@ export class PlanEngine {
       planId: plan.id,
       stepId: step.id,
       stepRunId: this.#ids.stepRunId(),
-      executor: 'agent',
       maxRunsPerStep: this.#maxStepRunsPerStep,
       nowMs: this.#clock.nowMs(),
     });

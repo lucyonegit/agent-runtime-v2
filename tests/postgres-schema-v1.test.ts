@@ -15,7 +15,6 @@ const databaseUrl = process.env.DATABASE_URL
   ?? 'postgresql://postgres:postgres@127.0.0.1:55433/agent_runtime_test';
 
 const EXPECTED_TABLES = [
-  'agent_code_projects',
   'agent_context_summaries',
   'agent_jobs',
   'agent_messages',
@@ -213,8 +212,8 @@ describe('canonical PostgreSQL schema v1', () => {
 
 async function insertSession(client: PoolClient, id: string): Promise<void> {
   await client.query(
-    `insert into agent_sessions(id, mode, status, version, created_at_ms, updated_at_ms)
-     values ($1, 'agent', 'active', 0, 1, 1)`,
+    `insert into agent_sessions(id, status, version, created_at_ms, updated_at_ms)
+     values ($1, 'active', 0, 1, 1)`,
     [id]
   );
 }
@@ -261,8 +260,8 @@ async function insertStepRun(
   await client.query(
     `insert into agent_step_runs(
        id, session_id, job_id, plan_id, step_id, run_no,
-       executor, status, attempt_no, version, created_at_ms, updated_at_ms
-     ) values ($1, 'session_run', $2, $3, $4, $5, 'agent', 'created', 0, 0, 5, 5)`,
+       status, attempt_no, version, created_at_ms, updated_at_ms
+     ) values ($1, 'session_run', $2, $3, $4, $5, 'created', 0, 0, 5, 5)`,
     [id, jobId, planId, stepId, runNo]
   );
 }

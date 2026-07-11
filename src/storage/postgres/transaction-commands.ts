@@ -73,10 +73,10 @@ export async function createSessionCommand(
   try {
     const result = await client.query<AgentSessionRow>(
       `insert into agent_sessions(
-         id, title, mode, status, version, created_at_ms, updated_at_ms
-       ) values ($1, $2, $3, 'active', 0, $4, $4)
+         id, title, status, version, created_at_ms, updated_at_ms
+       ) values ($1, $2, 'active', 0, $3, $3)
        returning *`,
-      [input.id, input.title ?? null, input.mode, input.nowMs]
+      [input.id, input.title ?? null, input.nowMs]
     );
     return mapAgentSessionRow(requireRow(result.rows[0], 'create session'));
   } catch (error) {
@@ -124,19 +124,18 @@ export async function createJobAndAppendUserMessageCommand(
     try {
       const jobResult = await client.query<AgentJobRow>(
         `insert into agent_jobs(
-           id, session_id, project_id, retry_of_job_id, client_request_id,
+           id, session_id, retry_of_job_id, client_request_id,
            stage, status, attempt_no, version, metadata,
            created_at_ms, updated_at_ms
          ) values (
-           $1, $2, $3, $4, $5,
-           'routing', 'created', 0, 0, $6,
-           $7, $7
+           $1, $2, $3, $4,
+           'routing', 'created', 0, 0, $5,
+           $6, $6
          )
          returning *`,
         [
           input.jobId,
           input.sessionId,
-          input.projectId ?? null,
           input.retryOfJobId ?? null,
           input.clientRequestId ?? null,
           input.jobMetadata ?? null,
@@ -1138,12 +1137,12 @@ export async function createStepRunCommand(
     const runResult = await client.query<AgentStepRunRow>(
       `insert into agent_step_runs(
          id, session_id, job_id, plan_id, step_id, run_no,
-         executor, status, current_attempt_id, attempt_no, version,
+         status, current_attempt_id, attempt_no, version,
          created_at_ms, updated_at_ms, started_at_ms
        ) values (
          $1, $2, $3, $4, $5, $6,
-         $7, 'running', $8, 1, 0,
-         $9, $9, $9
+         'running', $7, 1, 0,
+         $8, $8, $8
        ) returning *`,
       [
         input.stepRunId,
@@ -1152,7 +1151,6 @@ export async function createStepRunCommand(
         input.planId,
         input.stepId,
         nextRunNo,
-        input.executor,
         input.attemptId,
         input.nowMs,
       ]
@@ -1536,24 +1534,24 @@ export async function replaceContextSummaryCommand(
     }
     const result = await client.query<AgentContextSummaryRow>(
       `insert into agent_context_summaries(
-         id, session_id, job_id, step_run_id, project_id,
+         id, session_id, job_id, step_run_id,
          owner_type, owner_id, purpose, context_rules_version, summary_type, status,
          source_row_id_start, source_row_id_end, parent_summary_id, replaces_summary_id,
          summary, summary_format, source_message_count, source_token_count,
          summary_token_count, model, compression_prompt_version, checksum,
          version, metadata, created_at_ms, updated_at_ms
        ) values (
-         $1, $2, $3, $4, $5,
-         $6, $7, $8, $9, $10, 'active',
-         $11, $12, $13, $14,
-         $15, $16, $17, $18,
-         $19, $20, $21, $22,
-         0, $23, $24, $24
+         $1, $2, $3, $4,
+         $5, $6, $7, $8, $9, 'active',
+         $10, $11, $12, $13,
+         $14, $15, $16, $17,
+         $18, $19, $20, $21,
+         0, $22, $23, $23
        ) returning *`,
       [
         input.id, input.sessionId, input.jobId ?? null, input.stepRunId ?? null,
-        input.projectId ?? null, input.ownerType, input.ownerId, input.purpose,
-        input.contextRulesVersion, input.summaryType,
+        input.ownerType, input.ownerId, input.purpose, input.contextRulesVersion,
+        input.summaryType,
         input.sourceRowIdStart, input.sourceRowIdEnd, input.parentSummaryId ?? null,
         replaced?.id ?? null, input.summary, input.summaryFormat,
         input.sourceMessageCount, input.sourceTokenCount ?? null,

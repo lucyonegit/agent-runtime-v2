@@ -27,7 +27,7 @@ interface CodeSymbol {
 export function createFilesystemTools(): RuntimeTool[] {
   const listFiles = new DynamicStructuredTool({
     name: 'list_files',
-    description: 'List files and directories inside the current session workspace or code project sandbox.',
+    description: 'List the shared Session workspace. Its standard areas are code, docs, artifacts, downloads, and tmp.',
     schema: {
       type: 'object',
       properties: {
@@ -47,7 +47,6 @@ export function createFilesystemTools(): RuntimeTool[] {
         : await resolveWorkspacePath(context, directory, { mustExist: true });
       const files = await collectFiles(target, root, values.recursive === true);
       return jsonToolOutput({
-        ...(context.projectId ? { projectId: context.projectId } : {}),
         directory: isRootPath(directory) ? '/' : directory,
         files,
       });
@@ -56,7 +55,7 @@ export function createFilesystemTools(): RuntimeTool[] {
 
   const readFileTool = new DynamicStructuredTool({
     name: 'read_file',
-    description: 'Read a UTF-8 text file from the current session workspace or code project sandbox.',
+    description: 'Read a UTF-8 file from the shared Session workspace, for example code/src/index.ts or docs/spec.md.',
     schema: {
       type: 'object',
       properties: { path: { type: 'string', description: 'Workspace-relative file path.' } },
@@ -72,7 +71,6 @@ export function createFilesystemTools(): RuntimeTool[] {
         'utf8'
       );
       return jsonToolOutput({
-        ...(context.projectId ? { projectId: context.projectId } : {}),
         path,
         content,
       });
@@ -81,7 +79,7 @@ export function createFilesystemTools(): RuntimeTool[] {
 
   const writeFileTool = new DynamicStructuredTool({
     name: 'write_file',
-    description: 'Write a UTF-8 text file inside the current session workspace or code project sandbox.',
+    description: 'Write a UTF-8 file inside the shared Session workspace. Use code/, docs/, artifacts/, downloads/, or tmp/.',
     schema: {
       type: 'object',
       properties: {
@@ -102,7 +100,6 @@ export function createFilesystemTools(): RuntimeTool[] {
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, content, 'utf8');
       return jsonToolOutput({
-        ...(context.projectId ? { projectId: context.projectId } : {}),
         path,
         size: Buffer.byteLength(content, 'utf8'),
         operation: existed ? 'updated' : 'created',

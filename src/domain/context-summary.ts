@@ -1,4 +1,4 @@
-export const AGENT_CONTEXT_OWNER_TYPES = ['session', 'job', 'step_run', 'code_project'] as const;
+export const AGENT_CONTEXT_OWNER_TYPES = ['session', 'job', 'step_run'] as const;
 export const AGENT_CONTEXT_PURPOSES = [
   'conversation',
   'job_execution',
@@ -13,8 +13,8 @@ export type AgentContextSummaryType =
   | 'rolling'
   | 'job'
   | 'tool_history'
-  | 'project_invariants'
-  | 'project_index'
+  | 'workspace_invariants'
+  | 'workspace_index'
   | 'working_set';
 export type AgentContextSummaryStatus = 'active' | 'superseded' | 'failed';
 
@@ -23,7 +23,6 @@ export interface AgentContextSummary {
   sessionId: string;
   jobId?: string;
   stepRunId?: string;
-  projectId?: string;
   ownerType: AgentContextOwnerType;
   ownerId: string;
   purpose: AgentContextPurpose;
