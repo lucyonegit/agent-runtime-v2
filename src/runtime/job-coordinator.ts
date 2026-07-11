@@ -5,9 +5,11 @@ import {
   type AgentStore,
   type AnswerInputAndClaimResumeResult,
   type CreateJobAndAppendUserMessageResult,
+  type CreateRetryJobResult,
 } from '../storage/agent-store.js';
 import { resolveExecutionLimits, type ExecutionLimits } from './execution-limits.js';
 import { RuntimeError, mapStoreError } from './runtime-errors.js';
+import { resolveJobGoalMessage, withGoalMessageId } from './job-goal.js';
 
 export interface RuntimeClock {
   nowMs(): number;
@@ -45,6 +47,10 @@ export interface RetryCoordinatedJobInput {
   userMessageId?: string;
 }
 
+export type RetryCoordinatedJobResult =
+  | CreateJobAndAppendUserMessageResult
+  | CreateRetryJobResult;
+
 export interface AnswerCoordinatedInput {
   requestId: string;
   expectedVersion: number;
@@ -71,14 +77,16 @@ export class JobCoordinator {
 
   async createJob(input: CreateCoordinatedJobInput): Promise<CreateJobAndAppendUserMessageResult> {
     const nowMs = this.#clock.nowMs();
+    const jobId = input.jobId ?? this.#ids.jobId();
+    const userMessageId = input.userMessageId ?? this.#ids.messageId();
     try {
       return await this.#store.createJobAndAppendUserMessage({
         sessionId: input.sessionId,
-        jobId: input.jobId ?? this.#ids.jobId(),
-        userMessageId: input.userMessageId ?? this.#ids.messageId(),
+        jobId,
+        userMessageId,
         content: input.content,
         clientRequestId: input.clientRequestId,
-        jobMetadata: input.jobMetadata,
+        jobMetadata: withGoalMessageId(input.jobMetadata, userMessageId),
         messageMetadata: input.messageMetadata,
         nowMs,
       });
@@ -163,7 +171,7 @@ export class JobCoordinator {
     }
   }
 
-  async retryJob(input: RetryCoordinatedJobInput): Promise<CreateJobAndAppendUserMessageResult> {
+  async retryJob(input: RetryCoordinatedJobInput): Promise<RetryCoordinatedJobResult> {
     const source = await this.#store.getJob(input.failedJobId);
     if (!source) {
       throw new RuntimeError(
@@ -178,27 +186,37 @@ export class JobCoordinator {
       );
     }
     const sourceMessages = await this.#store.listSessionMessages(source.sessionId);
-    const sourceUserMessage = sourceMessages.find(message => (
-      message.jobId === source.id && message.messageType === 'user_message'
-    ));
-    const content = input.content ?? sourceUserMessage?.content;
-    if (content === undefined) {
+    const sourceGoalMessage = resolveJobGoalMessage(source, sourceMessages);
+    if (!sourceGoalMessage) {
       throw new RuntimeError(
         'storage_error',
         `Retry source Job ${JSON.stringify(source.id)} has no committed user message.`
       );
     }
+    const jobId = input.jobId ?? this.#ids.jobId();
+    const nowMs = this.#clock.nowMs();
 
     try {
+      if (input.content === undefined) {
+        return await this.#store.createRetryJob({
+          sessionId: source.sessionId,
+          jobId,
+          retryOfJobId: source.id,
+          clientRequestId: input.clientRequestId,
+          jobMetadata: withGoalMessageId(source.metadata, sourceGoalMessage.id),
+          nowMs,
+        });
+      }
+      const userMessageId = input.userMessageId ?? this.#ids.messageId();
       return await this.#store.createJobAndAppendUserMessage({
         sessionId: source.sessionId,
-        jobId: input.jobId ?? this.#ids.jobId(),
-        userMessageId: input.userMessageId ?? this.#ids.messageId(),
-        content,
+        jobId,
+        userMessageId,
+        content: input.content,
         retryOfJobId: source.id,
         clientRequestId: input.clientRequestId,
-        jobMetadata: source.metadata,
-        nowMs: this.#clock.nowMs(),
+        jobMetadata: withGoalMessageId(source.metadata, userMessageId),
+        nowMs,
       });
     } catch (error) {
       throw mapStoreError(error);

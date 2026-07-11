@@ -20,6 +20,7 @@ import { StepRunner } from '../../planner/step-runner.js';
 import { AgentRunner } from '../../runtime/agent-runner.js';
 import { AuditedChatModel } from '../../runtime/audited-chat-model.js';
 import { JobCoordinator } from '../../runtime/job-coordinator.js';
+import { jobGoalMessageId, resolveJobGoalMessage } from '../../runtime/job-goal.js';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
 import { RuntimeEventWriter, type RuntimeEventPublisher } from '../../runtime/runtime-event-writer.js';
 import { ToolExecutor, type RuntimeTool } from '../../runtime/tool-executor.js';
@@ -92,9 +93,8 @@ export class RuntimeJobExecutionService implements JobExecutionService {
   async #executeOwnedJob(jobId: string): Promise<void> {
     let job = await this.#requireOwnedJob(jobId);
     const messages = await this.#options.store.listSessionMessages(job.sessionId);
-    const originalGoal = messages.find(message => (
-      message.jobId === job.id && message.messageType === 'user_message'
-    ))?.content;
+    const goalMessage = resolveJobGoalMessage(job, messages);
+    const originalGoal = goalMessage?.content;
     if (!originalGoal) throw new Error(`Job ${job.id} has no original user goal.`);
     const jobContext = await this.#buildContext(job, originalGoal, 'job_execution');
     const planner = this.#createPlanEngine(job, jobContext);
@@ -303,8 +303,14 @@ export class RuntimeJobExecutionService implements JobExecutionService {
             jobId: job.id,
             stepRunId: stepRun.id,
             originalGoal,
+            originalGoalMessageId: jobGoalMessageId(job),
           }
-        : { kind: 'job' as const, jobId: job.id, originalGoal },
+        : {
+            kind: 'job' as const,
+            jobId: job.id,
+            originalGoal,
+            originalGoalMessageId: jobGoalMessageId(job),
+          },
       purpose,
       systemPrompt: purpose === 'step_execution'
         ? `Execute only the current PlanStep. ${WORKSPACE_TOOL_ROUTING_INSTRUCTION} ${STEP_OUTPUT_INSTRUCTION}`
@@ -327,7 +333,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       toolSchemas: this.#options.tools.map(tool => tool.tool),
       newCompressibleMessageCount: messages.filter(message => (
         message.rowId > Math.max(0, ...summaries.map(summary => summary.sourceRowIdEnd))
-        && !isCurrentJobGoalMessage(message, job.id, originalGoal)
+        && !isCurrentJobGoalMessage(message, job, originalGoal)
       )).length,
       compressionMessageThreshold: this.#options.compressionMessageThreshold,
     } satisfies BuildContextInput;
@@ -523,11 +529,14 @@ function currentTemporalContext(): { currentDate: string; timezone: string } {
 }
 
 function isCurrentJobGoalMessage(
-  message: { jobId: string; messageType: string; content: string },
-  jobId: string,
+  message: { id: string; jobId: string; messageType: string; content: string },
+  job: Pick<AgentJob, 'id' | 'metadata'>,
   originalGoal: string
 ): boolean {
-  return message.jobId === jobId
+  const referencedId = jobGoalMessageId(job);
+  return referencedId
+    ? message.id === referencedId
+    : message.jobId === job.id
     && message.messageType === 'user_message'
     && message.content === originalGoal;
 }

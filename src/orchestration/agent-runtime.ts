@@ -119,7 +119,13 @@ export class AgentRuntime {
     });
     await this.#publishMany([
       { type: 'job.upserted', sessionId: created.job.sessionId, job: created.job },
-      { type: 'message.upserted', sessionId: created.job.sessionId, message: created.message },
+      ...('message' in created
+        ? [{
+            type: 'message.upserted' as const,
+            sessionId: created.job.sessionId,
+            message: created.message,
+          }]
+        : []),
     ]);
     const claimed = await this.#coordinator.claimJob(created.job.id, created.job.version);
     await this.#publishMany([{

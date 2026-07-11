@@ -54,8 +54,10 @@ function findOriginalGoal(groups: MessageGroup[], scope: ContextScope): MessageG
   if (scope.kind === 'session_history') return undefined;
   return groups.find(group => {
     const message = messagesInGroup(group)[0];
-    return message?.jobId === scope.jobId
-      && message.messageType === 'user_message'
-      && message.content === scope.originalGoal;
+    return scope.originalGoalMessageId
+      ? message?.id === scope.originalGoalMessageId
+      : message?.jobId === scope.jobId
+        && message.messageType === 'user_message'
+        && message.content === scope.originalGoal;
   });
 }

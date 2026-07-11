@@ -18,6 +18,8 @@ import {
   type CreateInputRequestsAndMarkWaitingResult,
   type CreateJobAndAppendUserMessageInput,
   type CreateJobAndAppendUserMessageResult,
+  type CreateRetryJobInput,
+  type CreateRetryJobResult,
   type CreateSessionInput,
   type CreatePlanInput,
   type CreatePlanResult,
@@ -97,55 +99,7 @@ export async function createJobAndAppendUserMessageCommand(
 ): Promise<CreateJobAndAppendUserMessageResult> {
   return withPostgresTransaction(client, async () => {
     await lockAgentSession(client, input.sessionId);
-    if (input.clientRequestId) {
-      const existingRequest = await client.query<{ id: string }>(
-        `select id
-         from agent_jobs
-         where session_id = $1 and client_request_id = $2`,
-        [input.sessionId, input.clientRequestId]
-      );
-      if (existingRequest.rows[0]) {
-        throw new AgentStoreError(
-          'CLIENT_REQUEST_CONFLICT',
-          `Client request ${JSON.stringify(input.clientRequestId)} was already used in this Session.`,
-          {
-            sessionId: input.sessionId,
-            clientRequestId: input.clientRequestId,
-            existingJobId: existingRequest.rows[0].id,
-          }
-        );
-      }
-    }
-    if (input.retryOfJobId) {
-      await assertValidRetry(client, input.sessionId, input.retryOfJobId);
-    }
-
-    let jobRow: AgentJobRow;
-    try {
-      const jobResult = await client.query<AgentJobRow>(
-        `insert into agent_jobs(
-           id, session_id, retry_of_job_id, client_request_id,
-           stage, status, attempt_no, version, metadata,
-           created_at_ms, updated_at_ms
-         ) values (
-           $1, $2, $3, $4,
-           'routing', 'created', 0, 0, $5,
-           $6, $6
-         )
-         returning *`,
-        [
-          input.jobId,
-          input.sessionId,
-          input.retryOfJobId ?? null,
-          input.clientRequestId ?? null,
-          input.jobMetadata ?? null,
-          input.nowMs,
-        ]
-      );
-      jobRow = requireRow(jobResult.rows[0], 'create job');
-    } catch (error) {
-      throw mapCreateJobError(error, input);
-    }
+    const jobRow = await insertCreatedJob(client, input);
 
     const messageResult = await client.query<AgentMessageRow>(
       `insert into agent_messages(
@@ -178,6 +132,28 @@ export async function createJobAndAppendUserMessageCommand(
       session: mapAgentSessionRow(requireRow(sessionResult.rows[0], 'update session')),
       job: mapAgentJobRow(jobRow),
       message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'append user message')),
+    };
+  });
+}
+
+export async function createRetryJobCommand(
+  client: PoolClient,
+  input: CreateRetryJobInput
+): Promise<CreateRetryJobResult> {
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    const jobRow = await insertCreatedJob(client, input);
+    const sessionResult = await client.query<AgentSessionRow>(
+      `update agent_sessions
+       set version = version + 1,
+           updated_at_ms = $2
+       where id = $1
+       returning *`,
+      [input.sessionId, input.nowMs]
+    );
+    return {
+      session: mapAgentSessionRow(requireRow(sessionResult.rows[0], 'update session')),
+      job: mapAgentJobRow(jobRow),
     };
   });
 }
@@ -1853,9 +1829,67 @@ async function assertValidRetry(
   }
 }
 
+type InsertCreatedJobInput = Pick<
+  CreateJobAndAppendUserMessageInput,
+  'sessionId' | 'jobId' | 'retryOfJobId' | 'clientRequestId' | 'jobMetadata' | 'nowMs'
+>;
+
+async function insertCreatedJob(
+  client: PoolClient,
+  input: InsertCreatedJobInput
+): Promise<AgentJobRow> {
+  if (input.clientRequestId) {
+    const existingRequest = await client.query<{ id: string }>(
+      `select id
+       from agent_jobs
+       where session_id = $1 and client_request_id = $2`,
+      [input.sessionId, input.clientRequestId]
+    );
+    if (existingRequest.rows[0]) {
+      throw new AgentStoreError(
+        'CLIENT_REQUEST_CONFLICT',
+        `Client request ${JSON.stringify(input.clientRequestId)} was already used in this Session.`,
+        {
+          sessionId: input.sessionId,
+          clientRequestId: input.clientRequestId,
+          existingJobId: existingRequest.rows[0].id,
+        }
+      );
+    }
+  }
+  if (input.retryOfJobId) {
+    await assertValidRetry(client, input.sessionId, input.retryOfJobId);
+  }
+  try {
+    const result = await client.query<AgentJobRow>(
+      `insert into agent_jobs(
+         id, session_id, retry_of_job_id, client_request_id,
+         stage, status, attempt_no, version, metadata,
+         created_at_ms, updated_at_ms
+       ) values (
+         $1, $2, $3, $4,
+         'routing', 'created', 0, 0, $5,
+         $6, $6
+       )
+       returning *`,
+      [
+        input.jobId,
+        input.sessionId,
+        input.retryOfJobId ?? null,
+        input.clientRequestId ?? null,
+        input.jobMetadata ?? null,
+        input.nowMs,
+      ]
+    );
+    return requireRow(result.rows[0], 'create job');
+  } catch (error) {
+    throw mapCreateJobError(error, input);
+  }
+}
+
 function mapCreateJobError(
   error: unknown,
-  input: CreateJobAndAppendUserMessageInput
+  input: Pick<InsertCreatedJobInput, 'sessionId' | 'jobId' | 'clientRequestId'>
 ): unknown {
   if (isConstraint(error, 'uniq_agent_jobs_active_session')) {
     return new AgentStoreError(

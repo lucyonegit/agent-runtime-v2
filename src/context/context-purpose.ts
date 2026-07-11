@@ -11,7 +11,13 @@ export type ContextPurpose = typeof CONTEXT_PURPOSES[number];
 
 export type ContextScope =
   | { kind: 'session_history' }
-  | { kind: 'job'; jobId: string; originalGoal: string }
-  | { kind: 'step_run'; jobId: string; stepRunId: string; originalGoal: string };
+  | { kind: 'job'; jobId: string; originalGoal: string; originalGoalMessageId?: string }
+  | {
+      kind: 'step_run';
+      jobId: string;
+      stepRunId: string;
+      originalGoal: string;
+      originalGoalMessageId?: string;
+    };
 
-export const CONTEXT_RULES_VERSION = 'job-step-run-context-v3';
+export const CONTEXT_RULES_VERSION = 'job-step-run-context-v4';

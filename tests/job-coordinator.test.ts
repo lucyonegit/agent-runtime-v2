@@ -68,7 +68,34 @@ describe('JobCoordinator', () => {
     })).rejects.toMatchObject({ code: 'idempotency_conflict' });
   });
 
-  it('creates retry as a new Job linked to the failed source', async () => {
+  it('creates retry as a new Job that reuses the original goal message', async () => {
+    const store = createStore();
+    const failedJob = {
+      ...jobFixture,
+      status: 'failed',
+      version: 2,
+      completedAtMs: 900,
+    } as AgentJob;
+    vi.mocked(store.getJob).mockResolvedValue(failedJob);
+    vi.mocked(store.listSessionMessages).mockResolvedValue([messageFixture]);
+    vi.mocked(store.createRetryJob).mockImplementation(async input => ({
+      session: sessionFixture,
+      job: { ...jobFixture, id: input.jobId, retryOfJobId: input.retryOfJobId },
+    }));
+    const coordinator = createCoordinator(store, 1_000);
+
+    const retry = await coordinator.retryJob({ failedJobId: 'job_1' });
+    expect(retry.job).toMatchObject({ id: 'job_2', retryOfJobId: 'job_1' });
+    expect(retry).not.toHaveProperty('message');
+    expect(store.createRetryJob).toHaveBeenCalledWith(expect.objectContaining({
+      retryOfJobId: 'job_1',
+      jobId: 'job_2',
+      jobMetadata: expect.objectContaining({ goalMessageId: 'message_1' }),
+    }));
+    expect(store.createJobAndAppendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('creates a new goal message when retry content is explicitly replaced', async () => {
     const store = createStore();
     const failedJob = {
       ...jobFixture,
@@ -85,14 +112,16 @@ describe('JobCoordinator', () => {
     }));
     const coordinator = createCoordinator(store, 1_000);
 
-    const retry = await coordinator.retryJob({ failedJobId: 'job_1' });
-    expect(retry.job).toMatchObject({ id: 'job_2', retryOfJobId: 'job_1' });
+    await coordinator.retryJob({ failedJobId: 'job_1', content: 'new goal' });
+
     expect(store.createJobAndAppendUserMessage).toHaveBeenCalledWith(expect.objectContaining({
-      content: 'hello',
+      content: 'new goal',
       retryOfJobId: 'job_1',
       jobId: 'job_2',
       userMessageId: 'message_2',
+      jobMetadata: expect.objectContaining({ goalMessageId: 'message_2' }),
     }));
+    expect(store.createRetryJob).not.toHaveBeenCalled();
   });
 
   it('maps stale versions and lease loss into stable runtime errors', async () => {
@@ -162,6 +191,7 @@ function createStore(): AgentStore {
     listSessionToolInvocations: vi.fn<AgentStore['listSessionToolInvocations']>(),
     listSessionUserInputRequests: vi.fn<AgentStore['listSessionUserInputRequests']>(),
     createJobAndAppendUserMessage: vi.fn<AgentStore['createJobAndAppendUserMessage']>(),
+    createRetryJob: vi.fn<AgentStore['createRetryJob']>(),
     claimJob: vi.fn<AgentStore['claimJob']>(),
     renewJobLease: vi.fn<AgentStore['renewJobLease']>(),
     commitModelToolCalls: vi.fn<AgentStore['commitModelToolCalls']>(),

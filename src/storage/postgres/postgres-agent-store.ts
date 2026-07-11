@@ -32,6 +32,8 @@ import type {
   CreateInputRequestsAndMarkWaitingResult,
   CreateJobAndAppendUserMessageInput,
   CreateJobAndAppendUserMessageResult,
+  CreateRetryJobInput,
+  CreateRetryJobResult,
   CreateSessionInput,
   CreatePlanInput,
   CreatePlanResult,
@@ -59,6 +61,7 @@ import {
   completeJobWithFinalMessageCommand,
   createInputRequestsAndMarkWaitingCommand,
   createJobAndAppendUserMessageCommand,
+  createRetryJobCommand,
   createSessionCommand,
   createPlanCommand,
   createStepRunCommand,
@@ -280,6 +283,10 @@ export class PostgresAgentStore implements AgentStore {
     input: CreateJobAndAppendUserMessageInput
   ): Promise<CreateJobAndAppendUserMessageResult> {
     return this.#withClient(client => createJobAndAppendUserMessageCommand(client, input));
+  }
+
+  async createRetryJob(input: CreateRetryJobInput): Promise<CreateRetryJobResult> {
+    return this.#withClient(client => createRetryJobCommand(client, input));
   }
 
   async claimJob(input: ClaimJobInput): Promise<AgentJob> {

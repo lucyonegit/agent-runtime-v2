@@ -273,9 +273,11 @@ function isCurrentGoalGroup(group: MessageGroup, scope: ContextScope): boolean {
   if (scope.kind === 'session_history') return false;
   const messages = messagesInGroup(group);
   return group.type === 'single'
-    && messages[0]?.jobId === scope.jobId
-    && messages[0]?.messageType === 'user_message'
-    && messages[0]?.content === scope.originalGoal;
+    && (scope.originalGoalMessageId
+      ? messages[0]?.id === scope.originalGoalMessageId
+      : messages[0]?.jobId === scope.jobId
+        && messages[0]?.messageType === 'user_message'
+        && messages[0]?.content === scope.originalGoal);
 }
 
 function sha256(value: string): string {

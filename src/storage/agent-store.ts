@@ -87,6 +87,20 @@ export interface CreateJobAndAppendUserMessageResult {
   message: AgentMessage;
 }
 
+export interface CreateRetryJobInput {
+  sessionId: string;
+  jobId: string;
+  retryOfJobId: string;
+  clientRequestId?: string;
+  jobMetadata?: Record<string, unknown>;
+  nowMs: number;
+}
+
+export interface CreateRetryJobResult {
+  session: AgentSession;
+  job: AgentJob;
+}
+
 export interface ClaimJobInput {
   jobId: string;
   expectedVersion: number;
@@ -444,6 +458,7 @@ export interface AgentStore {
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
   ): Promise<CreateJobAndAppendUserMessageResult>;
+  createRetryJob(input: CreateRetryJobInput): Promise<CreateRetryJobResult>;
   claimJob(input: ClaimJobInput): Promise<AgentJob>;
   renewJobLease(input: RenewJobLeaseInput): Promise<AgentJob>;
   commitModelToolCalls(input: CommitModelToolCallsInput): Promise<CommitModelToolCallsResult>;

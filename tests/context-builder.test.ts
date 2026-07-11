@@ -207,7 +207,7 @@ describe('ContextBuilder', () => {
     ]);
     expect(context.inputManifest).toMatchObject({
       purpose: 'step_execution',
-      contextRulesVersion: 'job-step-run-context-v3',
+      contextRulesVersion: 'job-step-run-context-v4',
       systemPromptVersion: 'system-v1',
       messageGroupIds: ['message:goal', 'tool_exchange:call_context'],
       summaryIds: ['summary_1'],
@@ -308,6 +308,39 @@ describe('ContextBuilder', () => {
       'previous_user',
       'previous_assistant',
     ]);
+  });
+
+  it('reuses the failed Job goal once as the retry Job must-keep message', () => {
+    const sourceGoal = message({
+      id: 'source_goal', rowId: 10, jobId: 'job_failed', content: '我想抽个塔罗',
+    });
+    const failedAssistant = message({
+      id: 'failed_assistant', rowId: 11, jobId: 'job_failed', role: 'assistant',
+      messageType: 'assistant_message', content: '需要重试',
+    });
+    const context = buildContext({
+      scope: {
+        kind: 'job',
+        jobId: 'job_retry',
+        originalGoal: '我想抽个塔罗',
+        originalGoalMessageId: 'source_goal',
+      },
+      purpose: 'job_execution',
+      systemPrompt: 'system',
+      systemPromptVersion: 'v1',
+      messages: [sourceGoal, failedAssistant],
+      invocations: [],
+      summaries: [{ id: 'summary_failed', summary: '失败尝试摘要', sourceRowIdEnd: 11 }],
+      model: { provider: 'test', name: 'model', maxContextTokens: 1000, reservedOutputTokens: 100 },
+    });
+
+    expect(context.messages.map(item => item.content)).toEqual([
+      'system',
+      'Context summary:\n失败尝试摘要',
+      '我想抽个塔罗',
+    ]);
+    expect(context.mustKeepMessageIds).toEqual(['source_goal']);
+    expect(context.inputManifest.messageGroupIds).toEqual(['message:source_goal']);
   });
 
   it('builds complete Session history deterministically without mutating its input', () => {

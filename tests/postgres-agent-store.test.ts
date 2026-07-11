@@ -1316,12 +1316,12 @@ describe('PostgresAgentStore Job transactions', () => {
       input_status: 'cancelled',
     });
 
-    const retry = await store.createJobAndAppendUserMessage({
+    const messageCountBeforeRetry = (await store.listSessionMessages('session_fail')).length;
+    const retry = await store.createRetryJob({
       sessionId: 'session_fail',
       jobId: 'job_retry',
       retryOfJobId: 'job_fail',
-      userMessageId: 'message_retry',
-      content: 'retry',
+      jobMetadata: { goalMessageId: 'message_fail' },
       nowMs: 50,
     });
     expect(retry.job).toMatchObject({
@@ -1329,6 +1329,7 @@ describe('PostgresAgentStore Job transactions', () => {
       retryOfJobId: 'job_fail',
       status: 'created',
     });
+    expect(await store.listSessionMessages('session_fail')).toHaveLength(messageCountBeforeRetry);
   });
 
   it('cancels a created Job without requiring a lease', async () => {
