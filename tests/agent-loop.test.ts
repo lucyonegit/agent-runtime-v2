@@ -160,6 +160,7 @@ describe('AgentLoop with LangChain messages', () => {
     expect(run.events[1]).toMatchObject({
       type: LOOP_EVENT_TYPES.ToolResultFailed,
       toolCallId: 'call_bad',
+      executionStarted: false,
       code: 'invalid_tool_arguments',
     });
     expect(execute).not.toHaveBeenCalled();

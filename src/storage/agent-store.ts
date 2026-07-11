@@ -155,7 +155,14 @@ export interface ClaimToolInvocationResult {
 
 export type CommittedToolOutcome =
   | { status: 'completed'; content: string; result?: unknown; durationMs: number }
-  | { status: 'failed'; code: string; message: string; details?: unknown; durationMs: number };
+  | {
+      status: 'failed';
+      executionStarted?: boolean;
+      code: string;
+      message: string;
+      details?: unknown;
+      durationMs: number;
+    };
 
 export interface CommitToolResultInput {
   sessionId: string;

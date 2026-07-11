@@ -139,6 +139,7 @@ export class RuntimeEventWriter {
             }
           : {
               status: 'failed' as const,
+              executionStarted: event.executionStarted,
               code: event.code,
               message: event.message,
               details: event.details,

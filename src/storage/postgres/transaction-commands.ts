@@ -432,11 +432,23 @@ export async function commitToolResultCommand(
       [input.jobId, input.toolCallId]
     );
     const invocation = requireRow(invocationResult.rows[0], 'lock tool invocation');
-    if (invocation.status !== 'running' || invocation.attempt_id !== input.attemptId) {
+    const runningInAttempt = invocation.status === 'running'
+      && invocation.attempt_id === input.attemptId;
+    const failedBeforeExecution = invocation.status === 'pending'
+      && invocation.attempt_id === input.attemptId
+      && input.outcome.status === 'failed'
+      && input.outcome.executionStarted === false;
+    if (!runningInAttempt && !failedBeforeExecution) {
       throw new AgentStoreError(
         'INVALID_TOOL_INVOCATION_STATE',
-        `Tool invocation ${JSON.stringify(input.toolCallId)} is not running in this attempt.`,
-        { status: invocation.status, invocationAttemptId: invocation.attempt_id }
+        `Tool invocation ${JSON.stringify(input.toolCallId)} cannot commit a result in this attempt.`,
+        {
+          status: invocation.status,
+          invocationAttemptId: invocation.attempt_id,
+          executionStarted: input.outcome.status === 'failed'
+            ? input.outcome.executionStarted
+            : true,
+        }
       );
     }
     if ((input.stepRunId ?? null) !== invocation.step_run_id) {

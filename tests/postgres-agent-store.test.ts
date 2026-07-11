@@ -604,6 +604,115 @@ describe('PostgresAgentStore Job transactions', () => {
     });
   });
 
+  it('records malformed model tool arguments as a pre-execution failure and continues', async () => {
+    await store.createSession({ id: 'session_invalid_tool_args', nowMs: 10 });
+    await createJob(
+      store,
+      'session_invalid_tool_args',
+      'job_invalid_tool_args',
+      'message_invalid_tool_args',
+      20
+    );
+    const claimed = await store.claimJob({
+      jobId: 'job_invalid_tool_args',
+      expectedVersion: 0,
+      workerId: 'worker_invalid_tool_args',
+      attemptId: 'attempt_invalid_tool_args',
+      nowMs: 30,
+      leaseUntilMs: 100,
+    });
+    const runtimeLookup = completedRuntimeTool('lookup', async () => {
+      throw new Error('Malformed tool arguments must not execute the tool.');
+    });
+    let modelCalls = 0;
+    const loop = new AgentLoop({
+      streaming: false,
+      model: new TestChatRunnable(async input => {
+        modelCalls += 1;
+        if (modelCalls === 1) {
+          return new AIMessageChunk({
+            content: '',
+            tool_call_chunks: [{
+              index: 0,
+              id: 'call_invalid_tool_args',
+              name: 'lookup',
+              args: '{not-json',
+            }],
+          });
+        }
+        expect(inputMessages(input)).toHaveLength(2);
+        return new AIMessageChunk('recovered after invalid tool arguments');
+      }),
+      clock: { nowMs: () => 35 },
+    });
+    let messageNo = 1;
+    const writer = new RuntimeEventWriter({
+      store,
+      workerId: 'worker_invalid_tool_args',
+      tools: [runtimeLookup],
+      ids: {
+        eventId: () => 'event_invalid_tool_args',
+        messageId: () => `invalid_tool_message_${messageNo++}`,
+        toolInvocationId: () => 'invocation_invalid_tool_args',
+        userInputRequestId: () => 'unused_invalid_tool_input',
+      },
+      clock: { nowMs: () => 36 },
+    });
+    const runner = new AgentRunner({
+      loop,
+      writer,
+      coordinator: new JobCoordinator({
+        store,
+        workerId: 'worker_invalid_tool_args',
+        clock: { nowMs: () => 36 },
+      }),
+    });
+
+    const result = await runner.runDirect({
+      job: claimed,
+      messages: [],
+      tools: [runtimeLookup.tool],
+      toolExecutor: new ToolExecutor({
+        store,
+        workerId: 'worker_invalid_tool_args',
+        tools: [runtimeLookup],
+        clock: { nowMs: () => 35 },
+      }),
+      outputIdFactory: () => `invalid_tool_output_${modelCalls + 1}`,
+      limits: { maxIterations: 3, maxToolCalls: 3, deadlineMs: 90 },
+    });
+
+    if (result.type !== 'completed') {
+      throw new Error(JSON.stringify(result.job.error));
+    }
+    expect(result).toMatchObject({
+      type: 'completed',
+      job: { status: 'completed' },
+      message: { content: 'recovered after invalid tool arguments' },
+    });
+    const invocation = await store.getToolInvocation(
+      'job_invalid_tool_args',
+      'call_invalid_tool_args'
+    );
+    expect(invocation).toMatchObject({
+      status: 'failed',
+      version: 1,
+      error: { code: 'invalid_tool_arguments', message: 'Malformed args.' },
+    });
+    expect(invocation).not.toHaveProperty('startedAtMs');
+    const messages = await store.listSessionMessages('session_invalid_tool_args');
+    expect(messages.map(message => message.messageType)).toEqual([
+      'user_message',
+      'tool_call',
+      'tool_result',
+      'assistant_message',
+    ]);
+    expect(messages[2]).toMatchObject({
+      toolCallId: 'call_invalid_tool_args',
+      toolResult: { status: 'failed', error: 'Malformed args.' },
+    });
+  });
+
   it('runs direct HITL through waiting, answer-as-tool-result, resume claim, and final completion', async () => {
     await store.createSession({ id: 'session_hitl', nowMs: 10 });
     await createJob(store, 'session_hitl', 'job_hitl', 'message_hitl', 20);

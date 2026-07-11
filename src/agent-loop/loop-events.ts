@@ -51,6 +51,7 @@ export type LoopEvent =
       type: typeof LOOP_EVENT_TYPES.ToolResultFailed;
       toolCallId: string;
       toolName: string;
+      executionStarted: boolean;
       code: string;
       message: string;
       details?: unknown;
