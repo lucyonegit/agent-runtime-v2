@@ -65,19 +65,57 @@ type ContextPreviewMessage = {
 
 ### Context 构建
 
-新增独立的 `ContextPreviewService`，避免把 HTTP 展示逻辑放进 `AgentRuntime` 或 `ContextBuilder`。
+将当前有实例状态的 `ContextBuilder` 收敛为导出的纯函数：
+
+```ts
+function buildContext(input: BuildContextInput): BuiltContext;
+
+interface BuildContextInput {
+  purpose: ContextPurpose;
+  currentJobId?: string;
+  currentStepRunId?: string;
+  originalGoal?: string;
+  systemPrompt: string;
+  systemPromptVersion: string;
+  currentInstruction?: string;
+  stableContext?: string;
+  messages: AgentMessage[];
+  invocations: AgentToolInvocation[];
+  summaries?: Array<{ id: string; summary: string; sourceRowIdEnd?: number }>;
+  model: {
+    provider: string;
+    name: string;
+    maxContextTokens: number;
+    reservedOutputTokens: number;
+  };
+  toolSchemas?: StructuredToolInterface[];
+  newCompressibleMessageCount?: number;
+  compressionMessageThreshold?: number;
+  compressionSourcePurpose?: Exclude<ContextPurpose, 'context_compression'>;
+}
+```
+
+`buildContext()` 不读取数据库、不写摘要、不调用模型、不依赖时钟，也不保存可变实例状态。相同输入必须得到相同的 LangChain Message List、manifest、Token 估算和压缩建议。
+
+正常 Job 执行和 Context Preview 都调用同一个 `buildContext()`：
+
+- 正常 Job：`purpose = job_execution`，传入真实 `currentJobId`、`originalGoal` 和已经落库的当前 `UserMessage`；当前用户目标保持 `mustKeep`。
+- 调试快照：同样使用 `purpose = job_execution`，但不传 `currentJobId` 和 `originalGoal`；这表示当前没有尚未发生的新一轮，所有已落库消息都是历史消息。
+- `step_execution`、`plan_final`、`code_execution` 必须传入 `currentJobId`；`step_execution` 还必须传入 `currentStepRunId`。纯函数对缺失的必需范围参数直接抛出输入错误。
+
+调试接口可以使用薄的 `ContextPreviewService` 负责读取数据、活动 Job 校验和 DTO 序列化，但它不能拥有另一套 Context 选择规则。
 
 服务执行流程：
 
 1. 读取 Session、Jobs、Messages、ToolInvocations。
 2. 拒绝存在活动 Job 的 Session。
-3. 构造仅存在于内存中的 preview Job 标识，不持久化。
-4. 使用正式 `ContextBuilder`，`purpose = conversation`，从而应用正式的消息分组、内部消息过滤、`progress` 过滤、TokenBudget、LangChain 格式化和上下文规则版本。
+3. 构造与正常运行相同的 `BuildContextInput`，但不设置尚未发生的 `currentJobId`、`originalGoal` 或 UserMessage。
+4. 调用纯函数 `buildContext()`，固定使用正常对话的 `purpose = job_execution`，从而应用正式的消息分组、内部消息过滤、`progress` 过滤、TokenBudget、LangChain 格式化和上下文规则版本。
 5. 使用与运行时一致的 system prompt、system prompt version、模型窗口配置和工具 Schema。
 6. 不加载旧 Job 私有摘要，也不触发模型压缩。`compressionRecommended = true` 时只在结果中提示：真实下一轮可能先生成新 Job 所属摘要，再得到最终模型输入。
 7. 将 `BaseMessage[]` 转换为稳定、精简的 JSON DTO。
 
-该设计不在前端重写 Context 规则，因此服务端预览与运行时共享同一套核心构建代码。
+该设计不在前端或 Preview Service 中重写 Context 规则，因此服务端预览与运行时共享同一个纯函数，而不是仅复用一个类名或近似的 `conversation` 分支。
 
 ## 前端交互
 
@@ -99,7 +137,7 @@ Context button
   -> GET /sessions/:sessionId/context-preview
   -> ContextPreviewService
   -> AgentStore reads
-  -> ContextBuilder
+  -> buildContext(input)
   -> LangChain BaseMessage[]
   -> compact ContextPreviewV1 DTO
   -> JSON dialog
@@ -110,6 +148,8 @@ Context button
 ### 服务端
 
 - 完成态 Session 返回 system/human/ai/tool 消息及匹配的 ToolCall/ToolResult。
+- 相同 `BuildContextInput` 多次调用产生深度相等的结果，且不会改变输入数组或消息对象。
+- 正常 Job Context 与 Preview Context 都通过 `buildContext()` 的 `job_execution` 分支构建。
 - Plan、全部 StepOutput、PlanFinal 按 rowId 顺序出现在预览中。
 - `internal`、`progress` 和不完整历史 ToolCall 不出现在预览中。
 - 活动 Job 返回 409。
