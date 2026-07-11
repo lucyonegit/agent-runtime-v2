@@ -23,6 +23,7 @@ import {
 export interface AgentLoopTarget {
   sessionId: string;
   jobId: string;
+  projectId?: string;
   stepRunId?: string;
   attemptId: string;
 }

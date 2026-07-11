@@ -11,6 +11,10 @@ import type { AgentJob, AgentModelCallType } from '../../domain/index.js';
 import type { JobExecutionService } from '../../orchestration/agent-runtime.js';
 import { PlanEngine } from '../../planner/plan-engine.js';
 import { PlanSummarizer } from '../../planner/plan-summarizer.js';
+import {
+  STEP_OUTPUT_INSTRUCTION,
+  STEP_OUTPUT_REPAIR_INSTRUCTION,
+} from '../../planner/planner-prompts.js';
 import { StepRunner } from '../../planner/step-runner.js';
 import { AgentRunner } from '../../runtime/agent-runner.js';
 import { AuditedChatModel } from '../../runtime/audited-chat-model.js';
@@ -29,6 +33,7 @@ export interface RuntimeJobExecutionOptions {
   provider: string;
   modelName: string;
   tools: RuntimeTool[];
+  sandboxRoot?: string;
   maxContextTokens?: number;
   reservedOutputTokens?: number;
   maxIterations?: number;
@@ -43,7 +48,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
   readonly #running = new Set<string>();
   readonly #context = new ContextBuilder();
   readonly #options: Required<Omit<RuntimeJobExecutionOptions,
-    'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName'>>
+    'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName' | 'sandboxRoot'>>
     & RuntimeJobExecutionOptions;
 
   constructor(options: RuntimeJobExecutionOptions) {
@@ -108,6 +113,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       store: this.#options.store,
       workerId: this.#options.workerId,
       tools,
+      sandboxRoot: this.#options.sandboxRoot,
     });
     const langChainTools = toolExecutor.tools();
     const audited = this.#auditedModel(
@@ -182,6 +188,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
         store: this.#options.store,
         workerId: this.#options.workerId,
         tools: this.#options.tools,
+        sandboxRoot: this.#options.sandboxRoot,
       });
       const runner = new StepRunner({
         loop: new AgentLoop({ model: audited, streaming: true }),
@@ -197,7 +204,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
               activeRun!.id
             );
             const response = await repairModel.invoke([
-              new SystemMessage('Repair the value into valid StepOutputV1 JSON only.'),
+              new SystemMessage(STEP_OUTPUT_REPAIR_INSTRUCTION),
               new HumanMessage(JSON.stringify({ rawOutput, issues })),
             ]);
             return response.text;
@@ -286,7 +293,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       attemptId: job.currentAttemptId!,
       purpose,
       systemPrompt: purpose === 'step_execution'
-        ? 'Execute only the current PlanStep. Return StepOutputV1 JSON when complete.'
+        ? `Execute only the current PlanStep. ${STEP_OUTPUT_INSTRUCTION}`
         : 'Act as a reliable tool-using agent. Complete the user goal.',
       systemPromptVersion: 'runtime-system-v1',
       originalGoal,

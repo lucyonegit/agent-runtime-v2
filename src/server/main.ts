@@ -40,6 +40,7 @@ const executor = new RuntimeJobExecutionService({
   provider: modelConfig.provider,
   modelName: modelConfig.modelName,
   tools: createDefaultTools(),
+  sandboxRoot: process.env.AGENT_SANDBOX_ROOT ?? '.agent-sandbox',
   maxContextTokens: numberEnv('MODEL_MAX_CONTEXT_TOKENS', 128_000),
   reservedOutputTokens: numberEnv('MODEL_RESERVED_OUTPUT_TOKENS', 4_096),
   jobLeaseMs,

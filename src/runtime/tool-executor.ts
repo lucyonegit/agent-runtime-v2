@@ -2,6 +2,7 @@ import {
   ToolInputParsingException,
   type StructuredToolInterface,
 } from '@langchain/core/tools';
+import { resolve } from 'node:path';
 import { isToolMessage } from '@langchain/core/messages';
 import type { AgentToolInvocation, AgentToolSideEffectLevel } from '../domain/index.js';
 import type { ToolUserInputRequest } from '../agent-loop/loop-events.js';
@@ -18,6 +19,8 @@ import { checksumToolArguments } from './transaction-commands.js';
 export interface RuntimeToolContext {
   sessionId: string;
   jobId: string;
+  projectId?: string;
+  sandboxRoot: string;
   stepRunId?: string;
   attemptId: string;
   toolInvocationId: string;
@@ -41,6 +44,7 @@ export interface ToolExecutorOptions {
   store: AgentStore;
   workerId: string;
   tools: RuntimeTool[];
+  sandboxRoot?: string;
   clock?: { nowMs(): number };
 }
 
@@ -48,6 +52,7 @@ export class ToolExecutor implements ToolExecutorPort {
   readonly #store: AgentStore;
   readonly #workerId: string;
   readonly #tools: Map<string, RuntimeTool>;
+  readonly #sandboxRoot: string;
   readonly #clock: { nowMs(): number };
 
   constructor(options: ToolExecutorOptions) {
@@ -57,6 +62,7 @@ export class ToolExecutor implements ToolExecutorPort {
     if (this.#tools.size !== options.tools.length) {
       throw new TypeError('Runtime tool names must be unique.');
     }
+    this.#sandboxRoot = resolve(options.sandboxRoot ?? '.agent-sandbox');
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
   }
 
@@ -101,6 +107,8 @@ export class ToolExecutor implements ToolExecutorPort {
     const context: RuntimeToolContext = {
       sessionId: request.target.sessionId,
       jobId: request.target.jobId,
+      projectId: request.target.projectId,
+      sandboxRoot: this.#sandboxRoot,
       stepRunId: request.target.stepRunId,
       attemptId: request.target.attemptId,
       toolInvocationId: invocation.id,

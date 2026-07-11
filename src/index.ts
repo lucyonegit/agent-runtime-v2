@@ -26,6 +26,7 @@ export * from './runtime/runtime-event-writer.js';
 export * from './runtime/tool-executor.js';
 export * from './runtime/transaction-commands.js';
 export * from './storage/agent-store.js';
+export * from './tools/index.js';
 export * from './storage/postgres/index.js';
 export * from './view/session-view.js';
 export * from './view/timeline-builder.js';

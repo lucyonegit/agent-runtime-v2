@@ -61,6 +61,7 @@ export class StepRunner {
     const target = {
       sessionId: input.job.sessionId,
       jobId: input.job.id,
+      projectId: input.job.projectId,
       stepRunId: input.stepRun.id,
       attemptId,
     };
