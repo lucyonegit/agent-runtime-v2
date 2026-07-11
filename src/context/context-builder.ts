@@ -2,15 +2,17 @@ import { createHash } from 'node:crypto';
 import { SystemMessage, type BaseMessage } from '@langchain/core/messages';
 import type {
   AgentContextInputManifest,
-  AgentJob,
-  AgentStepRun,
   AgentToolInvocation,
   AgentMessage,
 } from '../domain/index.js';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import { ContextFilter } from './context-filter.js';
 import { ContextFormatter } from './context-formatter.js';
-import { CONTEXT_RULES_VERSION, type ContextPurpose } from './context-purpose.js';
+import {
+  CONTEXT_RULES_VERSION,
+  type ContextPurpose,
+  type ContextScope,
+} from './context-purpose.js';
 import {
   MessageGroupBuilder,
   messagesInGroup,
@@ -24,13 +26,10 @@ import {
 } from './token-budget.js';
 
 export interface BuildContextInput {
-  job: AgentJob;
-  stepRun?: AgentStepRun;
-  attemptId: string;
+  scope: ContextScope;
   purpose: ContextPurpose;
   systemPrompt: string;
   systemPromptVersion: string;
-  originalGoal: string;
   currentInstruction?: string;
   stableContext?: string;
   messages: AgentMessage[];
@@ -74,30 +73,29 @@ export class IncompleteMessageGroupError extends Error {
   }
 }
 
-export class ContextBuilder {
-  readonly #groupBuilder = new MessageGroupBuilder();
-  readonly #filter = new ContextFilter();
-  readonly #formatter = new ContextFormatter();
-  readonly #budget = new TokenBudget();
-  readonly #summaries = new ContextSummaryManager();
-
-  build(input: BuildContextInput): BuiltContext {
-    const builtGroups = this.#groupBuilder.build(input.messages, input.invocations);
+export function buildContext(input: BuildContextInput): BuiltContext {
+    const groupBuilder = new MessageGroupBuilder();
+    const filter = new ContextFilter();
+    const formatter = new ContextFormatter();
+    const budget = new TokenBudget();
+    const summaries = new ContextSummaryManager();
+    const builtGroups = groupBuilder.build(input.messages, input.invocations);
     const relevantBlocked = builtGroups.blocked.find(blocked => (
-      blocked.callMessage.jobId === input.job.id
-      && (!input.stepRun || blocked.callMessage.stepRunId === input.stepRun.id)
+      input.scope.kind !== 'session_history'
+      && blocked.callMessage.jobId === input.scope.jobId
+      && (input.scope.kind !== 'step_run'
+        || blocked.callMessage.stepRunId === input.scope.stepRunId)
     ));
     if (relevantBlocked) {
       throw new IncompleteMessageGroupError(
         `Tool exchange ${JSON.stringify(relevantBlocked.callMessage.id)} is incomplete: ${relevantBlocked.reason}.`
       );
     }
-    const groups = this.#filter.filter(builtGroups.groups, {
+    const groups = filter.filter(builtGroups.groups, {
       purpose: input.purpose === 'context_compression'
         ? input.compressionSourcePurpose ?? 'conversation'
         : input.purpose,
-      currentJobId: input.job.id,
-      currentStepRunId: input.stepRun?.id,
+      scope: input.scope,
     });
     const items: Array<TokenBudgetItem<ContextItem>> = [];
     let order = 0;
@@ -163,7 +161,7 @@ export class ContextBuilder {
     }
     for (const group of groups) {
       const messages = messagesInGroup(group);
-      const mustKeep = isCurrentGoalGroup(group, input.job.id, input.originalGoal);
+      const mustKeep = isCurrentGoalGroup(group, input.scope);
       if (
         !mustKeep
         && maxCoveredRowId > 0
@@ -181,7 +179,7 @@ export class ContextBuilder {
       });
     }
 
-    const selection = this.#budget.select(items, input.model);
+    const selection = budget.select(items, input.model);
     const formattedMessages: BaseMessage[] = [];
     const groupIds: string[] = [];
     const summaryIds: string[] = [];
@@ -201,7 +199,7 @@ export class ContextBuilder {
       }
       if (item.value.kind === 'group') {
         groupIds.push(item.value.group.id);
-        formattedMessages.push(...this.#formatter.formatGroup(item.value.group));
+        formattedMessages.push(...formatter.formatGroup(item.value.group));
       }
     }
     const selectedRows = selection.selected
@@ -223,7 +221,9 @@ export class ContextBuilder {
     const fixedPrefixChecksum = sha256(canonicalJson({
       systemPrompt: input.systemPrompt,
       stableContext: input.stableContext,
-      originalGoal: input.originalGoal,
+      originalGoal: input.scope.kind === 'session_history'
+        ? undefined
+        : input.scope.originalGoal,
       currentInstruction: input.currentInstruction,
       toolSchemaChecksum,
     }));
@@ -251,7 +251,7 @@ export class ContextBuilder {
       summaryIds,
       mustKeepMessageIds,
       compressibleMessageIds,
-      compressionRecommended: this.#summaries.shouldCompress({
+      compressionRecommended: summaries.shouldCompress({
         purpose: input.purpose,
         candidateTokens: selection.candidateTokens,
         safeInputLimit: selection.safeInputLimit,
@@ -259,23 +259,23 @@ export class ContextBuilder {
         messageThreshold: input.compressionMessageThreshold ?? 50,
       }),
     };
-  }
 }
 
 function groupPriority(group: MessageGroup, input: BuildContextInput): number {
   const messages = messagesInGroup(group);
-  if (input.stepRun && messages[0]?.stepRunId === input.stepRun.id) return 90;
+  if (input.scope.kind === 'step_run' && messages[0]?.stepRunId === input.scope.stepRunId) return 90;
   if (group.type === 'step_output') return 80;
-  if (messages[0]?.jobId === input.job.id) return 70;
+  if (input.scope.kind !== 'session_history' && messages[0]?.jobId === input.scope.jobId) return 70;
   return 40;
 }
 
-function isCurrentGoalGroup(group: MessageGroup, jobId: string, goal: string): boolean {
+function isCurrentGoalGroup(group: MessageGroup, scope: ContextScope): boolean {
+  if (scope.kind === 'session_history') return false;
   const messages = messagesInGroup(group);
   return group.type === 'single'
-    && messages[0]?.jobId === jobId
+    && messages[0]?.jobId === scope.jobId
     && messages[0]?.messageType === 'user_message'
-    && messages[0]?.content === goal;
+    && messages[0]?.content === scope.originalGoal;
 }
 
 function sha256(value: string): string {

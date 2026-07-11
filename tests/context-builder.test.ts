@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type {
-  AgentJob,
   AgentMessage,
-  AgentStepRun,
   AgentToolInvocation,
 } from '../src/domain/index.js';
 import {
-  ContextBuilder,
+  buildContext,
   IncompleteMessageGroupError,
 } from '../src/context/context-builder.js';
 import { ContextFilter } from '../src/context/context-filter.js';
@@ -91,8 +89,12 @@ describe('ContextFilter', () => {
 
     const filtered = new ContextFilter().filter(groups, {
       purpose: 'step_execution',
-      currentJobId: 'job_1',
-      currentStepRunId: 'run_current',
+      scope: {
+        kind: 'step_run',
+        jobId: 'job_1',
+        stepRunId: 'run_current',
+        originalGoal: 'goal',
+      },
     });
     expect(filtered.map(group => group.id)).toEqual([
       'message:goal',
@@ -121,7 +123,7 @@ describe('ContextFilter', () => {
 
     expect(new ContextFilter().filter(groups, {
       purpose: 'plan_final',
-      currentJobId: 'job_1',
+      scope: { kind: 'job', jobId: 'job_1', originalGoal: 'goal' },
     }).map(group => group.id)).toEqual(['message:goal', 'step_output:step_output']);
   });
 });
@@ -165,14 +167,16 @@ describe('ContextBuilder', () => {
       { id: 'call_lookup', name: 'lookup', args: { q: 'docs' } },
     ]);
     const result = toolResultMessage('result_context', 3, 'call_lookup', 'lookup');
-    const context = new ContextBuilder().build({
-      job: jobFixture,
-      stepRun: stepRunFixture,
-      attemptId: 'attempt_1',
+    const context = buildContext({
+      scope: {
+        kind: 'step_run',
+        jobId: 'job_1',
+        stepRunId: 'run_current',
+        originalGoal: 'goal',
+      },
       purpose: 'step_execution',
       systemPrompt: 'system',
       systemPromptVersion: 'system-v1',
-      originalGoal: 'goal',
       currentInstruction: 'do step',
       messages: [goalMessage, call, result],
       invocations: [
@@ -218,14 +222,16 @@ describe('ContextBuilder', () => {
     const call = toolCallMessage('call_incomplete', 'run_current', [
       { id: 'call_wait', name: 'wait', args: {} },
     ]);
-    expect(() => new ContextBuilder().build({
-      job: jobFixture,
-      stepRun: stepRunFixture,
-      attemptId: 'attempt_1',
+    expect(() => buildContext({
+      scope: {
+        kind: 'step_run',
+        jobId: 'job_1',
+        stepRunId: 'run_current',
+        originalGoal: 'goal',
+      },
       purpose: 'step_execution',
       systemPrompt: 'system',
       systemPromptVersion: 'v1',
-      originalGoal: 'goal',
       currentInstruction: 'step',
       messages: [goalMessage, call],
       invocations: [
@@ -244,13 +250,11 @@ describe('ContextBuilder', () => {
       id: 'recent_assistant', rowId: 3, role: 'assistant',
       messageType: 'assistant_message', content: 'recent tail',
     });
-    const context = new ContextBuilder().build({
-      job: jobFixture,
-      attemptId: 'attempt_1',
+    const context = buildContext({
+      scope: { kind: 'job', jobId: 'job_1', originalGoal: 'goal' },
       purpose: 'job_execution',
       systemPrompt: 'system',
       systemPromptVersion: 'v1',
-      originalGoal: 'goal',
       messages: [goalMessage, old, recent],
       invocations: [],
       summaries: [{ id: 'summary_covered', summary: 'compressed history', sourceRowIdEnd: 2 }],
@@ -278,13 +282,11 @@ describe('ContextBuilder', () => {
     const currentUser = message({
       id: 'current_user', rowId: 12, content: '现在几点了？',
     });
-    const context = new ContextBuilder().build({
-      job: jobFixture,
-      attemptId: 'attempt_1',
+    const context = buildContext({
+      scope: { kind: 'job', jobId: 'job_1', originalGoal: '现在几点了？' },
       purpose: 'job_execution',
       systemPrompt: 'system',
       systemPromptVersion: 'v1',
-      originalGoal: '现在几点了？',
       messages: [currentUser, previousAssistant, previousUser],
       invocations: [],
       model: { provider: 'test', name: 'model', maxContextTokens: 1000, reservedOutputTokens: 100 },
@@ -308,7 +310,7 @@ describe('ContextBuilder', () => {
     ]);
   });
 
-  it('keeps complete historical Plan execution and matched tools in cross-Job context', () => {
+  it('builds complete Session history deterministically without mutating its input', () => {
     const previousUser = message({
       id: 'previous_user', rowId: 10, jobId: 'job_previous', content: '调查并生成报告',
     });
@@ -336,9 +338,6 @@ describe('ContextBuilder', () => {
       id: 'plan_final', rowId: 15, jobId: 'job_previous', role: 'assistant',
       messageType: 'plan_final', channel: 'final', content: '最终报告',
     });
-    const currentUser = message({
-      id: 'current_user', rowId: 16, content: '第二步具体做了什么？',
-    });
     const previousInvocation = {
       ...invocation(
         'previous_invocation', previousCall, previousResult,
@@ -348,20 +347,22 @@ describe('ContextBuilder', () => {
       stepRunId: 'run_previous',
     };
 
-    const context = new ContextBuilder().build({
-      job: jobFixture,
-      attemptId: 'attempt_1',
-      purpose: 'job_execution',
+    const messages = [
+      previousOutput, previousResult, planFinal,
+      previousCall, planCreated, previousUser,
+    ];
+    const messagesBeforeBuild = structuredClone(messages);
+    const input = {
+      scope: { kind: 'session_history' as const },
+      purpose: 'job_execution' as const,
       systemPrompt: 'system',
       systemPromptVersion: 'v1',
-      originalGoal: currentUser.content,
-      messages: [
-        currentUser, previousOutput, previousResult, planFinal,
-        previousCall, planCreated, previousUser,
-      ],
+      messages,
       invocations: [previousInvocation],
       model: { provider: 'test', name: 'model', maxContextTokens: 4_000, reservedOutputTokens: 200 },
-    });
+    };
+    const context = buildContext(input);
+    const rebuilt = buildContext(input);
 
     expect(context.inputManifest.messageGroupIds).toEqual([
       'message:previous_user',
@@ -369,7 +370,6 @@ describe('ContextBuilder', () => {
       'tool_exchange:previous_call',
       'step_output:previous_output',
       'message:plan_final',
-      'message:current_user',
     ]);
     expect(context.messages.map(item => item.content)).toEqual([
       'system',
@@ -379,9 +379,8 @@ describe('ContextBuilder', () => {
       'result:web_search',
       'structured step output',
       '最终报告',
-      '第二步具体做了什么？',
     ]);
-    expect(context.mustKeepMessageIds).toEqual(['current_user']);
+    expect(context.mustKeepMessageIds).toEqual([]);
     expect(context.compressibleMessageIds).toEqual([
       'previous_user',
       'plan_created',
@@ -390,6 +389,11 @@ describe('ContextBuilder', () => {
       'previous_output',
       'plan_final',
     ]);
+    expect(rebuilt.inputManifest).toEqual(context.inputManifest);
+    expect(rebuilt.messages.map(item => item.toDict())).toEqual(
+      context.messages.map(item => item.toDict())
+    );
+    expect(messages).toEqual(messagesBeforeBuild);
   });
 
   it('keeps the current user message even when a summary covers its row', () => {
@@ -399,13 +403,11 @@ describe('ContextBuilder', () => {
     const currentUser = message({
       id: 'current_user', rowId: 21, content: '当前问题',
     });
-    const context = new ContextBuilder().build({
-      job: jobFixture,
-      attemptId: 'attempt_1',
+    const context = buildContext({
+      scope: { kind: 'job', jobId: 'job_1', originalGoal: '当前问题' },
       purpose: 'job_execution',
       systemPrompt: 'system',
       systemPromptVersion: 'v1',
-      originalGoal: '当前问题',
       messages: [previousUser, currentUser],
       invocations: [],
       summaries: [{
@@ -507,33 +509,3 @@ function invocation(
 }
 
 const goalMessage = message({ id: 'goal', content: 'goal' });
-
-const jobFixture: AgentJob = {
-  id: 'job_1',
-  sessionId: 'session_1',
-  strategy: 'planned',
-  stage: 'step_execution',
-  status: 'running',
-  currentAttemptId: 'attempt_1',
-  attemptNo: 1,
-  leaseOwner: 'worker_1',
-  leaseExpiresAtMs: 100,
-  version: 1,
-  createdAtMs: 1,
-  updatedAtMs: 1,
-};
-
-const stepRunFixture: AgentStepRun = {
-  id: 'run_current',
-  sessionId: 'session_1',
-  jobId: 'job_1',
-  planId: 'plan_1',
-  stepId: 'step_1',
-  runNo: 1,
-  status: 'running',
-  currentAttemptId: 'attempt_1',
-  attemptNo: 1,
-  version: 1,
-  createdAtMs: 1,
-  updatedAtMs: 1,
-};

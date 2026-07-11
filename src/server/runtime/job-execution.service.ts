@@ -5,10 +5,10 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import type { Runnable } from '@langchain/core/runnables';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import { AgentLoop } from '../../agent-loop/agent-loop.js';
-import { ContextBuilder } from '../../context/context-builder.js';
-import type { BuiltContext } from '../../context/context-builder.js';
+import { buildContext } from '../../context/context-builder.js';
+import type { BuildContextInput, BuiltContext } from '../../context/context-builder.js';
 import { CONTEXT_RULES_VERSION } from '../../context/context-purpose.js';
-import type { AgentJob, AgentModelCallType } from '../../domain/index.js';
+import type { AgentJob, AgentModelCallType, AgentStepRun } from '../../domain/index.js';
 import type { JobExecutionService } from '../../orchestration/agent-runtime.js';
 import { PlanEngine } from '../../planner/plan-engine.js';
 import { PlanSummarizer } from '../../planner/plan-summarizer.js';
@@ -47,7 +47,6 @@ export interface RuntimeJobExecutionOptions {
 
 export class RuntimeJobExecutionService implements JobExecutionService {
   readonly #running = new Set<string>();
-  readonly #context = new ContextBuilder();
   readonly #options: Required<Omit<RuntimeJobExecutionOptions,
     'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName' | 'sandboxRoot'>>
     & RuntimeJobExecutionOptions;
@@ -279,7 +278,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     job: AgentJob,
     originalGoal: string,
     purpose: 'job_execution' | 'step_execution',
-    stepRun?: Parameters<ContextBuilder['build']>[0]['stepRun'],
+    stepRun?: AgentStepRun,
     currentInstruction?: string
   ): Promise<BuiltContext> {
     const [messages, invocations, summaries] = await Promise.all([
@@ -293,15 +292,19 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       ),
     ]);
     const buildInput = {
-      job,
-      stepRun,
-      attemptId: job.currentAttemptId!,
+      scope: stepRun
+        ? {
+            kind: 'step_run' as const,
+            jobId: job.id,
+            stepRunId: stepRun.id,
+            originalGoal,
+          }
+        : { kind: 'job' as const, jobId: job.id, originalGoal },
       purpose,
       systemPrompt: purpose === 'step_execution'
         ? `Execute only the current PlanStep. ${STEP_OUTPUT_INSTRUCTION}`
         : 'Act as a reliable tool-using agent. Complete the user goal.',
       systemPromptVersion: 'runtime-system-v1',
-      originalGoal,
       currentInstruction,
       messages,
       invocations,
@@ -322,8 +325,8 @@ export class RuntimeJobExecutionService implements JobExecutionService {
         && !isCurrentJobGoalMessage(message, job.id, originalGoal)
       )).length,
       compressionMessageThreshold: this.#options.compressionMessageThreshold,
-    } satisfies Parameters<ContextBuilder['build']>[0];
-    const built = this.#context.build(buildInput);
+    } satisfies BuildContextInput;
+    const built = buildContext(buildInput);
     if (!built.compressionRecommended) return built;
     return this.#compressContext(job, originalGoal, purpose, buildInput, built, stepRun?.id);
   }
@@ -332,7 +335,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     job: AgentJob,
     originalGoal: string,
     purpose: 'job_execution' | 'step_execution',
-    buildInput: Parameters<ContextBuilder['build']>[0],
+    buildInput: BuildContextInput,
     built: BuiltContext,
     stepRunId?: string
   ): Promise<BuiltContext> {
@@ -341,7 +344,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     if (sourceMessages.length === 0) return built;
     const start = Math.min(...sourceMessages.map(message => message.rowId));
     const end = Math.max(...sourceMessages.map(message => message.rowId));
-    const compressionContext = this.#context.build({
+    const compressionContext = buildContext({
       ...buildInput,
       messages: sourceMessages,
       purpose: 'context_compression',
@@ -391,7 +394,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       purpose,
       built.contextRulesVersion
     );
-    return this.#context.build({
+    return buildContext({
       ...buildInput,
       summaries: summaries.map(item => ({
         id: item.id,

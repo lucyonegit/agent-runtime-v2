@@ -1,43 +1,47 @@
-import type { ContextPurpose } from './context-purpose.js';
+import type { ContextPurpose, ContextScope } from './context-purpose.js';
 import { messagesInGroup, type MessageGroup } from './message-group-builder.js';
 
 export interface ContextFilterInput {
   purpose: ContextPurpose;
-  currentJobId: string;
-  currentStepRunId?: string;
+  scope: ContextScope;
 }
 
 export class ContextFilter {
   filter(groups: MessageGroup[], input: ContextFilterInput): MessageGroup[] {
-    const originalGoal = findOriginalGoal(groups, input.currentJobId);
+    const originalGoal = findOriginalGoal(groups, input.scope);
     return groups.filter(group => {
       const messages = messagesInGroup(group);
       if (messages.some(message => message.visibility === 'internal')) return false;
       if (messages.some(message => message.messageType === 'progress')) return false;
       if (group === originalGoal) return true;
+      if (input.scope.kind === 'session_history') return true;
 
       const jobId = messages[0]?.jobId;
       const stepRunId = messages[0]?.stepRunId;
+      const currentJobId = input.scope.jobId;
+      const currentStepRunId = input.scope.kind === 'step_run'
+        ? input.scope.stepRunId
+        : undefined;
       switch (input.purpose) {
         case 'plan_final':
-          return group.type === 'step_output' && jobId === input.currentJobId;
+          return group.type === 'step_output' && jobId === currentJobId;
         case 'step_execution':
           return (
-            group.type === 'step_output' && jobId === input.currentJobId
+            group.type === 'step_output' && jobId === currentJobId
           ) || (
-            jobId === input.currentJobId
-            && stepRunId === input.currentStepRunId
+            jobId === currentJobId
+            && stepRunId === currentStepRunId
             && group.type !== 'step_output'
           );
         case 'job_execution':
           return (
-            jobId === input.currentJobId
-            && (!stepRunId || stepRunId === input.currentStepRunId)
+            jobId === currentJobId
+            && (!stepRunId || stepRunId === currentStepRunId)
           )
-            || jobId !== input.currentJobId;
+            || jobId !== currentJobId;
         case 'code_execution':
-          return jobId === input.currentJobId
-            && (!stepRunId || stepRunId === input.currentStepRunId);
+          return jobId === currentJobId
+            && (!stepRunId || stepRunId === currentStepRunId);
         case 'conversation':
         case 'context_compression':
           return true;
@@ -46,9 +50,12 @@ export class ContextFilter {
   }
 }
 
-function findOriginalGoal(groups: MessageGroup[], jobId: string): MessageGroup | undefined {
+function findOriginalGoal(groups: MessageGroup[], scope: ContextScope): MessageGroup | undefined {
+  if (scope.kind === 'session_history') return undefined;
   return groups.find(group => {
     const message = messagesInGroup(group)[0];
-    return message?.jobId === jobId && message.messageType === 'user_message';
+    return message?.jobId === scope.jobId
+      && message.messageType === 'user_message'
+      && message.content === scope.originalGoal;
   });
 }
