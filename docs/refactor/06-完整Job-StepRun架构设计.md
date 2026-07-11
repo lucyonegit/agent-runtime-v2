@@ -1,10 +1,10 @@
 # Agent Runtime V2 完整 Job + StepRun 架构设计
 
-> 状态：Canonical Design Candidate
+> 状态：Canonical Design，Job + StepRun 与 LangChain 原生模型边界已落地
 >
 > 本文是 Agent Runtime V2 的统一目标设计。它保留 00–03 中“消息时间线、显式恢复、上下文投影、UI 与数据库统一”的核心方向，选择性采用 04 的命名，并吸收 05 中关于幂等、副作用、锁归属和 SSE 重连的修订。
 >
-> 当本文与 01–05 的目标命名、表结构或恢复语义冲突时，以本文为准。本文描述目标设计，不代表当前代码已经实现。
+> 当本文与 01–05 的目标命名、表结构、模型协议或恢复语义冲突时，以本文为准。
 
 ## 1. 设计目标
 
@@ -20,12 +20,13 @@
 8. 上下文按 purpose、owner、预算和完整消息组构建，不把整个 session 无条件塞入模型。
 9. 实时 UI 与刷新后的 `GET /view` 最终一致；断线重连的 MVP 采用全量 view 恢复。
 10. PostgreSQL 使用 canonical schema 和版本化 migration；启动路径不猜测或改写旧结构。
+11. 模型、消息、工具和 provider 能力以 LangChain 为唯一协议边界，不在 Runtime 内复制一套平行 DTO。
 
 ## 2. 非目标
 
 本轮设计明确不包含：
 
-- 不引入 LangGraph 或其他完整图执行引擎。
+- 不引入 LangGraph 或其他完整图执行引擎；但 `@langchain/core` 与 provider package 是模型层的强制基础设施。
 - 不实现同一个 Job 内多个 PlanStep 并行执行。
 - 不承诺外部副作用 exactly-once；系统提供可证明的 at-least-once/人工消歧边界。
 - 不在首版实现持久化 SSE outbox；断线后通过全量 view 恢复。
@@ -105,7 +106,7 @@
 | `model_call_id` | AgentRunner | 一次 LLM 调用 | usage 与输入审计 |
 | `logical_call_key` | workflow | Job 内稳定 | 模型调用重试检测 |
 | `output_id` | AgentLoop | 一次模型输出 | delta 与最终文本合并 |
-| `tool_call_id` | 模型或 assembler | 一个 tool call | LLM tool protocol 配对 |
+| `tool_call_id` | LangChain/provider | 一个 tool call | LLM tool protocol 配对 |
 | `tool_invocation_id` | RuntimeEventWriter | 一个 tool call 的运行状态 | 工具恢复与副作用审计 |
 | `idempotency_key` | ToolExecutor | 一个外部副作用 | 传给支持幂等的工具/provider |
 | `message_id` | RuntimeEventWriter | 一条已提交消息 | SSE entity merge |
@@ -144,7 +145,9 @@ flowchart TB
   Engine --> Summarizer["PlanSummarizer<br/>纯净最终汇总"]
   Runner --> Context["ContextBuilder<br/>purpose · MessageGroup · budget"]
   Runner --> Loop["AgentLoop<br/>通用 ReAct 协议"]
+  Loop --> LCModel["LangChain BaseChatModel<br/>invoke · stream · bindTools"]
   Loop --> ToolExecutor["ToolExecutor<br/>幂等 · 副作用 · 恢复"]
+  ToolExecutor --> LCTools["LangChain StructuredTool<br/>ToolCall · ToolMessage"]
   Runner --> Writer["RuntimeEventWriter<br/>事务提交 · entity event"]
   StepRunner --> Writer
   Engine --> Writer
@@ -159,7 +162,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  Core["agent-loop"] --> Ports["domain ports"]
+  Core["agent-loop"] --> LangChain["@langchain/core"]
   Runtime["runtime"] --> Core
   Runtime --> Context["context"]
   Planner["planner"] --> Runtime
@@ -174,6 +177,7 @@ flowchart LR
 规则：
 
 - `agent-loop` 不 import storage、server、planner、view。
+- `agent-loop` 直接消费 LangChain `BaseMessage`、`AIMessageChunk` 与 `Runnable`，禁止自定义 ModelRequest/ModelResponse。
 - `context` 不 import server 或前端类型。
 - `storage` 实现 domain port，不反向 import orchestration。
 - `view` 只能读取已提交实体，不调用模型和工具。
@@ -187,11 +191,11 @@ src/
     agent-loop.ts
     loop-events.ts
     loop-result.ts
-    tool-call-assembler.ts
-    model-port.ts
+    langchain-model.ts
 
   runtime/
     agent-runner.ts
+    audited-chat-model.ts
     job-coordinator.ts
     runtime-event-writer.ts
     tool-executor.ts
@@ -248,8 +252,15 @@ src/
     code-agent.ts
 
   server/
+    main.ts
     http/
     runtime/
+      langchain-model-provider.ts
+      model-config.ts
+      default-tools.ts
+      default-planner.ts
+      job-execution.service.ts
+      runtime-event-bus.ts
 
 scripts/
   reset-agent-runtime-schema.ts
@@ -1270,6 +1281,21 @@ Session -> Job -> Plan -> PlanStep -> StepRun -> ToolInvocation -> UserInputRequ
 
 ## 11. AgentLoop 协议
 
+模型边界固定如下：
+
+```mermaid
+flowchart LR
+  Context["ContextFormatter"] --> Messages["SystemMessage · HumanMessage · AIMessage · ToolMessage"]
+  Messages --> Audit["AuditedChatModel Runnable wrapper"]
+  Audit --> Bound["BaseChatModel.bindTools"]
+  Bound --> Provider["ChatOpenAI / other LangChain provider"]
+  Provider --> Chunk["AIMessageChunk"]
+  Chunk --> Merge["AIMessageChunk.concat"]
+  Merge --> Turn["text · tool_calls · invalid_tool_calls · usage_metadata"]
+```
+
+`AgentLoop` 接收 `Runnable<BaseLanguageModelInput, AIMessageChunk>`，非流式走 `invoke()`，流式走 `stream()`。Provider 工厂负责构造 `BaseChatModel`；审计层是保持原始 LangChain 输入输出类型的 Runnable wrapper。禁止引入 `ModelPort`、`ModelRequest`、`ModelResponse`、`ModelStreamChunk` 或拆解再重组 `AIMessage` 的桥接 DTO。
+
 ### 11.1 输入
 
 ```ts
@@ -1281,7 +1307,7 @@ interface AgentLoopInput {
     stepRunId?: string;
     attemptId: string;
   };
-  tools: AgentToolDefinition[];
+  tools: StructuredToolInterface[];
   toolExecutor: ToolExecutorPort;
   outputIdFactory: () => string;
   limits: {
@@ -1308,7 +1334,7 @@ type LoopEvent =
       outputId: string;
       content: string;
       toolCalls: AgentToolCall[];
-      usage?: ProviderTokenUsage;
+      usage?: UsageMetadata;
     }
   | {
       type: 'tool.result.completed';
@@ -1432,18 +1458,16 @@ StepRun 的 final candidate 在服务端缓冲；只有 StepOutput 校验成功�
 
 ## 12. 工具执行与副作用恢复
 
-### 12.1 工具契约
+### 12.1 LangChain 原生工具契约
 
 ```ts
-interface AgentToolDefinition {
-  name: string;
-  description: string;
-  schema: JsonSchema;
+interface RuntimeTool {
+  tool: StructuredToolInterface;
   sideEffectLevel: 'read_only' | 'idempotent' | 'side_effecting';
   sensitiveArgumentPaths?: string[];
 }
 
-interface ToolExecutionContext {
+interface RuntimeToolContext {
   sessionId: string;
   jobId: string;
   stepRunId?: string;
@@ -1451,11 +1475,11 @@ interface ToolExecutionContext {
   toolInvocationId: string;
   toolCallId: string;
   idempotencyKey: string;
-  sandboxRoot: string;
-  projectId?: string;
   signal?: AbortSignal;
 }
 ```
+
+工具名称、描述、JSON Schema、参数校验和 `invoke()` 来自 `StructuredToolInterface`；动态工具使用 `DynamicStructuredTool`。Runtime 只补充数据库恢复所需的副作用等级和敏感字段路径，并通过 `RunnableConfig.configurable.agentRuntimeContext` 注入执行上下文。模型返回 LangChain `ToolCall`，工具以该 ToolCall 调用并返回 `ToolMessage`。HITL 使用 `ToolMessage.artifact` 中的 `requires_user_input` 业务信号，不创建第二套工具协议。
 
 ### 12.2 Crash recovery matrix
 
@@ -1488,11 +1512,11 @@ interface ToolExecutionContext {
 
 ### 12.4 流式 tool arguments
 
-`ToolCallAssembler` 按 provider index 累积：
+Runtime 不维护 provider 专用 assembler。流式响应直接累积 `AIMessageChunk.concat()`，读取 LangChain 标准化后的 `tool_calls`、`tool_call_chunks` 与 `invalid_tool_calls`：
 
-- ID/name 缺失：生成稳定 fallback ID，但记录 provider 原始字段。
-- JSON 解析失败：不得 filter；创建 failed invocation 和失败 tool result，错误码 `invalid_tool_arguments`。
-- 重复 index/name 冲突：模型调用 failed，原始 chunks 只存入受控 error details，执行前进行敏感字段清洗。
+- 完整调用使用 LangChain `ToolCall`；缺少 provider ID 时由 Runtime 仅补稳定 fallback ID。
+- 参数 JSON 失败进入 `invalid_tool_calls`，转成稳定 failed invocation/tool result，错误码 `invalid_tool_arguments`，不得静默丢弃。
+- provider chunk 拼接、index/name 合并与 JSON 解析由 LangChain/provider adapter 负责；Runtime 只处理业务终态与持久化。
 
 ## 13. 原子事务命令集
 
@@ -1784,7 +1808,7 @@ interface BuildContextInput {
     maxContextTokens: number;
     reservedOutputTokens: number;
   };
-  toolSchemas?: AgentToolDefinition[];
+  toolSchemas?: StructuredToolInterface[];
 }
 
 interface BuiltContext {
@@ -2118,7 +2142,7 @@ POST /user-input-requests/:requestId/answer
 ### 24.1 敏感字段
 
 - 启动日志不得输出 DATABASE_URL、API key 或完整 provider headers。
-- ToolDefinition 声明 `sensitiveArgumentPaths`；持久化 arguments 前按路径脱敏。
+- RuntimeTool 声明 `sensitiveArgumentPaths`；持久化 arguments 前按路径脱敏。
 - ToolExecutor 使用内存中的原始参数执行，数据库只保留脱敏 payload + checksum。
 - UserInputRequest 可配置 sensitive answer；首版至少对普通 view 隐藏，生产应使用字段级加密。
 - error_details 在写库前经过错误清洗，禁止直接 JSON.stringify provider request。
@@ -2143,7 +2167,7 @@ POST /user-input-requests/:requestId/answer
 | 模块 | 必测内容 |
 | --- | --- |
 | AgentLoop | 终态、事件顺序、空输出、迭代/工具限制、流式参数失败 |
-| ToolCallAssembler | 多 chunk、乱序 index、invalid JSON、重复字段 |
+| LangChain chunk adapter | `AIMessageChunk.concat()`、多 tool call、`invalid_tool_calls`、usage 合并 |
 | ToolExecutor | side effect policy、idempotency key、unknown recovery |
 | JobCoordinator | 状态转换、lease claim、lease lost、failed terminal |
 | StepRunner | run_no、一次 repair、StepOutput schema |

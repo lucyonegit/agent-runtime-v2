@@ -4,7 +4,7 @@ import type {
   AgentUserInputSchema,
   AgentUserInputSource,
 } from '../domain/index.js';
-import type { ProviderTokenUsage } from './model-port.js';
+import type { UsageMetadata } from '@langchain/core/messages';
 
 export const LOOP_EVENT_TYPES = {
   ModelOutputDelta: 'model.output.delta',
@@ -37,7 +37,7 @@ export type LoopEvent =
       outputId: string;
       content: string;
       toolCalls: AgentToolCall[];
-      usage?: ProviderTokenUsage;
+      usage?: UsageMetadata;
     }
   | {
       type: typeof LOOP_EVENT_TYPES.ToolResultCompleted;

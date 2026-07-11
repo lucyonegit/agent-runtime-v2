@@ -6,7 +6,7 @@ import {
   type ToolExecutorPort,
 } from '../agent-loop/agent-loop.js';
 import { LOOP_EVENT_TYPES, type LoopEvent } from '../agent-loop/loop-events.js';
-import type { AgentToolDefinition } from '../agent-loop/model-port.js';
+import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { AgentJob, AgentStepRun } from '../domain/index.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { RuntimeError } from '../runtime/runtime-errors.js';
@@ -49,7 +49,7 @@ export class StepRunner {
     job: AgentJob;
     stepRun: AgentStepRun;
     messages: BaseMessage[];
-    tools: AgentToolDefinition[];
+    tools: StructuredToolInterface[];
     toolExecutor: ToolExecutorPort;
     outputIdFactory: () => string;
     limits: AgentLoopLimits;

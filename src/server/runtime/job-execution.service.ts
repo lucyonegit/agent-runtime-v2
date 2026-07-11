@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { HumanMessage, SystemMessage, type AIMessageChunk } from '@langchain/core/messages';
+import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { Runnable } from '@langchain/core/runnables';
+import type { StructuredToolInterface } from '@langchain/core/tools';
 import { AgentLoop } from '../../agent-loop/agent-loop.js';
-import type { AgentLoopModelPort } from '../../agent-loop/model-port.js';
 import { ContextBuilder } from '../../context/context-builder.js';
 import type { BuiltContext } from '../../context/context-builder.js';
 import type { AgentJob, AgentModelCallType } from '../../domain/index.js';
@@ -10,7 +13,7 @@ import { PlanEngine } from '../../planner/plan-engine.js';
 import { PlanSummarizer } from '../../planner/plan-summarizer.js';
 import { StepRunner } from '../../planner/step-runner.js';
 import { AgentRunner } from '../../runtime/agent-runner.js';
-import { AuditedModelPort } from '../../runtime/audited-model-port.js';
+import { AuditedChatModel } from '../../runtime/audited-chat-model.js';
 import { JobCoordinator } from '../../runtime/job-coordinator.js';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
 import { RuntimeEventWriter, type RuntimeEventPublisher } from '../../runtime/runtime-event-writer.js';
@@ -22,7 +25,7 @@ export interface RuntimeJobExecutionOptions {
   store: AgentStore;
   workerId: string;
   publisher: RuntimeEventPublisher;
-  model: AgentLoopModelPort;
+  model: BaseChatModel;
   provider: string;
   modelName: string;
   tools: RuntimeTool[];
@@ -100,13 +103,16 @@ export class RuntimeJobExecutionService implements JobExecutionService {
 
   async #runDirect(job: AgentJob, originalGoal: string): Promise<void> {
     const built = await this.#buildContext(job, originalGoal, 'job_execution');
-    const audited = this.#auditedModel(job, built, 'job.react', 'job.react');
     const tools = this.#options.tools;
     const toolExecutor = new ToolExecutor({
       store: this.#options.store,
       workerId: this.#options.workerId,
       tools,
     });
+    const langChainTools = toolExecutor.tools();
+    const audited = this.#auditedModel(
+      job, built, 'job.react', 'job.react', undefined, langChainTools
+    );
     const writer = this.#writer(tools);
     const coordinator = new JobCoordinator({
       store: this.#options.store,
@@ -120,7 +126,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     const result = await runner.runDirect({
       job,
       messages: built.messages,
-      tools: toolExecutor.definitions(),
+      tools: langChainTools,
       toolExecutor,
       outputIdFactory: outputId,
       limits: this.#limits(),
@@ -163,12 +169,14 @@ export class RuntimeJobExecutionService implements JobExecutionService {
         activeRun,
         step.instruction
       );
+      const langChainTools = this.#options.tools.map(tool => tool.tool);
       const audited = this.#auditedModel(
         currentJob,
         built,
         'step.react',
         `step.react:${activeRun.id}`,
-        activeRun.id
+        activeRun.id,
+        langChainTools
       );
       const toolExecutor = new ToolExecutor({
         store: this.#options.store,
@@ -188,14 +196,11 @@ export class RuntimeJobExecutionService implements JobExecutionService {
               `step.output_repair:${activeRun!.id}`,
               activeRun!.id
             );
-            const response = await repairModel.invoke({
-              messages: [
-                new SystemMessage('Repair the value into valid StepOutputV1 JSON only.'),
-                new HumanMessage(JSON.stringify({ rawOutput, issues })),
-              ],
-              tools: [],
-            });
-            return response.content;
+            const response = await repairModel.invoke([
+              new SystemMessage('Repair the value into valid StepOutputV1 JSON only.'),
+              new HumanMessage(JSON.stringify({ rawOutput, issues })),
+            ]);
+            return response.text;
           },
         },
       });
@@ -203,7 +208,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
         job: currentJob,
         stepRun: activeRun,
         messages: built.messages,
-        tools: toolExecutor.definitions(),
+        tools: langChainTools,
         toolExecutor,
         outputIdFactory: outputId,
         limits: this.#limits(),
@@ -299,7 +304,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
         maxContextTokens: this.#options.maxContextTokens,
         reservedOutputTokens: this.#options.reservedOutputTokens,
       },
-      toolSchemas: this.#options.tools.map(tool => tool.definition),
+      toolSchemas: this.#options.tools.map(tool => tool.tool),
       newCompressibleMessageCount: messages.filter(message => (
         message.rowId > Math.max(0, ...summaries.map(summary => summary.sourceRowIdEnd))
       )).length,
@@ -339,8 +344,8 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       `context.compress:${stepRunId ?? job.id}:${end}`,
       stepRunId
     );
-    const response = await model.invoke({ messages: compressionContext.messages, tools: [] });
-    const summary = typeof response.content === 'string' ? response.content.trim() : JSON.stringify(response.content);
+    const response = await model.invoke(compressionContext.messages);
+    const summary = response.text.trim();
     if (!summary) throw new Error('Context compression returned an empty summary.');
     await this.#options.store.replaceContextSummary({
       id: `summary_${randomUUID()}`,
@@ -388,10 +393,11 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     built: BuiltContext,
     callType: AgentModelCallType,
     logicalCallKey: string,
-    stepRunId?: string
-  ): AuditedModelPort {
-    return new AuditedModelPort({
-      delegate: this.#options.model,
+    stepRunId?: string,
+    tools: StructuredToolInterface[] = []
+  ): AuditedChatModel {
+    return new AuditedChatModel({
+      delegate: this.#bindTools(tools),
       store: this.#options.store,
       workerId: this.#options.workerId,
       target: {
@@ -411,11 +417,19 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     });
   }
 
+  #bindTools(tools: StructuredToolInterface[]): Runnable<BaseLanguageModelInput, AIMessageChunk> {
+    if (tools.length === 0) return this.#options.model;
+    if (!this.#options.model.bindTools) {
+      throw new Error(`Model ${this.#options.modelName} does not support LangChain bindTools().`);
+    }
+    return this.#options.model.bindTools(tools) as Runnable<BaseLanguageModelInput, AIMessageChunk>;
+  }
+
   #writer(tools: RuntimeTool[]): RuntimeEventWriter {
     return new RuntimeEventWriter({
       store: this.#options.store,
       workerId: this.#options.workerId,
-      tools: tools.map(tool => tool.definition),
+      tools,
       publisher: this.#options.publisher,
     });
   }

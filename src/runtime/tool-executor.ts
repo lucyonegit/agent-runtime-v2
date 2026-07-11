@@ -1,11 +1,16 @@
-import type { AgentToolInvocation } from '../domain/index.js';
+import {
+  ToolInputParsingException,
+  type StructuredToolInterface,
+} from '@langchain/core/tools';
+import { isToolMessage } from '@langchain/core/messages';
+import type { AgentToolInvocation, AgentToolSideEffectLevel } from '../domain/index.js';
+import type { ToolUserInputRequest } from '../agent-loop/loop-events.js';
 import {
   FatalToolExecutionError,
   type ToolExecutionRequest,
   type ToolExecutionResult,
   type ToolExecutorPort,
 } from '../agent-loop/agent-loop.js';
-import type { AgentToolDefinition } from '../agent-loop/model-port.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { mapStoreError } from './runtime-errors.js';
 import { checksumToolArguments } from './transaction-commands.js';
@@ -22,11 +27,14 @@ export interface RuntimeToolContext {
 }
 
 export interface RuntimeTool {
-  definition: AgentToolDefinition;
-  execute(
-    arguments_: Record<string, unknown>,
-    context: RuntimeToolContext
-  ): Promise<ToolExecutionResult>;
+  tool: StructuredToolInterface;
+  sideEffectLevel: AgentToolSideEffectLevel;
+  sensitiveArgumentPaths?: string[];
+}
+
+export interface RuntimeUserInputArtifact {
+  type: 'requires_user_input';
+  request: ToolUserInputRequest;
 }
 
 export interface ToolExecutorOptions {
@@ -45,15 +53,15 @@ export class ToolExecutor implements ToolExecutorPort {
   constructor(options: ToolExecutorOptions) {
     this.#store = options.store;
     this.#workerId = options.workerId;
-    this.#tools = new Map(options.tools.map(tool => [tool.definition.name, tool]));
+    this.#tools = new Map(options.tools.map(tool => [tool.tool.name, tool]));
     if (this.#tools.size !== options.tools.length) {
       throw new TypeError('Runtime tool names must be unique.');
     }
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
   }
 
-  definitions(): AgentToolDefinition[] {
-    return [...this.#tools.values()].map(tool => tool.definition);
+  tools(): StructuredToolInterface[] {
+    return [...this.#tools.values()].map(tool => tool.tool);
   }
 
   async execute(request: ToolExecutionRequest): Promise<ToolExecutionResult> {
@@ -75,18 +83,14 @@ export class ToolExecutor implements ToolExecutorPort {
 
     if (!claim.claimed) return this.#replayTerminalResult(claim.invocation);
     const invocation = claim.invocation;
-    const tool = this.#tools.get(request.call.name);
-    if (!tool) {
-      return {
-        type: 'failed',
-        code: 'tool_not_found',
-        message: `Tool not found: ${request.call.name}`,
-      };
+    const runtimeTool = this.#tools.get(request.call.name);
+    if (!runtimeTool) {
+      return { type: 'failed', code: 'tool_not_found', message: `Tool not found: ${request.call.name}` };
     }
     if (
       invocation.toolName !== request.call.name
       || invocation.argumentsChecksum !== checksumToolArguments(request.call.args)
-      || invocation.sideEffectLevel !== tool.definition.sideEffectLevel
+      || invocation.sideEffectLevel !== runtimeTool.sideEffectLevel
     ) {
       throw new FatalToolExecutionError(
         'storage_error',
@@ -94,22 +98,44 @@ export class ToolExecutor implements ToolExecutorPort {
       );
     }
 
+    const context: RuntimeToolContext = {
+      sessionId: request.target.sessionId,
+      jobId: request.target.jobId,
+      stepRunId: request.target.stepRunId,
+      attemptId: request.target.attemptId,
+      toolInvocationId: invocation.id,
+      toolCallId: invocation.toolCallId,
+      idempotencyKey: invocation.idempotencyKey,
+      signal: request.signal,
+    };
     try {
-      return await tool.execute(request.call.args, {
-        sessionId: request.target.sessionId,
-        jobId: request.target.jobId,
-        stepRunId: request.target.stepRunId,
-        attemptId: request.target.attemptId,
-        toolInvocationId: invocation.id,
-        toolCallId: invocation.toolCallId,
-        idempotencyKey: invocation.idempotencyKey,
+      const output = await runtimeTool.tool.invoke({
+        ...request.call,
+        type: 'tool_call',
+      }, {
         signal: request.signal,
+        configurable: { agentRuntimeContext: context },
       });
+      if (isToolMessage(output)) {
+        if (isUserInputArtifact(output.artifact)) {
+          return { type: 'requires_user_input', request: output.artifact.request };
+        }
+        return {
+          type: 'completed',
+          content: output.text,
+          result: output.artifact ?? output.content,
+        };
+      }
+      return {
+        type: 'completed',
+        content: stringifyToolOutput(output),
+        result: output,
+      };
     } catch (error) {
       if (request.signal?.aborted || isAbortError(error)) throw error;
       return {
         type: 'failed',
-        code: 'tool_failed',
+        code: error instanceof ToolInputParsingException ? 'invalid_tool_arguments' : 'tool_failed',
         message: error instanceof Error ? error.message : 'Tool execution failed.',
       };
     }
@@ -118,8 +144,7 @@ export class ToolExecutor implements ToolExecutorPort {
   async #replayTerminalResult(invocation: AgentToolInvocation): Promise<ToolExecutionResult> {
     if (!invocation.resultMessageId) {
       return {
-        type: 'failed',
-        code: 'tool_failed',
+        type: 'failed', code: 'tool_failed',
         message: `Tool invocation is ${invocation.status} without a committed result message.`,
       };
     }
@@ -139,12 +164,18 @@ export class ToolExecutor implements ToolExecutorPort {
         details: invocation.error?.details,
       };
     }
-    return {
-      type: 'completed',
-      content: message.content,
-      result: message.toolResult.result,
-    };
+    return { type: 'completed', content: message.content, result: message.toolResult.result };
   }
+}
+
+function isUserInputArtifact(value: unknown): value is RuntimeUserInputArtifact {
+  return Boolean(value && typeof value === 'object'
+    && (value as { type?: unknown }).type === 'requires_user_input'
+    && (value as { request?: unknown }).request);
+}
+
+function stringifyToolOutput(value: unknown): string {
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 function isAbortError(error: unknown): boolean {

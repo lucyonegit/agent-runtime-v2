@@ -1,4 +1,11 @@
-import { AIMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
+import {
+  AIMessage,
+  AIMessageChunk,
+  ToolMessage,
+  type BaseMessage,
+  type UsageMetadata,
+} from '@langchain/core/messages';
+import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { AgentToolCall } from '../domain/index.js';
 import {
   LOOP_EVENT_TYPES,
@@ -7,14 +14,11 @@ import {
   type ToolUserInputRequest,
 } from './loop-events.js';
 import type { LoopResult } from './loop-result.js';
-import type {
-  AgentLoopModelPort,
-  AgentToolDefinition,
-  ModelRequest,
-  ModelResponse,
-  ProviderTokenUsage,
-} from './model-port.js';
-import { ToolCallAssembler, type ToolCallAssemblyError } from './tool-call-assembler.js';
+import {
+  readLangChainModelTurn,
+  type LangChainChatRunnable,
+  type LangChainToolCallError,
+} from './langchain-model.js';
 
 export interface AgentLoopTarget {
   sessionId: string;
@@ -33,7 +37,7 @@ export interface AgentLoopLimits {
 export interface AgentLoopInput {
   messages: BaseMessage[];
   target: AgentLoopTarget;
-  tools: AgentToolDefinition[];
+  tools: StructuredToolInterface[];
   toolExecutor: ToolExecutorPort;
   outputIdFactory: () => string;
   limits: AgentLoopLimits;
@@ -47,7 +51,7 @@ export type ToolExecutionResult =
 
 export interface ToolExecutionRequest {
   call: AgentToolCall;
-  definition?: AgentToolDefinition;
+  definition?: StructuredToolInterface;
   target: AgentLoopTarget;
   signal?: AbortSignal;
 }
@@ -67,7 +71,7 @@ export class FatalToolExecutionError extends Error {
 }
 
 export interface AgentLoopOptions {
-  model: AgentLoopModelPort;
+  model: LangChainChatRunnable;
   streaming?: boolean;
   clock?: { nowMs(): number };
 }
@@ -76,8 +80,8 @@ interface ModelTurn {
   outputId: string;
   content: string;
   toolCalls: AgentToolCall[];
-  assemblyErrors: ToolCallAssemblyError[];
-  usage?: ProviderTokenUsage;
+  assemblyErrors: LangChainToolCallError[];
+  usage?: UsageMetadata;
 }
 
 type ToolOutcome =
@@ -98,7 +102,7 @@ type ToolOutcome =
     };
 
 export class AgentLoop {
-  readonly #model: AgentLoopModelPort;
+  readonly #model: LangChainChatRunnable;
   readonly #streaming: boolean;
   readonly #clock: { nowMs(): number };
 
@@ -120,7 +124,7 @@ export class AgentLoop {
 
       let turn: ModelTurn;
       try {
-        turn = this.#streaming && this.#model.stream
+        turn = this.#streaming
           ? yield* this.#readStreamingTurn(input, messages)
           : await this.#readModelTurn(input, messages);
       } catch (error) {
@@ -227,8 +231,8 @@ export class AgentLoop {
 
   async #readModelTurn(input: AgentLoopInput, messages: BaseMessage[]): Promise<ModelTurn> {
     const outputId = input.outputIdFactory();
-    const response = await this.#model.invoke(modelRequest(input, messages));
-    return assembleModelResponse(response, outputId);
+    const response = await this.#model.invoke(messages, { signal: input.limits.signal });
+    return modelTurn(response, outputId);
   }
 
   async *#readStreamingTurn(
@@ -236,14 +240,14 @@ export class AgentLoop {
     messages: BaseMessage[]
   ): AsyncGenerator<LoopEvent, ModelTurn> {
     const outputId = input.outputIdFactory();
-    const assembler = new ToolCallAssembler();
     let content = '';
-    let usage: ProviderTokenUsage | undefined;
-    for await (const chunk of this.#model.stream!(modelRequest(input, messages))) {
+    let combined: AIMessageChunk | undefined;
+    const stream = await this.#model.stream(messages, { signal: input.limits.signal });
+    for await (const chunk of stream) {
       const cancelled = this.#terminalPreflight(input.limits);
       if (cancelled) throw new LoopTerminatedError(cancelled);
-      usage = chunk.usage ?? usage;
-      const delta = typeof chunk.content === 'string' ? chunk.content : '';
+      combined = combined ? combined.concat(chunk) : chunk;
+      const delta = chunk.text;
       if (delta) {
         content += delta;
         yield {
@@ -253,22 +257,21 @@ export class AgentLoop {
           delta,
         };
       }
-      if (chunk.toolCallChunks?.length) assembler.add(chunk.toolCallChunks);
     }
-    const assembly = assembler.finish(index => `${outputId}_call_${index}`);
+    const turn = readLangChainModelTurn(combined ?? new AIMessageChunk(''), outputId);
     return {
       outputId,
       content,
-      toolCalls: assembly.toolCalls,
-      assemblyErrors: assembly.errors,
-      usage,
+      toolCalls: turn.toolCalls,
+      assemblyErrors: turn.errors,
+      usage: turn.usage,
     };
   }
 
   async #executeTool(
     input: AgentLoopInput,
     call: AgentToolCall,
-    definition: AgentToolDefinition | undefined
+    definition: StructuredToolInterface | undefined
   ): Promise<ToolOutcome> {
     const startedAtMs = this.#clock.nowMs();
     let result: ToolExecutionResult;
@@ -365,36 +368,19 @@ class LoopTerminatedError extends Error {
   }
 }
 
-function assembleModelResponse(response: ModelResponse, outputId: string): ModelTurn {
-  const assembler = new ToolCallAssembler();
-  for (const [index, call] of (response.toolCalls ?? []).entries()) {
-    assembler.add([{
-      index,
-      id: call.id,
-      name: call.name,
-      args: typeof call.args === 'string' ? call.args : JSON.stringify(call.args ?? {}),
-    }]);
-  }
-  const assembly = assembler.finish(index => `${outputId}_call_${index}`);
+function modelTurn(response: AIMessageChunk, outputId: string): ModelTurn {
+  const turn = readLangChainModelTurn(response, outputId);
   return {
     outputId,
-    content: typeof response.content === 'string' ? response.content : '',
-    toolCalls: assembly.toolCalls,
-    assemblyErrors: assembly.errors,
-    usage: response.usage,
-  };
-}
-
-function modelRequest(input: AgentLoopInput, messages: BaseMessage[]): ModelRequest {
-  return {
-    messages,
-    tools: input.tools,
-    signal: input.limits.signal,
+    content: turn.content,
+    toolCalls: turn.toolCalls,
+    assemblyErrors: turn.errors,
+    usage: turn.usage,
   };
 }
 
 function assemblyFailureEvent(
-  error: ToolCallAssemblyError
+  error: LangChainToolCallError
 ): Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ToolResultFailed }> {
   return {
     type: LOOP_EVENT_TYPES.ToolResultFailed,

@@ -21,6 +21,7 @@ export class ContextFormatter {
         }),
         ...group.resultMessages.map(message => new ToolMessage({
           tool_call_id: message.toolCallId!,
+          name: message.toolName,
           content: message.content,
         })),
       ];
@@ -36,7 +37,11 @@ function formatMessage(message: AgentMessage): BaseMessage {
     case 'user':
       return new HumanMessage(message.content);
     case 'tool':
-      return new ToolMessage({ tool_call_id: message.toolCallId!, content: message.content });
+      return new ToolMessage({
+        tool_call_id: message.toolCallId!,
+        name: message.toolName,
+        content: message.content,
+      });
     case 'assistant':
       return new AIMessage(message.content);
   }

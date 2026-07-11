@@ -7,7 +7,7 @@ import type {
   AgentToolInvocation,
   AgentMessage,
 } from '../domain/index.js';
-import type { AgentToolDefinition } from '../agent-loop/model-port.js';
+import type { StructuredToolInterface } from '@langchain/core/tools';
 import { ContextFilter } from './context-filter.js';
 import { ContextFormatter } from './context-formatter.js';
 import { CONTEXT_RULES_VERSION, type ContextPurpose } from './context-purpose.js';
@@ -42,7 +42,7 @@ export interface BuildContextInput {
     maxContextTokens: number;
     reservedOutputTokens: number;
   };
-  toolSchemas?: AgentToolDefinition[];
+  toolSchemas?: StructuredToolInterface[];
   newCompressibleMessageCount?: number;
   compressionMessageThreshold?: number;
   compressionSourcePurpose?: Exclude<ContextPurpose, 'context_compression'>;
@@ -128,7 +128,11 @@ export class ContextBuilder {
     }
     const toolSchemas = input.toolSchemas ?? [];
     if (toolSchemas.length > 0) {
-      const serializedTools = canonicalJson(toolSchemas);
+      const serializedTools = canonicalJson(toolSchemas.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        schema: tool.schema,
+      })));
       items.push({
         id: 'mandatory:tools',
         value: { kind: 'tools', category: 'tools' },
@@ -198,7 +202,9 @@ export class ContextBuilder {
     const selectedRows = selection.selected
       .filter(item => item.value.kind === 'group')
       .flatMap(item => item.value.kind === 'group' ? messagesInGroup(item.value.group) : []);
-    const toolSchemaChecksum = toolSchemas.length > 0 ? sha256(canonicalJson(toolSchemas)) : undefined;
+    const toolSchemaChecksum = toolSchemas.length > 0 ? sha256(canonicalJson(
+      toolSchemas.map(tool => ({ name: tool.name, description: tool.description, schema: tool.schema }))
+    )) : undefined;
     const fixedPrefixChecksum = sha256(canonicalJson({
       systemPrompt: input.systemPrompt,
       stableContext: input.stableContext,

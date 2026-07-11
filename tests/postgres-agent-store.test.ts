@@ -1,5 +1,16 @@
 import { Pool, type PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  AIMessage,
+  AIMessageChunk,
+  type BaseMessage,
+  coerceMessageLikeToMessage,
+} from '@langchain/core/messages';
+import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { ChatResult } from '@langchain/core/outputs';
+import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
+import { DynamicStructuredTool } from '@langchain/core/tools';
 import { JobCoordinator } from '../src/runtime/job-coordinator.js';
 import { ToolExecutor } from '../src/runtime/tool-executor.js';
 import { AgentLoop } from '../src/agent-loop/agent-loop.js';
@@ -14,7 +25,11 @@ import { SessionView } from '../src/view/session-view.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
 import { RuntimeJobExecutionService } from '../src/server/runtime/job-execution.service.js';
-import type { AgentLoopModelPort } from '../src/agent-loop/model-port.js';
+import type {
+  RuntimeTool,
+  RuntimeToolContext,
+  RuntimeUserInputArtifact,
+} from '../src/runtime/tool-executor.js';
 
 const databaseUrl = process.env.DATABASE_URL
   ?? 'postgresql://postgres:postgres@127.0.0.1:55433/agent_runtime_test';
@@ -220,19 +235,10 @@ describe('PostgresAgentStore Job transactions', () => {
       store,
       workerId: 'worker_tools',
       clock: { nowMs: () => 32 },
-      tools: [{
-        definition: {
-          name: 'lookup',
-          description: 'lookup',
-          schema: { type: 'object' },
-          sideEffectLevel: 'read_only',
-        },
-        execute: async arguments_ => ({
-          type: 'completed',
-          content: `found:${arguments_.query}`,
-          result: { found: true },
-        }),
-      }],
+      tools: [completedRuntimeTool('lookup', async arguments_ => ({
+        content: `found:${arguments_.query}`,
+        result: { found: true },
+      }))],
     });
     const lookupResult = await executor.execute({
       call: { id: 'call_lookup', name: 'lookup', args: { query: 'docs' } },
@@ -485,43 +491,35 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 30,
       leaseUntilMs: 100,
     });
-    const definition = {
-      name: 'lookup',
-      description: 'lookup docs',
-      schema: { type: 'object' },
-      sideEffectLevel: 'read_only' as const,
-    };
     let durableBeforeExternalExecution = false;
+    const runtimeLookup = completedRuntimeTool('lookup', async (_arguments, context) => {
+      durableBeforeExternalExecution = (
+        await store.getToolInvocation(context.jobId, context.toolCallId)
+      )?.status === 'running';
+      return { content: 'lookup result', result: { value: 42 } };
+    });
+    const definition = runtimeLookup.tool;
     const toolExecutor = new ToolExecutor({
       store,
       workerId: 'worker_direct',
-      tools: [{
-        definition,
-        execute: async (_arguments, context) => {
-          durableBeforeExternalExecution = (
-            await store.getToolInvocation(context.jobId, context.toolCallId)
-          )?.status === 'running';
-          return { type: 'completed', content: 'lookup result', result: { value: 42 } };
-        },
-      }],
+      tools: [runtimeLookup],
       clock: { nowMs: () => 35 },
     });
     let modelCalls = 0;
     const loop = new AgentLoop({
       streaming: false,
-      model: {
-        invoke: async request => {
+      model: new TestChatRunnable(async input => {
           modelCalls += 1;
           if (modelCalls === 1) {
-            expect(request.messages).toHaveLength(0);
-            return {
-              toolCalls: [{ id: 'call_direct', name: 'lookup', args: { query: 'runtime' } }],
-            };
+            expect(inputMessages(input)).toHaveLength(0);
+            return new AIMessageChunk({
+              content: '',
+              tool_calls: [{ id: 'call_direct', name: 'lookup', args: { query: 'runtime' } }],
+            });
           }
-          expect(request.messages).toHaveLength(2);
-          return { content: 'final direct answer' };
-        },
-      },
+          expect(inputMessages(input)).toHaveLength(2);
+          return new AIMessageChunk('final direct answer');
+        }),
       clock: { nowMs: () => 35 },
     });
     const published: AgentRealtimeEvent[] = [];
@@ -530,7 +528,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const writer = new RuntimeEventWriter({
       store,
       workerId: 'worker_direct',
-      tools: [definition],
+      tools: [runtimeLookup],
       publisher: { publish: event => { published.push(event); } },
       ids: {
         eventId: () => 'event_direct',
@@ -617,27 +615,17 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 30,
       leaseUntilMs: 100,
     });
-    const definition = {
-      name: 'choose',
-      description: 'choose a value',
-      schema: { type: 'object' },
-      sideEffectLevel: 'read_only' as const,
-    };
+    const runtimeChoose = userInputRuntimeTool('choose', {
+      source: 'tool',
+      answerMode: 'as_tool_result',
+      prompt: 'Choose one',
+      inputSchema: { type: 'single_choice', options: [{ label: 'One', value: 'one' }] },
+    });
+    const definition = runtimeChoose.tool;
     const toolExecutor = new ToolExecutor({
       store,
       workerId: 'worker_hitl',
-      tools: [{
-        definition,
-        execute: async () => ({
-          type: 'requires_user_input',
-          request: {
-            source: 'tool',
-            answerMode: 'as_tool_result',
-            prompt: 'Choose one',
-            inputSchema: { type: 'single_choice', options: [{ label: 'One', value: 'one' }] },
-          },
-        }),
-      }],
+      tools: [runtimeChoose],
       clock: { nowMs: () => 35 },
     });
     let messageNo = 1;
@@ -645,7 +633,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const writer = new RuntimeEventWriter({
       store,
       workerId: 'worker_hitl',
-      tools: [definition],
+      tools: [runtimeChoose],
       ids: {
         eventId: () => 'event_hitl',
         messageId: () => `hitl_runtime_message_${messageNo++}`,
@@ -667,11 +655,10 @@ describe('PostgresAgentStore Job transactions', () => {
     const waitingRunner = new AgentRunner({
       loop: new AgentLoop({
         streaming: false,
-        model: {
-          invoke: async () => ({
-            toolCalls: [{ id: 'call_hitl', name: 'choose', args: {} }],
-          }),
-        },
+        model: new TestChatRunnable(async () => new AIMessageChunk({
+          content: '',
+          tool_calls: [{ id: 'call_hitl', name: 'choose', args: {} }],
+        })),
         clock: { nowMs: () => 35 },
       }),
       writer,
@@ -710,7 +697,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const resumeRunner = new AgentRunner({
       loop: new AgentLoop({
         streaming: false,
-        model: { invoke: async () => ({ content: 'resumed final answer' }) },
+        model: new TestChatRunnable(async () => new AIMessageChunk('resumed final answer')),
         clock: { nowMs: () => 41 },
       }),
       writer,
@@ -888,7 +875,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const runner = new StepRunner({
       loop: new AgentLoop({
         streaming: false,
-        model: { invoke: async () => ({ content: 'not-json' }) },
+        model: new TestChatRunnable(async () => new AIMessageChunk('not-json')),
         clock: { nowMs: () => 34 },
       }),
       writer,
@@ -1045,18 +1032,24 @@ describe('PostgresAgentStore Job transactions', () => {
   it('executes direct and two-step planned Jobs through the production runtime service', async () => {
     const now = Date.now();
     const events: AgentRealtimeEvent[] = [];
-    const model: AgentLoopModelPort = {
-      invoke: async request => {
-        const text = request.messages.map(message => String(message.content)).join('\n');
-        const usage = { inputTokens: 12, outputTokens: 8, totalTokens: 20, source: 'provider' as const };
+    const model = new DeterministicChatModel(messages => {
+        const text = messages.map(message => message.text).join('\n');
+        const usage = {
+          input_tokens: 12,
+          output_tokens: 8,
+          total_tokens: 20,
+        };
         if (text.includes('Return JSON only: {"strategy"')) {
-          return { content: JSON.stringify({ strategy: text.includes('job_planned') ? 'planned' : 'direct' }), usage };
+          return new AIMessage({
+            content: JSON.stringify({ strategy: text.includes('job_planned') ? 'planned' : 'direct' }),
+            usage_metadata: usage,
+          });
         }
         if (text.includes('Compress the supplied runtime history')) {
-          return { content: 'compressed factual runtime history', usage };
+          return new AIMessage({ content: 'compressed factual runtime history', usage_metadata: usage });
         }
         if (text.includes('Keep steps declarative and ordered')) {
-          return {
+          return new AIMessage({
             content: JSON.stringify({
               title: 'Two step plan', goal: 'complete both steps',
               steps: [
@@ -1064,25 +1057,24 @@ describe('PostgresAgentStore Job transactions', () => {
                 { title: 'Second', instruction: 'Complete the second isolated step.' },
               ],
             }),
-            usage,
-          };
+            usage_metadata: usage,
+          });
         }
         if (text.includes('Execute only the current PlanStep')) {
-          return {
+          return new AIMessage({
             content: JSON.stringify({
               schemaVersion: 1,
               summary: text.includes('second isolated') ? 'second complete' : 'first complete',
               artifacts: [], evidence: [], unresolved: [],
             }),
-            usage,
-          };
+            usage_metadata: usage,
+          });
         }
         if (text.includes('Write the final user-facing answer')) {
-          return { content: 'planned final answer', usage };
+          return new AIMessage({ content: 'planned final answer', usage_metadata: usage });
         }
-        return { content: 'direct final answer', usage };
-      },
-    };
+        return new AIMessage({ content: 'direct final answer', usage_metadata: usage });
+      });
     const executor = new RuntimeJobExecutionService({
       store,
       workerId: 'worker_runtime_e2e',
@@ -1212,6 +1204,92 @@ describe('PostgresAgentStore Job transactions', () => {
     });
   });
 });
+
+class TestChatRunnable extends Runnable<BaseLanguageModelInput, AIMessageChunk> {
+  static lc_name(): string { return 'TestChatRunnable'; }
+  readonly lc_namespace = ['agent_runtime', 'tests'];
+
+  constructor(
+    private readonly handler: (
+      input: BaseLanguageModelInput,
+      options?: Partial<RunnableConfig>
+    ) => Promise<AIMessageChunk>
+  ) {
+    super();
+  }
+
+  invoke(
+    input: BaseLanguageModelInput,
+    options?: Partial<RunnableConfig>
+  ): Promise<AIMessageChunk> {
+    return this.handler(input, options);
+  }
+}
+
+class DeterministicChatModel extends BaseChatModel {
+  constructor(private readonly handler: (messages: BaseMessage[]) => AIMessage) {
+    super({});
+  }
+
+  _llmType(): string { return 'deterministic-test'; }
+
+  async _generate(messages: BaseMessage[]): Promise<ChatResult> {
+    const message = this.handler(messages);
+    return { generations: [{ text: message.text, message }] };
+  }
+}
+
+function inputMessages(input: BaseLanguageModelInput): BaseMessage[] {
+  if (Array.isArray(input)) return input.map(coerceMessageLikeToMessage);
+  if (typeof input === 'string') return [coerceMessageLikeToMessage(['human', input])];
+  return input.toChatMessages();
+}
+
+function completedRuntimeTool(
+  name: string,
+  handler: (
+    input: Record<string, unknown>,
+    context: RuntimeToolContext
+  ) => Promise<{ content: string; result: unknown }>
+): RuntimeTool {
+  return {
+    sideEffectLevel: 'read_only',
+    tool: new DynamicStructuredTool({
+      name,
+      description: `${name} test tool`,
+      schema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        additionalProperties: true,
+      } as const,
+      responseFormat: 'content_and_artifact',
+      func: async (input, _runManager, config) => {
+        const context = config?.configurable?.agentRuntimeContext as RuntimeToolContext;
+        const result = await handler(input as Record<string, unknown>, context);
+        return [result.content, result.result];
+      },
+    }),
+  };
+}
+
+function userInputRuntimeTool(
+  name: string,
+  request: RuntimeUserInputArtifact['request']
+): RuntimeTool {
+  return {
+    sideEffectLevel: 'read_only',
+    tool: new DynamicStructuredTool({
+      name,
+      description: `${name} test tool`,
+      schema: { type: 'object', additionalProperties: true } as const,
+      responseFormat: 'content_and_artifact',
+      func: async () => [
+        'User input is required.',
+        { type: 'requires_user_input', request } satisfies RuntimeUserInputArtifact,
+      ],
+    }),
+  };
+}
 
 async function createJob(
   store: PostgresAgentStore,

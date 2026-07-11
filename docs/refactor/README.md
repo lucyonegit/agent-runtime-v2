@@ -19,11 +19,11 @@
 8. [实现验收与运维手册](./07-实现验收与运维手册.md)
    - 当前实现入口、环境变量、启动、migration/reset、测试、HTTP 契约和故障处置。
 
-当 01–05 与 06 的目标命名、表结构或恢复语义冲突时，以 06 为准。
+当 01–05 与 06 的目标命名、表结构、LangChain 模型协议或恢复语义冲突时，以 06 为准。
 
 ## 一句话架构
 
-`agent_messages` 是唯一会话事实时间线；`Job` 是工作流与 lease 边界；`StepRun` 是 PlanStep 的执行 checkpoint；`ToolInvocation` 保存每个工具调用的恢复状态；`ContextBuilder` 按 purpose 投影；UI 与 SSE 消费提交后的同一批实体。
+`agent_messages` 是唯一会话事实时间线；`Job` 是工作流与 lease 边界；`StepRun` 是 PlanStep 的执行 checkpoint；LangChain 是消息/模型/tool/provider 的唯一协议边界；`ToolInvocation` 保存每个工具调用的业务恢复状态；`ContextBuilder` 按 purpose 投影；UI 与 SSE 消费提交后的同一批实体。
 
 ## 当前维护规则
 

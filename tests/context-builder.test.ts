@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DynamicStructuredTool } from '@langchain/core/tools';
 import type {
   AgentJob,
   AgentMessage,
@@ -184,12 +185,12 @@ describe('ContextBuilder', () => {
         maxContextTokens: 2_000,
         reservedOutputTokens: 200,
       },
-      toolSchemas: [{
+      toolSchemas: [new DynamicStructuredTool({
         name: 'lookup',
         description: 'lookup',
-        schema: { type: 'object' },
-        sideEffectLevel: 'read_only',
-      }],
+        schema: { type: 'object', additionalProperties: true } as const,
+        func: async input => input,
+      })],
     });
 
     expect(context.messages.map(message_ => message_.content)).toEqual([

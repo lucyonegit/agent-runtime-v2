@@ -4,7 +4,7 @@
 
 **Goal:** Load local PostgreSQL and DashScope credentials from `.env` and start the canonical Agent Runtime server with the DashScope OpenAI-compatible API.
 
-**Architecture:** `dotenv/config` loads local configuration before server initialization. A pure model-config resolver selects DashScope or the existing OpenAI-compatible path, while `main.ts` remains responsible only for wiring the selected configuration into `OpenAIModelPort` and `RuntimeJobExecutionService`.
+**Architecture:** `dotenv/config` loads local configuration before server initialization. A pure model-config resolver selects DashScope or the OpenAI-compatible fallback, while `main.ts` wires the selected configuration into the LangChain `BaseChatModel` provider factory and `RuntimeJobExecutionService`.
 
 **Tech Stack:** TypeScript, Node.js ESM, dotenv, LangChain ChatOpenAI, NestJS/Fastify, PostgreSQL, Vitest
 
@@ -90,7 +90,7 @@ const modelConfig = resolveModelRuntimeConfig(process.env);
 const model = createModel(modelConfig);
 ```
 
-Pass `modelConfig.provider` and `modelConfig.modelName` into `RuntimeJobExecutionService`. Construct `OpenAIModelPort` with `modelConfig.apiKey`, `modelConfig.baseURL`, and `modelConfig.modelName`.
+Pass `modelConfig.provider` and `modelConfig.modelName` into `RuntimeJobExecutionService`. Construct a LangChain `ChatOpenAI` through `createLangChainChatModel` with `modelConfig.apiKey`, `modelConfig.baseURL`, and `modelConfig.modelName`.
 
 - [ ] **Step 4: Run typecheck and unit tests**
 

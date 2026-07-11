@@ -1,18 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { BaseMessage } from '@langchain/core/messages';
+import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
+import {
+  AIMessageChunk,
+  coerceMessageLikeToMessage,
+  type UsageMetadata,
+} from '@langchain/core/messages';
+import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import type {
-  AgentLoopModelPort,
-  ModelRequest,
-  ModelResponse,
-  ModelStreamChunk,
-  ProviderTokenUsage,
-} from '../agent-loop/model-port.js';
-import type { AgentContextInputManifest, AgentModelCallType } from '../domain/index.js';
-import type { AgentRealtimeEvent } from '../domain/index.js';
+  AgentContextInputManifest,
+  AgentModelCallType,
+  AgentRealtimeEvent,
+} from '../domain/index.js';
 import type { AgentStore } from '../storage/agent-store.js';
 
-export interface AuditedModelPortOptions {
-  delegate: AgentLoopModelPort;
+export interface AuditedChatModelOptions {
+  delegate: Runnable<BaseLanguageModelInput, AIMessageChunk>;
   store: AgentStore;
   workerId: string;
   target: { sessionId: string; jobId: string; stepRunId?: string; attemptId: string };
@@ -28,26 +30,29 @@ export interface AuditedModelPortOptions {
   clock?: { nowMs(): number };
 }
 
-export class AuditedModelPort implements AgentLoopModelPort {
-  readonly #options: AuditedModelPortOptions;
+export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessageChunk> {
+  static lc_name(): string { return 'AuditedChatModel'; }
+  readonly lc_namespace = ['agent_runtime', 'model'];
+  readonly #options: AuditedChatModelOptions;
   readonly #ids: { modelCallId(): string };
   readonly #clock: { nowMs(): number };
   #logicalCallNo = 0;
 
-  constructor(options: AuditedModelPortOptions) {
+  constructor(options: AuditedChatModelOptions) {
+    super();
     this.#options = options;
     this.#ids = options.ids ?? { modelCallId: () => `model_call_${randomUUID()}` };
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
   }
 
-  async invoke(request: ModelRequest): Promise<ModelResponse> {
-    const callId = await this.#start(request);
+  async invoke(input: BaseLanguageModelInput, options?: Partial<RunnableConfig>): Promise<AIMessageChunk> {
+    const callId = await this.#start(input);
     try {
-      const response = await this.#options.delegate.invoke(request);
-      await this.#complete(callId, response.usage, {
-        resultType: response.toolCalls?.length ? 'tool_calls' : 'text',
-        resultPayload: { content: response.content },
-        toolNames: response.toolCalls?.map(call => call.name).filter((name): name is string => Boolean(name)),
+      const response = await this.#options.delegate.invoke(input, options);
+      await this.#complete(callId, response.usage_metadata, {
+        resultType: response.tool_calls?.length ? 'tool_calls' : 'text',
+        resultPayload: { content: response.content, responseMetadata: response.response_metadata },
+        toolNames: response.tool_calls?.map(call => call.name),
       });
       return response;
     } catch (error) {
@@ -56,39 +61,24 @@ export class AuditedModelPort implements AgentLoopModelPort {
     }
   }
 
-  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
-    if (!this.#options.delegate.stream) {
-      const response = await this.invoke(request);
-      yield {
-        content: response.content,
-        toolCallChunks: response.toolCalls?.map((call, index) => ({
-          index,
-          id: call.id,
-          name: call.name,
-          args: JSON.stringify(call.args ?? {}),
-        })),
-        usage: response.usage,
-      };
-      return;
-    }
-    const callId = await this.#start(request);
-    let usage: ProviderTokenUsage | undefined;
-    const toolNames = new Set<string>();
-    let content = '';
+  async *_streamIterator(
+    input: BaseLanguageModelInput,
+    options?: Partial<RunnableConfig>
+  ): AsyncGenerator<AIMessageChunk> {
+    const callId = await this.#start(input);
+    let combined: AIMessageChunk | undefined;
     let completed = false;
     try {
-      for await (const chunk of this.#options.delegate.stream(request)) {
-        usage = chunk.usage ?? usage;
-        if (typeof chunk.content === 'string') content += chunk.content;
-        chunk.toolCallChunks?.forEach(chunk_ => {
-          if (chunk_.name) toolNames.add(chunk_.name);
-        });
+      const stream = await this.#options.delegate.stream(input, options);
+      for await (const chunk of stream) {
+        combined = combined ? combined.concat(chunk) : chunk;
         yield chunk;
       }
-      await this.#complete(callId, usage, {
-        resultType: toolNames.size > 0 ? 'tool_calls' : 'text',
-        resultPayload: { content },
-        toolNames: [...toolNames],
+      const response = combined ?? new AIMessageChunk('');
+      await this.#complete(callId, response.usage_metadata, {
+        resultType: response.tool_calls?.length ? 'tool_calls' : 'text',
+        resultPayload: { content: response.content, responseMetadata: response.response_metadata },
+        toolNames: response.tool_calls?.map(call => call.name),
       });
       completed = true;
     } catch (error) {
@@ -97,23 +87,24 @@ export class AuditedModelPort implements AgentLoopModelPort {
       throw error;
     } finally {
       if (!completed) {
-        const completed = await this.#options.store.completeModelCall({
+        const cancelled = await this.#options.store.completeModelCall({
           id: callId,
           status: 'cancelled',
-          usageSource: usage?.source ?? 'unavailable',
+          usageSource: combined?.usage_metadata ? 'provider' : 'unavailable',
+          ...usageFields(combined?.usage_metadata),
           errorCode: 'aborted',
           errorMessage: 'Model stream consumer stopped before completion.',
           nowMs: this.#clock.nowMs(),
         });
-        await this.#publishUsage(completed.usage);
+        await this.#publishUsage(cancelled.usage);
       }
     }
   }
 
-  async #start(request: ModelRequest): Promise<string> {
+  async #start(input: BaseLanguageModelInput): Promise<string> {
     this.#logicalCallNo += 1;
     const id = this.#ids.modelCallId();
-    const serialized = serializeMessages(request.messages);
+    const serialized = serializeModelInput(input);
     await this.#options.store.startModelCall({
       id,
       sessionId: this.#options.target.sessionId,
@@ -139,18 +130,14 @@ export class AuditedModelPort implements AgentLoopModelPort {
 
   async #complete(
     id: string,
-    usage: ProviderTokenUsage | undefined,
+    usage: UsageMetadata | undefined,
     result: { resultType: string; resultPayload: unknown; toolNames?: string[] }
   ): Promise<void> {
     const completed = await this.#options.store.completeModelCall({
       id,
       status: 'completed',
-      usageSource: usage?.source ?? 'unavailable',
-      actualInputTokens: usage?.inputTokens,
-      actualOutputTokens: usage?.outputTokens,
-      actualTotalTokens: usage?.totalTokens,
-      cacheReadInputTokens: usage?.cacheReadInputTokens,
-      cacheWriteInputTokens: usage?.cacheWriteInputTokens,
+      usageSource: usage ? 'provider' : 'unavailable',
+      ...usageFields(usage),
       ...result,
       nowMs: this.#clock.nowMs(),
     });
@@ -177,16 +164,27 @@ export class AuditedModelPort implements AgentLoopModelPort {
         stats,
       });
     } catch {
-      // The durable SessionView remains authoritative when realtime delivery fails.
+      // SessionView is authoritative when realtime delivery fails.
     }
   }
 }
 
-function serializeMessages(messages: BaseMessage[]): string {
-  return JSON.stringify(messages.map(message => ({
-    type: message.getType(),
-    content: message.content,
-  })));
+function usageFields(usage: UsageMetadata | undefined) {
+  return usage ? {
+    actualInputTokens: usage.input_tokens,
+    actualOutputTokens: usage.output_tokens,
+    actualTotalTokens: usage.total_tokens,
+    cacheReadInputTokens: usage.input_token_details?.cache_read,
+    cacheWriteInputTokens: usage.input_token_details?.cache_creation,
+  } : {};
+}
+
+function serializeModelInput(input: BaseLanguageModelInput): string {
+  if (typeof input === 'string') return input;
+  if (Array.isArray(input)) {
+    return JSON.stringify(input.map(coerceMessageLikeToMessage).map(message => message.toDict()));
+  }
+  return JSON.stringify(input.toChatMessages().map(message => message.toDict()));
 }
 
 function sha256(value: string): string {

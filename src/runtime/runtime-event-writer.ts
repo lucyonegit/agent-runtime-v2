@@ -4,7 +4,7 @@ import {
   LOOP_EVENT_TYPES,
   type LoopEvent,
 } from '../agent-loop/loop-events.js';
-import type { AgentToolDefinition } from '../agent-loop/model-port.js';
+import type { RuntimeTool } from './tool-executor.js';
 import type { AgentLoopTarget } from '../agent-loop/agent-loop.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import type { AgentJobError } from '../domain/index.js';
@@ -25,7 +25,7 @@ export interface RuntimeEventWriterIds {
 export interface RuntimeEventWriterOptions {
   store: AgentStore;
   workerId: string;
-  tools: AgentToolDefinition[];
+  tools: RuntimeTool[];
   publisher?: RuntimeEventPublisher;
   ids?: RuntimeEventWriterIds;
   clock?: { nowMs(): number };
@@ -46,7 +46,7 @@ export type RuntimeEventRecordResult =
 export class RuntimeEventWriter {
   readonly #store: AgentStore;
   readonly #workerId: string;
-  readonly #definitions: Map<string, AgentToolDefinition>;
+  readonly #definitions: Map<string, RuntimeTool>;
   readonly #publisher?: RuntimeEventPublisher;
   readonly #ids: RuntimeEventWriterIds;
   readonly #clock: { nowMs(): number };
@@ -56,7 +56,7 @@ export class RuntimeEventWriter {
   constructor(options: RuntimeEventWriterOptions) {
     this.#store = options.store;
     this.#workerId = options.workerId;
-    this.#definitions = new Map(options.tools.map(tool => [tool.name, tool]));
+    this.#definitions = new Map(options.tools.map(tool => [tool.tool.name, tool]));
     this.#publisher = options.publisher;
     this.#ids = options.ids ?? randomWriterIds;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };

@@ -41,7 +41,7 @@
 ### Task 3: Turn model audit into a Runnable decorator
 
 **Files:**
-- Modify: `src/runtime/audited-model-port.ts`
+- Rename: `src/runtime/audited-model-port.ts` to `src/runtime/audited-chat-model.ts`
 - Modify: `src/server/runtime/job-execution.service.ts`
 - Modify: `src/server/runtime/default-planner.ts`
 - Test: `tests/postgres-agent-store.test.ts`
