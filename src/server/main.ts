@@ -9,6 +9,7 @@ import { assertAgentRuntimeSchemaVersion } from '../storage/postgres/migrations.
 import { AgentHttpModule } from './http/agent-http.module.js';
 import { AGENT_CORS_OPTIONS } from './http/cors-options.js';
 import { RuntimeExceptionFilter } from './http/runtime-exception.filter.js';
+import { ContextPreviewService } from './debug/context-preview.service.js';
 import { removeSessionSandbox } from '../tools/index.js';
 import { createDefaultTools } from './runtime/default-tools.js';
 import { RuntimeJobExecutionService } from './runtime/job-execution.service.js';
@@ -34,7 +35,10 @@ const model = createLangChainChatModel(modelConfig);
 const sandboxRoot = process.env.AGENT_SANDBOX_ROOT ?? '.agent-sandbox';
 const jobLeaseMs = numberEnv('JOB_LEASE_MS', 20 * 60_000);
 const jobHeartbeatMs = numberEnv('JOB_HEARTBEAT_MS', Math.max(1_000, Math.floor(jobLeaseMs / 3)));
+const maxContextTokens = numberEnv('MODEL_MAX_CONTEXT_TOKENS', 128_000);
+const reservedOutputTokens = numberEnv('MODEL_RESERVED_OUTPUT_TOKENS', 4_096);
 if (jobHeartbeatMs >= jobLeaseMs) throw new Error('JOB_HEARTBEAT_MS must be shorter than JOB_LEASE_MS.');
+const tools = createDefaultTools();
 const executor = new RuntimeJobExecutionService({
   store,
   workerId,
@@ -42,12 +46,20 @@ const executor = new RuntimeJobExecutionService({
   model,
   provider: modelConfig.provider,
   modelName: modelConfig.modelName,
-  tools: createDefaultTools(),
+  tools,
   sandboxRoot,
-  maxContextTokens: numberEnv('MODEL_MAX_CONTEXT_TOKENS', 128_000),
-  reservedOutputTokens: numberEnv('MODEL_RESERVED_OUTPUT_TOKENS', 4_096),
+  maxContextTokens,
+  reservedOutputTokens,
   jobLeaseMs,
   jobHeartbeatMs,
+});
+const contextPreview = new ContextPreviewService({
+  store,
+  tools,
+  provider: modelConfig.provider,
+  modelName: modelConfig.modelName,
+  maxContextTokens,
+  reservedOutputTokens,
 });
 const runtime = new AgentRuntime({
   store,
@@ -58,7 +70,7 @@ const runtime = new AgentRuntime({
   removeSessionWorkspace: sessionId => removeSessionSandbox({ sandboxRoot, sessionId }),
 });
 const app = await NestFactory.create<NestFastifyApplication>(
-  AgentHttpModule.forRoot(runtime, events),
+  AgentHttpModule.forRoot(runtime, events, contextPreview),
   new FastifyAdapter(),
   { logger: ['error', 'warn', 'log'] }
 );

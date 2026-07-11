@@ -25,6 +25,10 @@ import { RuntimeEventWriter, type RuntimeEventPublisher } from '../../runtime/ru
 import { ToolExecutor, type RuntimeTool } from '../../runtime/tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { DefaultPlanner, DefaultPlanSummarizer } from './default-planner.js';
+import {
+  JOB_EXECUTION_SYSTEM_PROMPT,
+  RUNTIME_SYSTEM_PROMPT_VERSION,
+} from './runtime-context-config.js';
 
 export interface RuntimeJobExecutionOptions {
   store: AgentStore;
@@ -303,8 +307,8 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       purpose,
       systemPrompt: purpose === 'step_execution'
         ? `Execute only the current PlanStep. ${STEP_OUTPUT_INSTRUCTION}`
-        : 'Act as a reliable tool-using agent. Complete the user goal.',
-      systemPromptVersion: 'runtime-system-v1',
+        : JOB_EXECUTION_SYSTEM_PROMPT,
+      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
       currentInstruction,
       messages,
       invocations,

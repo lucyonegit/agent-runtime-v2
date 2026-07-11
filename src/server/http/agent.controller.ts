@@ -9,13 +9,15 @@ import {
   Sse,
 } from '@nestjs/common';
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
+import { ContextPreviewService } from '../debug/context-preview.service.js';
 import { RuntimeEventBus } from '../runtime/runtime-event-bus.js';
 
 @Controller()
 export class AgentController {
   constructor(
     private readonly runtime: AgentRuntime,
-    private readonly events: RuntimeEventBus
+    private readonly events: RuntimeEventBus,
+    private readonly contextPreview: ContextPreviewService
   ) {}
 
   @Post('sessions')
@@ -31,6 +33,11 @@ export class AgentController {
   @Get('sessions/:sessionId/view')
   getSessionView(@Param('sessionId') sessionId: string) {
     return this.runtime.getSessionView(sessionId);
+  }
+
+  @Get('sessions/:sessionId/context-preview')
+  getContextPreview(@Param('sessionId') sessionId: string) {
+    return this.contextPreview.preview(sessionId);
   }
 
   @Delete('sessions/:sessionId')
