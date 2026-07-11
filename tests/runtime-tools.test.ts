@@ -99,6 +99,23 @@ describe('LangChain runtime tools', () => {
     await expect(readFile(result.path, 'utf8')).resolves.toBe('# Hello');
   });
 
+  it('routes source code to write_file and keeps write_article prose-only', async () => {
+    const writeArticle = tools.find(item => item.tool.name === 'write_article')!.tool;
+    const writeFile = tools.find(item => item.tool.name === 'write_file')!.tool;
+    expect(writeArticle.description).toContain('Do not use for webpages or source code');
+    expect(writeFile.description).toContain('webpages, applications, scripts, and source code');
+    expect(JSON.stringify(writeArticle.schema)).not.toContain('html');
+
+    await invoke('write_file', {
+      path: 'code/index.html',
+      content: '<!doctype html><title>Runtime</title>',
+    });
+    await expect(readFile(
+      join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'index.html'),
+      'utf8'
+    )).resolves.toContain('<title>Runtime</title>');
+  });
+
   it('reads, writes, lists, searches and indexes the session workspace', async () => {
     await invoke('write_file', {
       path: 'code/src/example.ts',

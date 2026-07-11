@@ -8,19 +8,18 @@ import { jsonToolOutput, runtimeContext, stringArgument } from './tool-utils.js'
 const formatExtensions: Record<string, string> = {
   markdown: '.md',
   text: '.txt',
-  html: '.html',
 };
 
 export function createArtifactTools(): RuntimeTool[] {
   const writeArticle = new DynamicStructuredTool({
     name: 'write_article',
-    description: 'Write an article, report, document, or long-form text into workspace/artifacts.',
+    description: 'Write a prose article, report, or long-form document into workspace/artifacts. Do not use for webpages or source code; use write_file with a code/ path instead.',
     schema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Document title used to create the artifact file name.' },
         content: { type: 'string', description: 'Document content.' },
-        format: { type: 'string', enum: ['markdown', 'text', 'html'] },
+        format: { type: 'string', enum: ['markdown', 'text'] },
       },
       required: ['title', 'content'],
       additionalProperties: false,

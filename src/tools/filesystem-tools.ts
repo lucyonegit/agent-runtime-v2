@@ -79,11 +79,14 @@ export function createFilesystemTools(): RuntimeTool[] {
 
   const writeFileTool = new DynamicStructuredTool({
     name: 'write_file',
-    description: 'Write a UTF-8 file inside the shared Session workspace. Use code/, docs/, artifacts/, downloads/, or tmp/.',
+    description: 'Write a UTF-8 file inside the shared Session workspace. Use code/ for webpages, applications, scripts, and source code; use docs/, artifacts/, downloads/, or tmp/ only when their category matches the requested deliverable.',
     schema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Workspace-relative file path.' },
+        path: {
+          type: 'string',
+          description: 'Workspace-relative file path. Webpages and source code must use code/, for example code/index.html.',
+        },
         content: { type: 'string', description: 'Complete file content.' },
       },
       required: ['path', 'content'],
