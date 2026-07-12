@@ -6,6 +6,41 @@ import {
 } from '../src/server/runtime/default-planner.js';
 
 describe('DefaultPlanner', () => {
+  it('does not let complex research and build goals degrade to direct', async () => {
+    const planner = plannerWithRouteResponse('{"strategy":"direct"}');
+
+    await expect(planner.route({
+      goal: '调查一下萧山机场UFO事件前因后果，写一个分析报告1000字',
+    })).resolves.toBe('planned');
+    await expect(planner.route({ goal: '写一个todo应用' })).resolves.toBe('planned');
+  });
+
+  it('keeps genuinely simple goals direct', async () => {
+    const planner = plannerWithRouteResponse('{"strategy":"direct"}');
+
+    await expect(planner.route({ goal: '你好' })).resolves.toBe('direct');
+    await expect(planner.route({ goal: '现在几点了？' })).resolves.toBe('direct');
+  });
+
+  it('instructs the model to route by execution stages instead of deliverable count', async () => {
+    const invoke = vi.fn(async (_input: unknown) => new AIMessage('{"strategy":"direct"}'));
+    const planner = new DefaultPlanner({ invoke } as never, { invoke: vi.fn() } as never);
+
+    await planner.route({ goal: '你好' });
+
+    const messages = invoke.mock.calls[0]?.[0] as Array<SystemMessage | HumanMessage>;
+    expect(messages[0]?.text).toContain('execution complexity');
+    expect(messages[0]?.text).toContain('one final report is still planned');
+    expect(messages[0]?.text).toContain('build a todo application');
+  });
+
+  it('accepts fenced route JSON and rejects invalid decisions', async () => {
+    await expect(plannerWithRouteResponse('```json\n{"strategy":"planned"}\n```')
+      .route({ goal: '普通任务' })).resolves.toBe('planned');
+    await expect(plannerWithRouteResponse('I think direct')
+      .route({ goal: '普通任务' })).rejects.toThrow('Invalid planner route response');
+  });
+
   it('provides temporal context and forbids invented research facts', async () => {
     const invoke = vi.fn(async (_input: unknown) => new AIMessage(JSON.stringify({
       title: 'Recent news report',
@@ -66,3 +101,9 @@ describe('DefaultPlanner', () => {
     expect(repairMessages[0]?.text).toContain('invalid because it promises work after completion');
   });
 });
+
+function plannerWithRouteResponse(content: string): DefaultPlanner {
+  return new DefaultPlanner({
+    invoke: vi.fn(async () => new AIMessage(content)),
+  } as never, { invoke: vi.fn() } as never);
+}

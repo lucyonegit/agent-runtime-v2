@@ -7,6 +7,18 @@ import { WORKSPACE_TOOL_ROUTING_INSTRUCTION } from './runtime-context-config.js'
 
 type ChatRunnable = Runnable<BaseLanguageModelInput, AIMessageChunk>;
 
+const ROUTE_SYSTEM_PROMPT = `Return JSON only: {"strategy":"direct"|"planned"}.
+Choose based on execution complexity, not the number of final deliverables.
+Use direct only when the goal can be completed responsibly in one reasoning pass, with at most one
+tool call and no intermediate result that must be checked before producing the answer.
+Use planned whenever the goal needs two or more dependent stages, including research followed by
+verification or synthesis, collecting information before writing a report or article, comparing
+multiple sources, producing multiple deliverables, or building a non-trivial application, website,
+system, or code project. A task with one final report is still planned when research and validation
+must happen first. Explicit sequences such as "first ... then ..." are planned.
+Examples: "hello" and "what time is it" are direct. "Research an incident and write an analysis
+report" and "build a todo application" are planned.`;
+
 export class DefaultPlanner implements PlanEnginePort {
   constructor(
     private readonly routeModel: ChatRunnable,
@@ -15,17 +27,13 @@ export class DefaultPlanner implements PlanEnginePort {
 
   async route(input: { goal: string }): Promise<'direct' | 'planned'> {
     const response = await this.routeModel.invoke([
-      new SystemMessage(
-        'Return JSON only: {"strategy":"direct"|"planned"}. Use direct for conversational requests and single-outcome tasks, even when they need tools or user input. Use planned only when the goal has multiple independently verifiable execution stages or deliverables.'
-      ),
+      new SystemMessage(ROUTE_SYSTEM_PROMPT),
       new HumanMessage(input.goal),
     ]);
-    try {
-      const parsed = JSON.parse(response.text) as { strategy?: unknown };
-      return parsed.strategy === 'planned' ? 'planned' : 'direct';
-    } catch {
-      return 'direct';
-    }
+    const modelStrategy = parseRouteStrategy(response.text);
+    return modelStrategy === 'planned' || requiresPlannedExecution(input.goal)
+      ? 'planned'
+      : 'direct';
   }
 
   async createPlan(input: {
@@ -61,6 +69,29 @@ specified another bound. Steps describe work to perform, never results that have
     ]);
     return JSON.parse(response.text) as PlanSpec;
   }
+}
+
+function parseRouteStrategy(content: string): 'direct' | 'planned' {
+  const normalized = content.trim()
+    .replace(/^```(?:json)?\s*/iu, '')
+    .replace(/\s*```$/u, '');
+  try {
+    const parsed = JSON.parse(normalized) as { strategy?: unknown };
+    if (parsed.strategy === 'direct' || parsed.strategy === 'planned') return parsed.strategy;
+  } catch {
+    // The stable error below owns malformed and invalid decisions.
+  }
+  throw new Error(`Invalid planner route response: ${JSON.stringify(content)}`);
+}
+
+function requiresPlannedExecution(goal: string): boolean {
+  const research = /调查|调研|研究|检索|搜索|搜集|核查|investigat|research|survey|search|collect/iu;
+  const deliverable = /报告|文章|综述|总结|方案|report|article|analysis|brief|summary/iu;
+  const staged = /先.{1,80}(?:再|然后|之后|接着|最后)|\b(?:and then|after that|followed by)\b/iu;
+  const build = /(?:开发|构建|搭建|实现|创建|写|制作).{0,30}(?:应用|网站|系统|项目|程序|app|application|website|system|project)|(?:build|create|implement|develop).{0,40}(?:app|application|website|system|project)/iu;
+  return (research.test(goal) && deliverable.test(goal))
+    || staged.test(goal)
+    || build.test(goal);
 }
 
 export class DefaultPlanSummarizer implements PlanSummarizerPort {
