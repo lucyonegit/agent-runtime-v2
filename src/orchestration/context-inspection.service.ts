@@ -45,6 +45,9 @@ export type ContextInspectionStore = Pick<AgentStore,
   | 'listJobStepRuns'
   | 'listSessionJobs'
   | 'listSessionMessages'
+  | 'listSessionPlans'
+  | 'listSessionPlanSteps'
+  | 'listSessionStepRuns'
   | 'listSessionToolInvocations'
   | 'listActiveContextSummaries'
 >;
@@ -133,7 +136,18 @@ export class ContextInspectionService {
         mustKeep: false,
         priority: group.type === 'step_output' ? 80 : 40,
       })),
-      summaries: [],
+      bundles: facts.bundles.map(bundle => ({
+        bundle,
+        segment: 'session_history',
+        mustKeep: false,
+        priority: 40,
+      })),
+      summaries: facts.summaries.map(summary => ({
+        id: summary.id,
+        summary: summary.summary,
+        sourceRowIdEnd: summary.sourceRowIdEnd,
+        sourceBundleIds: readStringArray(summary.metadata?.sourceBundleIds),
+      })),
       toolSchemas: this.options.tools,
       model: this.options.model,
       audit: {
@@ -246,6 +260,12 @@ export class ContextInspectionService {
       verification,
     };
   }
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every(item => typeof item === 'string')
+    ? value
+    : undefined;
 }
 
 function assertNoActiveJob(jobs: AgentJob[]): void {

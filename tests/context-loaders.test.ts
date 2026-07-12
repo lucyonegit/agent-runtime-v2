@@ -201,9 +201,20 @@ function store(input: {
   messages?: AgentMessage[];
   invocations?: AgentToolInvocation[];
   summaries?: AgentContextSummary[];
+  jobs?: AgentJob[];
 }): DirectJobContextStore {
+  const jobs = input.jobs ?? [...new Set((input.messages ?? []).map(item => item.jobId))]
+    .map(id => job({
+      id,
+      status: id === 'job_current' ? 'running' : 'completed',
+      completedAtMs: id === 'job_current' ? undefined : 2,
+    }));
   return {
+    listSessionJobs: async () => jobs,
     listSessionMessages: async () => input.messages ?? [],
+    listSessionPlans: async () => [],
+    listSessionPlanSteps: async () => [],
+    listSessionStepRuns: async () => [],
     listSessionToolInvocations: async () => input.invocations ?? [],
     listActiveContextSummaries: async () => input.summaries ?? [],
   };
@@ -278,8 +289,17 @@ function stepStore(input: {
   steps: AgentPlanStep[];
   runs: AgentStepRun[];
 }): StepContextStore {
+  const jobs = [...new Set(input.messages.map(item => item.jobId))].map(id => job({
+    id,
+    strategy: id === 'job_plan' ? 'planned' : 'direct',
+    status: id === 'job_plan' ? 'running' : 'completed',
+  }));
   return {
+    listSessionJobs: async () => jobs,
     listSessionMessages: async () => input.messages,
+    listSessionPlans: async () => [plan()],
+    listSessionPlanSteps: async () => input.steps,
+    listSessionStepRuns: async () => input.runs,
     listSessionToolInvocations: async () => input.invocations,
     getPlanByJobId: async () => plan(),
     listPlanSteps: async () => input.steps,

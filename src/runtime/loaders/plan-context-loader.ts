@@ -20,7 +20,12 @@ export type PlanContextStore = Pick<AgentStore,
   | 'listPlanSteps'
   | 'listJobStepRuns'
   | 'listSessionMessages'
+  | 'listSessionJobs'
+  | 'listSessionPlans'
+  | 'listSessionPlanSteps'
+  | 'listSessionStepRuns'
   | 'listSessionToolInvocations'
+  | 'listActiveContextSummaries'
 >;
 
 export interface PlanExecutionContext {

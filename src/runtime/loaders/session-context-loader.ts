@@ -1,21 +1,43 @@
-import type { AgentMessage, AgentToolInvocation } from '../../domain/index.js';
+import type {
+  AgentContextSummary,
+  AgentJob,
+  AgentMessage,
+  AgentPlan,
+  AgentPlanStep,
+  AgentStepRun,
+  AgentToolInvocation,
+} from '../../domain/index.js';
 import type { AgentStore } from '../../storage/agent-store.js';
+import { CONTEXT_RULES_VERSION } from '../context/context-compiler.js';
 import {
   MessageGroupBuilder,
   messagesInGroup,
   type BlockedMessageGroup,
   type MessageGroup,
 } from '../context/message-group-builder.js';
+import { TurnBundleBuilder } from '../context/turn-bundle-builder.js';
+import type { TurnBundle } from '../context/context-material.js';
 
 export type SessionContextStore = Pick<AgentStore,
+  | 'listSessionJobs'
   | 'listSessionMessages'
+  | 'listSessionPlans'
+  | 'listSessionPlanSteps'
+  | 'listSessionStepRuns'
   | 'listSessionToolInvocations'
+  | 'listActiveContextSummaries'
 >;
 
 export interface SessionContextFacts {
+  jobs: AgentJob[];
   messages: AgentMessage[];
   invocations: AgentToolInvocation[];
+  plans: AgentPlan[];
+  steps: AgentPlanStep[];
+  stepRuns: AgentStepRun[];
+  summaries: AgentContextSummary[];
   groups: MessageGroup[];
+  bundles: TurnBundle[];
   blocked: BlockedMessageGroup[];
 }
 
@@ -32,15 +54,31 @@ export class SessionContextLoader {
   constructor(private readonly store: SessionContextStore) {}
 
   async load(sessionId: string): Promise<SessionContextFacts> {
-    const [messages, invocations] = await Promise.all([
+    const [jobs, messages, plans, steps, stepRuns, invocations, summaries] = await Promise.all([
+      this.store.listSessionJobs(sessionId),
       this.store.listSessionMessages(sessionId),
+      this.store.listSessionPlans(sessionId),
+      this.store.listSessionPlanSteps(sessionId),
+      this.store.listSessionStepRuns(sessionId),
       this.store.listSessionToolInvocations(sessionId),
+      this.store.listActiveContextSummaries(
+        'session', sessionId, 'conversation', CONTEXT_RULES_VERSION
+      ),
     ]);
-    const built = new MessageGroupBuilder().build(messages, invocations);
+    const built = new MessageGroupBuilder().build(messages, invocations, {
+      jobs, plans, steps, stepRuns,
+    });
+    const groups = built.groups.filter(isModelVisibleGroup);
     return {
+      jobs,
       messages,
       invocations,
-      groups: built.groups.filter(isModelVisibleGroup),
+      plans,
+      steps,
+      stepRuns,
+      summaries,
+      groups,
+      bundles: new TurnBundleBuilder().build({ sessionId, jobs, groups }),
       blocked: built.blocked,
     };
   }

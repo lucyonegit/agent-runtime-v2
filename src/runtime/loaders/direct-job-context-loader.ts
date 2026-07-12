@@ -14,7 +14,11 @@ import {
 } from './session-context-loader.js';
 
 export type DirectJobContextStore = Pick<AgentStore,
+  | 'listSessionJobs'
   | 'listSessionMessages'
+  | 'listSessionPlans'
+  | 'listSessionPlanSteps'
+  | 'listSessionStepRuns'
   | 'listSessionToolInvocations'
   | 'listActiveContextSummaries'
 >;
@@ -37,12 +41,8 @@ export class DirectJobContextLoader {
   }
 
   async load(job: AgentJob, originalGoal: string): Promise<ContextMaterial> {
-    const [facts, summaries] = await Promise.all([
-      this.#session.load(job.sessionId),
-      this.options.store.listActiveContextSummaries(
-        'job', job.id, 'job_execution', CONTEXT_RULES_VERSION
-      ),
-    ]);
+    const facts = await this.#session.load(job.sessionId);
+    const summaries = facts.summaries;
     assertNoBlockedGroups(facts.blocked, blocked => blocked.callMessage.jobId === job.id);
     const goalId = jobGoalMessageId(job);
     const stableContext = this.options.stableContext?.();
@@ -84,10 +84,21 @@ export class DirectJobContextLoader {
           priority: currentGoal ? 1_000 : group.type === 'step_output' ? 80 : currentJob ? 70 : 40,
         };
       }),
+      bundles: facts.bundles.map(bundle => {
+        const current = bundle.jobIds.includes(job.id)
+          || (job.retryOfJobId ? bundle.jobIds.includes(job.retryOfJobId) : false);
+        return {
+          bundle,
+          segment: current ? 'current_job' as const : 'session_history' as const,
+          mustKeep: current,
+          priority: current ? 1_000 : 40,
+        };
+      }),
       summaries: summaries.map(summary => ({
         id: summary.id,
         summary: summary.summary,
         sourceRowIdEnd: summary.sourceRowIdEnd,
+        sourceBundleIds: readStringArray(summary.metadata?.sourceBundleIds),
       })),
       toolSchemas: this.options.toolSchemas,
       model: this.options.model,
@@ -105,4 +116,10 @@ export class DirectJobContextLoader {
       },
     };
   }
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every(item => typeof item === 'string')
+    ? value
+    : undefined;
 }

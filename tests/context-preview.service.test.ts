@@ -103,6 +103,9 @@ function storeFixture(overrides: {
     listJobStepRuns: async () => [],
     listSessionJobs: async () => jobs,
     listSessionMessages: async () => messages,
+    listSessionPlans: async () => [],
+    listSessionPlanSteps: async () => [],
+    listSessionStepRuns: async () => [],
     listSessionToolInvocations: async () => [toolInvocation],
     listActiveContextSummaries: async () => [],
   };

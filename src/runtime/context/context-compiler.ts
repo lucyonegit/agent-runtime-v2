@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto';
 import { SystemMessage, type BaseMessage } from '@langchain/core/messages';
 import type { AgentContextInputManifest } from '../../domain/index.js';
 import { ContextFormatter } from './context-formatter.js';
-import type { ContextMaterial } from './context-material.js';
+import type {
+  CompiledContextAnnotation,
+  ContextMaterial,
+  TurnBundle,
+} from './context-material.js';
 import { messagesInGroup, type MessageGroup } from './message-group-builder.js';
 import {
   TokenBudget,
@@ -10,7 +14,8 @@ import {
   type TokenBudgetItem,
 } from './token-budget.js';
 
-export const CONTEXT_RULES_VERSION = 'job-step-run-context-v5';
+export const LEGACY_CONTEXT_RULES_VERSION = 'job-step-run-context-v5';
+export const CONTEXT_RULES_VERSION = 'complete-session-plan-context-v6';
 
 export interface CompiledContext {
   messages: BaseMessage[];
@@ -21,6 +26,7 @@ export interface CompiledContext {
   mustKeepMessageIds: string[];
   compressibleMessageIds: string[];
   compressionRecommended: boolean;
+  annotations: CompiledContextAnnotation[];
 }
 
 export type BuiltContext = CompiledContext;
@@ -29,7 +35,23 @@ type ContextItem =
   | { kind: 'message'; message: BaseMessage; category: 'system' | 'messages' }
   | { kind: 'tools'; category: 'tools' }
   | { kind: 'summary'; id: string; message: BaseMessage; category: 'summaries' }
-  | { kind: 'group'; group: MessageGroup; category: 'messages' };
+  | {
+      kind: 'group';
+      group: MessageGroup;
+      formatted: BaseMessage[];
+      truncatedToolResultMessageIds: string[];
+      category: 'messages';
+    }
+  | {
+      kind: 'bundle';
+      bundle: TurnBundle;
+      formatted: Array<{
+        group: MessageGroup;
+        messages: BaseMessage[];
+        truncatedToolResultMessageIds: string[];
+      }>;
+      category: 'messages';
+    };
 
 export function compileContext(material: ContextMaterial): CompiledContext {
   const formatter = new ContextFormatter();
@@ -88,22 +110,54 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     });
   }
 
-  for (const groupMaterial of material.groups) {
-    const messages = messagesInGroup(groupMaterial.group);
-    if (
-      !groupMaterial.mustKeep
-      && maxCoveredRowId > 0
-      && messages.every(message => message.rowId <= maxCoveredRowId)
-    ) continue;
-    items.push({
-      id: groupMaterial.group.id,
-      value: { kind: 'group', group: groupMaterial.group, category: 'messages' },
-      estimatedTokens: estimateTextTokens(canonicalJson(messages)),
-      mustKeep: groupMaterial.mustKeep,
-      priority: groupMaterial.priority,
-      recency: Math.max(...messages.map(message => message.rowId)),
-      originalOrder: order++,
-    });
+  if (material.bundles) {
+    for (const bundleMaterial of material.bundles) {
+      if (!bundleMaterial.mustKeep && maxCoveredRowId >= bundleMaterial.bundle.sourceRowIdEnd) {
+        continue;
+      }
+      const formatted = bundleMaterial.bundle.groups.map(group => {
+        const result = formatter.formatGroupWithMetadata(group);
+        return { group, ...result };
+      });
+      items.push({
+        id: bundleMaterial.bundle.id,
+        value: { kind: 'bundle', bundle: bundleMaterial.bundle, formatted, category: 'messages' },
+        estimatedTokens: estimateTextTokens(canonicalJson(
+          formatted.flatMap(item => item.messages.map(message => message.toDict()))
+        )),
+        mustKeep: bundleMaterial.mustKeep,
+        priority: bundleMaterial.priority,
+        recency: bundleMaterial.bundle.sourceRowIdEnd,
+        originalOrder: order++,
+      });
+    }
+  } else {
+    for (const groupMaterial of material.groups) {
+      const messages = messagesInGroup(groupMaterial.group);
+      if (
+        !groupMaterial.mustKeep
+        && maxCoveredRowId > 0
+        && messages.every(message => message.rowId <= maxCoveredRowId)
+      ) continue;
+      const formatted = formatter.formatGroupWithMetadata(groupMaterial.group);
+      items.push({
+        id: groupMaterial.group.id,
+        value: {
+          kind: 'group',
+          group: groupMaterial.group,
+          formatted: formatted.messages,
+          truncatedToolResultMessageIds: formatted.truncatedToolResultMessageIds,
+          category: 'messages',
+        },
+        estimatedTokens: estimateTextTokens(canonicalJson(
+          formatted.messages.map(message => message.toDict())
+        )),
+        mustKeep: groupMaterial.mustKeep,
+        priority: groupMaterial.priority,
+        recency: Math.max(...messages.map(message => message.rowId)),
+        originalOrder: order++,
+      });
+    }
   }
 
   for (const trailing of material.trailingMessages ?? []) {
@@ -118,10 +172,18 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     });
   }
 
-  const selection = budget.select(items, material.model);
+  const bundleItemIds = new Set(items
+    .filter(item => item.value.kind === 'bundle')
+    .map(item => item.id));
+  const selection = material.bundles
+    ? budget.selectWithContiguousTail(items, material.model, bundleItemIds)
+    : budget.select(items, material.model);
   const formattedMessages: BaseMessage[] = [];
   const groupIds: string[] = [];
   const summaryIds: string[] = [];
+  const bundleIds: string[] = [];
+  const truncatedToolResultMessageIds: string[] = [];
+  const annotations: CompiledContextAnnotation[] = [];
   const breakdown = {
     system: 0,
     tools: 0,
@@ -138,32 +200,63 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     }
     if (item.value.kind === 'group') {
       groupIds.push(item.value.group.id);
-      formattedMessages.push(...formatter.formatGroup(item.value.group));
+      formattedMessages.push(...item.value.formatted);
+      truncatedToolResultMessageIds.push(...item.value.truncatedToolResultMessageIds);
+      for (const message of item.value.formatted) {
+        void message;
+        annotations.push({ groupId: item.value.group.id });
+      }
+    }
+    if (item.value.kind === 'bundle') {
+      bundleIds.push(item.value.bundle.id);
+      for (const formatted of item.value.formatted) {
+        groupIds.push(formatted.group.id);
+        formattedMessages.push(...formatted.messages);
+        truncatedToolResultMessageIds.push(...formatted.truncatedToolResultMessageIds);
+        for (const message of formatted.messages) {
+          void message;
+          annotations.push({ groupId: formatted.group.id, bundleId: item.value.bundle.id });
+        }
+      }
     }
   }
 
   const selectedRows = selection.selected
-    .filter(item => item.value.kind === 'group')
-    .flatMap(item => item.value.kind === 'group' ? messagesInGroup(item.value.group) : []);
+    .flatMap(item => {
+      if (item.value.kind === 'group') return messagesInGroup(item.value.group);
+      if (item.value.kind === 'bundle') return item.value.bundle.groups.flatMap(messagesInGroup);
+      return [];
+    });
   const mustKeepMessageIds = selection.selected
-    .filter(item => item.mustKeep && item.value.kind === 'group')
-    .flatMap(item => item.value.kind === 'group'
-      ? messagesInGroup(item.value.group).map(message => message.id)
-      : []);
+    .filter(item => item.mustKeep)
+    .flatMap(item => {
+      if (item.value.kind === 'group') {
+        return messagesInGroup(item.value.group).map(message => message.id);
+      }
+      if (item.value.kind === 'bundle') {
+        return item.value.bundle.groups.flatMap(group => (
+          messagesInGroup(group).map(message => message.id)
+        ));
+      }
+      return [];
+    });
   const explicitCompressionCandidates = material.compression.candidateMessageIds
     ? new Set(material.compression.candidateMessageIds)
     : undefined;
   const compressibleMessageIds = selection.selected
-    .filter(item => item.value.kind === 'group' && (
-      explicitCompressionCandidates
-        ? messagesInGroup(item.value.group).some(message => explicitCompressionCandidates.has(message.id))
-        : !item.mustKeep
-    ))
-    .flatMap(item => item.value.kind === 'group'
-      ? messagesInGroup(item.value.group)
-        .filter(message => !explicitCompressionCandidates || explicitCompressionCandidates.has(message.id))
-        .map(message => message.id)
-      : []);
+    .flatMap(item => {
+      const messages = item.value.kind === 'group'
+        ? messagesInGroup(item.value.group)
+        : item.value.kind === 'bundle'
+          ? item.value.bundle.groups.flatMap(messagesInGroup)
+          : [];
+      if (messages.length === 0) return [];
+      if (explicitCompressionCandidates) {
+        return messages.filter(message => explicitCompressionCandidates.has(message.id))
+          .map(message => message.id);
+      }
+      return item.mustKeep ? [] : messages.map(message => message.id);
+    });
   const toolSchemaChecksum = toolSchemas.length > 0
     ? sha256(canonicalJson(toolSchemas.map(tool => ({
         name: tool.name,
@@ -181,6 +274,13 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     systemPromptVersion: material.audit.systemPromptVersion,
     messageGroupIds: groupIds,
     summaryIds,
+    ...(material.bundles ? { selectedBundleIds: bundleIds } : {}),
+    ...(material.bundles ? {
+      summarizedBundleIds: material.summaries.flatMap(summary => summary.sourceBundleIds ?? []),
+    } : {}),
+    ...(truncatedToolResultMessageIds.length > 0
+      ? { truncatedToolResultMessageIds: [...new Set(truncatedToolResultMessageIds)] }
+      : {}),
     ...(selectedRows.length > 0
       ? {
           includedRowIdStart: Math.min(...selectedRows.map(message => message.rowId)),
@@ -204,6 +304,7 @@ export function compileContext(material: ContextMaterial): CompiledContext {
       selection.candidateTokens > selection.safeInputLimit * 0.7
       || material.compression.newCompressibleMessageCount >= material.compression.messageThreshold
     ),
+    annotations,
   };
 }
 

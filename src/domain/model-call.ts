@@ -18,6 +18,9 @@ export interface AgentContextInputManifest {
   systemPromptVersion: string;
   messageGroupIds: string[];
   summaryIds: string[];
+  selectedBundleIds?: string[];
+  summarizedBundleIds?: string[];
+  truncatedToolResultMessageIds?: string[];
   includedRowIdStart?: number;
   includedRowIdEnd?: number;
   toolSchemaChecksum?: string;

@@ -68,6 +68,58 @@ export class TokenBudget {
       candidateTokens: sumTokens(items),
     };
   }
+
+  selectWithContiguousTail<T>(
+    items: TokenBudgetItem<T>[],
+    model: { maxContextTokens: number; reservedOutputTokens: number },
+    tailItemIds: ReadonlySet<string>
+  ): TokenBudgetSelection<T> {
+    const hardInputLimit = model.maxContextTokens - model.reservedOutputTokens;
+    if (hardInputLimit <= 0) {
+      throw new ContextOverflowError('Reserved output tokens consume the entire model context.');
+    }
+    const safeInputLimit = Math.floor(hardInputLimit * 0.9);
+    const mustKeepItems = items.filter(item => item.mustKeep);
+    const mustKeepTokens = sumTokens(mustKeepItems);
+    if (mustKeepTokens > hardInputLimit) {
+      throw new ContextOverflowError(
+        `Must-keep context requires ${mustKeepTokens} tokens, above hard limit ${hardInputLimit}.`
+      );
+    }
+
+    const selected = [...mustKeepItems];
+    let selectedTokens = mustKeepTokens;
+    const optionalNonTail = items
+      .filter(item => !item.mustKeep && !tailItemIds.has(item.id))
+      .sort((left, right) => (
+        right.priority - left.priority
+        || right.recency - left.recency
+        || left.originalOrder - right.originalOrder
+      ));
+    for (const item of optionalNonTail) {
+      if (selectedTokens + item.estimatedTokens > safeInputLimit) continue;
+      selected.push(item);
+      selectedTokens += item.estimatedTokens;
+    }
+
+    const optionalTail = items
+      .filter(item => !item.mustKeep && tailItemIds.has(item.id))
+      .sort((left, right) => right.originalOrder - left.originalOrder);
+    for (const item of optionalTail) {
+      if (selectedTokens + item.estimatedTokens > safeInputLimit) break;
+      selected.push(item);
+      selectedTokens += item.estimatedTokens;
+    }
+    const selectedIds = new Set(selected.map(item => item.id));
+    return {
+      selected: selected.sort((left, right) => left.originalOrder - right.originalOrder),
+      dropped: items.filter(item => !selectedIds.has(item.id)),
+      estimatedInputTokens: selectedTokens,
+      hardInputLimit,
+      safeInputLimit,
+      candidateTokens: sumTokens(items),
+    };
+  }
 }
 
 export function estimateTextTokens(value: string): number {

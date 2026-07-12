@@ -107,6 +107,9 @@ function store(input: {
     listJobStepRuns: async () => input.runs ?? [],
     listSessionJobs: async () => input.jobs,
     listSessionMessages: async () => input.messages,
+    listSessionPlans: async () => input.plan ? [input.plan] : [],
+    listSessionPlanSteps: async () => input.steps ?? [],
+    listSessionStepRuns: async () => input.runs ?? [],
     listSessionToolInvocations: async () => [],
     listActiveContextSummaries: async () => [],
   };

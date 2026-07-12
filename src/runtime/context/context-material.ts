@@ -2,6 +2,12 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { MessageGroup } from './message-group-builder.js';
 
+export type ContextSegment =
+  | 'session_history'
+  | 'current_job'
+  | 'current_plan'
+  | 'current_step';
+
 export interface ContextFixedMessage {
   id: string;
   message: BaseMessage;
@@ -10,15 +16,47 @@ export interface ContextFixedMessage {
 
 export interface ContextGroupMaterial {
   group: MessageGroup;
-  segment: 'session_history' | 'current_job' | 'current_plan' | 'current_step';
+  segment: ContextSegment;
   mustKeep: boolean;
   priority: number;
+}
+
+export interface TurnBundle {
+  id: string;
+  type: 'direct_turn' | 'planned_turn';
+  sessionId: string;
+  rootJobId: string;
+  jobIds: string[];
+  planId?: string;
+  terminal: boolean;
+  sourceRowIdStart: number;
+  sourceRowIdEnd: number;
+  groups: MessageGroup[];
+}
+
+export interface ContextBundleMaterial {
+  bundle: TurnBundle;
+  segment: ContextSegment;
+  mustKeep: boolean;
+  priority: number;
+}
+
+export interface CompiledContextAnnotation {
+  sourceMessageId?: string;
+  groupId: string;
+  bundleId?: string;
+  projected?: boolean;
+  truncated?: boolean;
+  originalTokenEstimate?: number;
+  projectedTokenEstimate?: number;
+  checksum?: string;
 }
 
 export interface ContextSummaryMaterial {
   id: string;
   summary: string;
   sourceRowIdEnd?: number;
+  sourceBundleIds?: string[];
 }
 
 export interface ContextModelBudget {
@@ -33,6 +71,7 @@ export interface ContextMaterial {
   trailingMessages?: ContextFixedMessage[];
   fixedPrefix: Record<string, unknown>;
   groups: ContextGroupMaterial[];
+  bundles?: ContextBundleMaterial[];
   summaries: ContextSummaryMaterial[];
   toolSchemas: StructuredToolInterface[];
   model: ContextModelBudget;

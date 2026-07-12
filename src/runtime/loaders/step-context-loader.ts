@@ -55,11 +55,8 @@ export class StepContextLoader {
         position: step.position,
         title: step.title,
         instruction: step.instruction,
-        status: step.status,
       })),
       currentStepId: input.step.id,
-      currentStepRunId: input.stepRun.id,
-      currentRunNo: input.stepRun.runNo,
     });
     const fixedMessages = [{
       id: 'must_keep:system',
@@ -80,7 +77,9 @@ export class StepContextLoader {
     });
     const currentInstruction =
       `Current PlanStep — execute only this step. Do not execute later PlanSteps:\n${input.step.instruction}`;
-    const summaryEnd = Math.max(0, ...summaries.map(summary => summary.sourceRowIdEnd));
+    const allSummaries = [...context.facts.summaries, ...summaries]
+      .filter((summary, index, values) => values.findIndex(value => value.id === summary.id) === index);
+    const summaryEnd = Math.max(0, ...allSummaries.map(summary => summary.sourceRowIdEnd));
     const sessionGroups = context.sessionBaseline.map(group => ({
       group,
       segment: 'session_history' as const,
@@ -120,10 +119,28 @@ export class StepContextLoader {
         plan: planText,
       },
       groups: [...sessionGroups, ...planGroups],
-      summaries: summaries.map(summary => ({
+      bundles: context.facts.bundles.map(bundle => {
+        const current = bundle.jobIds.includes(input.job.id);
+        const projected = current
+          ? {
+              ...bundle,
+              groups: bundle.groups.filter(group => !(
+                group.type === 'plan_definition' && group.plan.id === context.plan.id
+              )),
+            }
+          : bundle;
+        return {
+          bundle: projected,
+          segment: current ? 'current_plan' as const : 'session_history' as const,
+          mustKeep: current,
+          priority: current ? 1_000 : 40,
+        };
+      }),
+      summaries: allSummaries.map(summary => ({
         id: summary.id,
         summary: summary.summary,
         sourceRowIdEnd: summary.sourceRowIdEnd,
+        sourceBundleIds: readStringArray(summary.metadata?.sourceBundleIds),
       })),
       toolSchemas: this.options.toolSchemas,
       model: this.options.model,
@@ -143,4 +160,10 @@ export class StepContextLoader {
       },
     };
   }
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every(item => typeof item === 'string')
+    ? value
+    : undefined;
 }
