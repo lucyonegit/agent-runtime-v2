@@ -10,7 +10,18 @@ export function runtimeContext(config?: RunnableConfig): RuntimeToolContext {
 }
 
 export function jsonToolOutput(result: unknown): [string, unknown] {
-  return [JSON.stringify(result), result];
+  const safeResult = sanitizeJsonValue(result);
+  return [JSON.stringify(safeResult), safeResult];
+}
+
+function sanitizeJsonValue(value: unknown): unknown {
+  if (typeof value === 'string') return value.replaceAll('\u0000', '');
+  if (Array.isArray(value)) return value.map(sanitizeJsonValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+    key.replaceAll('\u0000', ''),
+    sanitizeJsonValue(child),
+  ]));
 }
 
 export function stringArgument(

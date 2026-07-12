@@ -2,14 +2,15 @@ import { mkdtemp, readFile, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isToolMessage } from '@langchain/core/messages';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   RuntimeTool,
   RuntimeToolContext,
   RuntimeUserInputArtifact,
 } from '../src/runtime/tool-executor.js';
-import { isPrivateAddress } from '../src/tools/browser-tools.js';
+import { isPrivateAddress, isTextMediaType } from '../src/tools/browser-tools.js';
 import { createRuntimeTools, removeSessionSandbox } from '../src/tools/index.js';
+import { jsonToolOutput } from '../src/tools/tool-utils.js';
 
 describe('LangChain runtime tools', () => {
   let sandboxRoot: string;
@@ -31,6 +32,7 @@ describe('LangChain runtime tools', () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
     await rm(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -188,6 +190,39 @@ describe('LangChain runtime tools', () => {
       if (previous === undefined) delete process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS;
       else process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS = previous;
     }
+  });
+
+  it('rejects PDF responses before decoding the binary body', async () => {
+    const text = vi.fn(async () => '%PDF-1.5\u0000binary');
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      url: 'https://93.184.216.34/report.pdf',
+      headers: new Headers({ 'content-type': 'application/pdf' }),
+      text,
+    })));
+
+    await expect(invoke('browse_url', {
+      url: 'https://93.184.216.34/report.pdf',
+    })).rejects.toThrow('application/pdf');
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it('accepts only explicit textual browser response media types', () => {
+    expect(isTextMediaType('text/html; charset=utf-8')).toBe(true);
+    expect(isTextMediaType('application/json')).toBe(true);
+    expect(isTextMediaType('application/atom+xml')).toBe(true);
+    expect(isTextMediaType('application/pdf')).toBe(false);
+    expect(isTextMediaType('application/octet-stream')).toBe(false);
+  });
+
+  it('removes NUL characters from JSON tool content and artifacts', () => {
+    const [content, artifact] = jsonToolOutput({
+      'nul\u0000key': ['a\u0000b', { nested: '\u0000value\u0000' }],
+    });
+    expect(artifact).toEqual({ nulkey: ['ab', { nested: 'value' }] });
+    expect(content).toBe('{"nulkey":["ab",{"nested":"value"}]}');
+    expect(jsonToolOutput('a\u0000b')).toEqual(['"ab"', 'ab']);
   });
 
   async function invoke(name: string, args: Record<string, unknown>): Promise<unknown> {

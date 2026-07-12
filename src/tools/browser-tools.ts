@@ -29,6 +29,16 @@ export function createBrowserTools(): RuntimeTool[] {
       const maxLength = Math.max(500, Math.min(20_000, numberArgument(values, 'maxLength', 5_000)));
       const response = await safeFetch(url);
       if (!response.ok) throw new Error(`Fetch failed with status ${response.status}.`);
+      const mediaType = response.headers.get('content-type')
+        ?.split(';', 1)[0]
+        ?.trim()
+        .toLowerCase();
+      if (!mediaType || !isTextMediaType(mediaType)) {
+        throw new Error(
+          `Unsupported content type ${JSON.stringify(mediaType ?? 'unknown')} for browse_url. `
+          + 'Use a dedicated file or PDF tool instead.'
+        );
+      }
       const html = await response.text();
       return jsonToolOutput({
         success: true,
@@ -116,6 +126,15 @@ export function isPrivateAddress(address: string, allowProxyFakeIp = false): boo
     || a === 100 && b! >= 64 && b! <= 127
     || !allowProxyFakeIp && a === 198 && (b === 18 || b === 19)
     || a! >= 224;
+}
+
+export function isTextMediaType(mediaType: string): boolean {
+  const normalized = mediaType.split(';', 1)[0]!.trim().toLowerCase();
+  return normalized.startsWith('text/')
+    || normalized === 'application/json'
+    || normalized === 'application/xml'
+    || normalized === 'application/xhtml+xml'
+    || /^application\/[a-z0-9!#$&^_.+-]+\+(?:json|xml)$/.test(normalized);
 }
 
 function extractTitle(html: string): string {
