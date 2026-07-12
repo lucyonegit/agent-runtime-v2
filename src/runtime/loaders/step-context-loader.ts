@@ -61,8 +61,8 @@ export class StepContextLoader {
         instruction: step.instruction,
         ...(legacy ? { status: step.status } : {}),
       })),
-      currentStepId: input.step.id,
       ...(legacy ? {
+        currentStepId: input.step.id,
         currentStepRunId: input.stepRun.id,
         currentRunNo: input.stepRun.runNo,
       } : {}),

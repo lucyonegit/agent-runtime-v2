@@ -7,11 +7,13 @@ import {
 } from '@langchain/core/messages';
 import type { AgentMessage } from '../../domain/index.js';
 import type { MessageGroup } from './message-group-builder.js';
+import type { CompiledContextAnnotation } from './context-material.js';
 import { ToolResultContextProjector } from './tool-result-context-projector.js';
 
 export interface FormattedContextGroup {
   messages: BaseMessage[];
   truncatedToolResultMessageIds: string[];
+  annotations: Array<Omit<CompiledContextAnnotation, 'groupId' | 'bundleId'>>;
 }
 
 export class ContextFormatter {
@@ -49,6 +51,17 @@ export class ContextFormatter {
         truncatedToolResultMessageIds: projections
           .filter(({ projection }) => projection.truncated)
           .map(({ message }) => message.id),
+        annotations: [
+          { sourceMessageId: group.callMessage.id },
+          ...projections.map(({ message, projection }) => ({
+            sourceMessageId: message.id,
+            projected: projection.truncated,
+            truncated: projection.truncated,
+            originalTokenEstimate: projection.originalTokenEstimate,
+            projectedTokenEstimate: projection.projectedTokenEstimate,
+            checksum: projection.checksum,
+          })),
+        ],
       };
     }
     if (group.type === 'plan_definition') {
@@ -70,6 +83,7 @@ export class ContextFormatter {
           }),
         })],
         truncatedToolResultMessageIds: [],
+        annotations: [{ sourceMessageId: group.anchorMessage.id, projected: true }],
       };
     }
     if (group.type === 'step_output' && group.output && group.step && group.stepRun) {
@@ -87,17 +101,20 @@ export class ContextFormatter {
           }),
         })],
         truncatedToolResultMessageIds: [],
+        annotations: [{ sourceMessageId: group.message.id, projected: true }],
       };
     }
     if (group.type === 'plan_final') {
       return {
         messages: [formatMessage(group.message)],
         truncatedToolResultMessageIds: [],
+        annotations: [{ sourceMessageId: group.message.id }],
       };
     }
     return {
       messages: [formatMessage(group.messages[0])],
       truncatedToolResultMessageIds: [],
+      annotations: [{ sourceMessageId: group.messages[0].id }],
     };
   }
 }

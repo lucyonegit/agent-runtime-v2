@@ -15,7 +15,7 @@ import {
 } from './token-budget.js';
 
 export const LEGACY_CONTEXT_RULES_VERSION = 'job-step-run-context-v5';
-export const CONTEXT_RULES_VERSION = 'complete-session-plan-context-v6';
+export const CONTEXT_RULES_VERSION = 'job-step-run-context-v6';
 
 export interface CompiledContext {
   messages: BaseMessage[];
@@ -41,6 +41,7 @@ type ContextItem =
       group: MessageGroup;
       formatted: BaseMessage[];
       truncatedToolResultMessageIds: string[];
+      annotations: Array<Omit<CompiledContextAnnotation, 'groupId' | 'bundleId'>>;
       category: 'messages';
     }
   | {
@@ -50,6 +51,7 @@ type ContextItem =
         group: MessageGroup;
         messages: BaseMessage[];
         truncatedToolResultMessageIds: string[];
+        annotations: Array<Omit<CompiledContextAnnotation, 'groupId' | 'bundleId'>>;
       }>;
       category: 'messages';
     };
@@ -148,6 +150,7 @@ export function compileContext(material: ContextMaterial): CompiledContext {
           group: groupMaterial.group,
           formatted: formatted.messages,
           truncatedToolResultMessageIds: formatted.truncatedToolResultMessageIds,
+          annotations: formatted.annotations,
           category: 'messages',
         },
         estimatedTokens: estimateTextTokens(canonicalJson(
@@ -207,9 +210,11 @@ export function compileContext(material: ContextMaterial): CompiledContext {
       groupIds.push(item.value.group.id);
       formattedMessages.push(...item.value.formatted);
       truncatedToolResultMessageIds.push(...item.value.truncatedToolResultMessageIds);
-      for (const message of item.value.formatted) {
-        void message;
-        annotations.push({ groupId: item.value.group.id });
+      for (let index = 0; index < item.value.formatted.length; index += 1) {
+        annotations.push({
+          groupId: item.value.group.id,
+          ...item.value.annotations[index],
+        });
       }
     }
     if (item.value.kind === 'bundle') {
@@ -218,9 +223,12 @@ export function compileContext(material: ContextMaterial): CompiledContext {
         groupIds.push(formatted.group.id);
         formattedMessages.push(...formatted.messages);
         truncatedToolResultMessageIds.push(...formatted.truncatedToolResultMessageIds);
-        for (const message of formatted.messages) {
-          void message;
-          annotations.push({ groupId: formatted.group.id, bundleId: item.value.bundle.id });
+        for (let index = 0; index < formatted.messages.length; index += 1) {
+          annotations.push({
+            groupId: formatted.group.id,
+            bundleId: item.value.bundle.id,
+            ...formatted.annotations[index],
+          });
         }
       }
     }

@@ -16,7 +16,7 @@
 - 不修改 createPlan → createStepRun → ReAct → commitStepOutput → finalize 的落库事务顺序。
 - 不修改 `RuntimeEventWriter`、SSE 事件类型或事件提交顺序。
 - 不将 `plan_final.plan_id IS NULL` 作为写入修复；读取投影通过 `message.jobId → job → unique plan` 兼容现存数据。
-- Context v5 的历史 ModelCall 必须继续按 v5 manifest 精确重建；新调用写入 v6 manifest。
+- Context v5 的历史 ModelCall 继续按 v5 manifest 和 legacy projection 重建；能够从现有事实恢复的调用必须匹配 checksum，旧 manifest 未保存动态状态而无法恢复的调用必须明确报 `context_snapshot_unreconstructable`。新调用写入 v6 manifest。
 - 原始 ToolResult 永久保存在数据库和 View 中；仅模型输入投影允许确定性裁剪。
 
 ## Task 1: Add v6 context domain types and semantic message groups
@@ -457,7 +457,7 @@ git add src/orchestration/context-inspection.service.ts src/runtime/loaders/mode
 git commit -m "feat: expose v6 context selection in debug preview"
 ```
 
-## Task 8: Version v6 and preserve exact v5 ModelCall reconstruction
+## Task 8: Version v6 and preserve honest v5 ModelCall reconstruction
 
 **Files:**
 
@@ -469,7 +469,7 @@ git commit -m "feat: expose v6 context selection in debug preview"
 
 - [ ] **Step 1: Add v5/v6 reconstruction fixtures**
 
-Persist one v5 manifest with legacy `messageGroupIds` and one v6 manifest with bundle fields. Assert inspection selects the recorded compiler branch and reproduces identical message order/checksum for each fixture.
+Persist one recoverable v5 manifest with legacy `messageGroupIds` and one v6 manifest with bundle fields. Assert inspection selects the recorded compiler branch and reproduces identical message order/checksum. Add one v5 fixture whose historical dynamic state is unavailable and assert explicit `context_snapshot_unreconstructable` rather than latest-rule reconstruction.
 
 - [ ] **Step 2: Bump only new formal calls to v6**
 
@@ -555,5 +555,5 @@ git commit -m "refactor: complete session and plan context pipeline"
 - Tool protocol pairs are never broken; large results are deterministically projected only for model input.
 - Old completed TurnBundles may be represented by one structured Session rolling summary while raw rows remain queryable.
 - Context Preview and formal execution share the same pure loaders/projector/compiler path, but preview performs no writes and includes no draft.
-- v5 and v6 ModelCalls are reconstructed with their recorded rules.
+- v6 ModelCalls and recoverable v5 ModelCalls are reconstructed with recorded rules; unrecoverable v5 calls fail explicitly.
 - Database schema, persistence transaction chain and SSE event behavior remain unchanged.

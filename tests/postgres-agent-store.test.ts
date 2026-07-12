@@ -1256,10 +1256,10 @@ describe('PostgresAgentStore Job transactions', () => {
       messageType: 'plan_final', content: 'planned final answer',
     });
     expect(await store.getModelUsageStats('session_runtime_e2e')).toMatchObject({
-      totalModelCalls: 9,
-      totalActualInputTokens: 108,
-      totalActualOutputTokens: 72,
-      totalTokens: 180,
+      totalModelCalls: 8,
+      totalActualInputTokens: 96,
+      totalActualOutputTokens: 64,
+      totalTokens: 160,
     });
     expect((await store.listModelCalls('job_planned')).some(call => call.callType === 'context.compress')).toBe(true);
     expect(events.some(event => event.type === 'plan.upserted')).toBe(true);

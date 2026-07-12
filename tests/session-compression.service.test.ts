@@ -94,7 +94,7 @@ function contextMaterial(bundles: TurnBundle[]): ContextMaterial {
     model: { provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500 },
     audit: {
       purpose: 'job_execution',
-      contextRulesVersion: 'complete-session-plan-context-v6',
+      contextRulesVersion: 'job-step-run-context-v6',
       systemPromptVersion: 'test-v1',
     },
     compression: {

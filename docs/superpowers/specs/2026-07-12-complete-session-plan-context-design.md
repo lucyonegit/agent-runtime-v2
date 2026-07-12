@@ -631,7 +631,7 @@ Context Preview 返回：
 
 Preview 不单独复制 Context 选择逻辑。
 
-## 15. v5 / v6 精确重建
+## 15. v5 / v6 重建
 
 新规则版本：
 
@@ -641,7 +641,7 @@ job-step-run-context-v6
 
 - v6 PlanDefinition 只包含不可变字段，避免 Plan/Step 状态更新破坏 checksum。
 - v6 ModelCall 使用新的 Bundle/Manifest/Formatter。
-- v5 ModelCall 使用保留的 legacy v5 group formatter/projection。
+- v5 ModelCall 使用保留的 legacy v5 group formatter/projection。由于旧 manifest 没有保存当时的动态 Plan/Step 状态，只有仍可从持久事实精确恢复的 v5 调用才能通过 checksum；无法恢复的调用明确返回 `context_snapshot_unreconstructable`，不能伪装成精确快照。
 - 未知版本返回 `context_snapshot_unreconstructable`。
 - 不修改已有 ModelCall、InputManifest 或 InputChecksum。
 
@@ -757,7 +757,7 @@ Projector、Bundler 和 Compiler 必须留在 `runtime/context`，不能回到 p
 - `next_turn.messages` 是下一次 Direct Job 去掉当前 HumanMessage 后的精确前缀。
 - StepRun 看到 immutable PlanDefinition、前序完整 StepExecutionBundle 和最后的 current instruction。
 - PlanFinal 仍只看到 goal、PlanDefinition、validated StepOutputs。
-- v5/v6 ModelCall 分别精确重建并匹配 checksum。
+- v6 ModelCall 精确重建并匹配 checksum；可恢复的 v5 调用同样匹配，信息不足的 v5 调用明确报不可重建。
 
 ### 19.6 PostgreSQL
 
@@ -775,7 +775,7 @@ Projector、Bundler 和 Compiler 必须留在 `runtime/context`，不能回到 p
 - 原始工具结果完整持久化，模型上下文不会被单次大输出击穿。
 - 固定运行规则每轮重新注入，不被摘要复制。
 - Preview 与正式调用使用同一套 Loader、Bundler、Projector 和 Compiler。
-- ModelCall 精确重建不受 Plan/Step 动态状态变化影响。
+- v6 ModelCall 精确重建不受 Plan/Step 动态状态变化影响；历史 v5 遵循显式可恢复性边界。
 - ContextCompiler 不理解 Job/Plan/Step 业务分支，只处理 ContextMaterial 和完整 Bundle。
 - 数据库 schema、落库事务、Plan/Step/ReAct 执行链与 SSE 保持不变。
 
