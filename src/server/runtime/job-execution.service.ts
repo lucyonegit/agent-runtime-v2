@@ -4,10 +4,10 @@ import type { JobExecutionService } from '../../orchestration/agent-runtime.js';
 import { PlanEngine } from '../../planner/plan-engine.js';
 import { PlanSummarizer } from '../../planner/plan-summarizer.js';
 import { STEP_OUTPUT_INSTRUCTION } from '../../planner/planner-prompts.js';
-import { DirectJobExecutor } from '../../runtime/executors/direct-job-executor.js';
-import { PlanExecutor } from '../../runtime/executors/plan-executor.js';
+import { DirectJobWorkflow } from '../../orchestration/workflows/direct-job-workflow.js';
+import { PlannedJobWorkflow } from '../../orchestration/workflows/planned-job-workflow.js';
+import { StepWorkflow } from '../../orchestration/workflows/step-workflow.js';
 import { ReactExecutor } from '../../runtime/executors/react-executor.js';
-import { StepExecutor } from '../../runtime/executors/step-executor.js';
 import { DirectJobContextLoader } from '../../runtime/loaders/direct-job-context-loader.js';
 import { StepContextLoader } from '../../runtime/loaders/step-context-loader.js';
 import { JobCoordinator } from '../../orchestration/lifecycle/job-coordinator.js';
@@ -49,8 +49,8 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     & RuntimeJobExecutionOptions;
   readonly #react: ReactExecutor;
   readonly #directContext: DirectJobContextLoader;
-  readonly #directExecutor: DirectJobExecutor;
-  readonly #planExecutor: PlanExecutor;
+  readonly #directExecutor: DirectJobWorkflow;
+  readonly #planExecutor: PlannedJobWorkflow;
 
   constructor(options: RuntimeJobExecutionOptions) {
     this.#options = {
@@ -105,14 +105,14 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       maxToolCalls: this.#options.maxToolCalls,
       executionDeadlineMs: this.#options.executionDeadlineMs,
     });
-    this.#directExecutor = new DirectJobExecutor(
+    this.#directExecutor = new DirectJobWorkflow(
       this.#react,
       this.#directContext,
       this.#options.publisher
     );
-    this.#planExecutor = new PlanExecutor({
+    this.#planExecutor = new PlannedJobWorkflow({
       store: this.#options.store,
-      stepExecutor: new StepExecutor(this.#react, stepContexts),
+      stepExecutor: new StepWorkflow(this.#react, stepContexts),
       requireOwnedJob: jobId => this.#requireOwnedJob(jobId),
     });
   }

@@ -1,8 +1,8 @@
 import type { AgentJob, AgentPlanStep, AgentStepRun } from '../../domain/index.js';
-import { StepContextLoader } from '../loaders/step-context-loader.js';
-import { ReactExecutor } from './react-executor.js';
+import { StepContextLoader } from '../../runtime/loaders/step-context-loader.js';
+import { ReactExecutor } from '../../runtime/executors/react-executor.js';
 
-export class StepExecutor {
+export class StepWorkflow {
   constructor(
     private readonly react: ReactExecutor,
     private readonly contexts: StepContextLoader
@@ -21,3 +21,4 @@ export class StepExecutor {
     });
   }
 }
+

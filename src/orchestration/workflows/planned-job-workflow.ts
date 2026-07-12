@@ -2,23 +2,23 @@ import type { AgentJob } from '../../domain/index.js';
 import type { PlanEngine } from '../../planner/plan-engine.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { PlanFinalizer } from './plan-finalizer.js';
-import { StepExecutor } from './step-executor.js';
+import { StepWorkflow } from './step-workflow.js';
 
-export interface PlanExecutorOptions {
+export interface PlannedJobWorkflowOptions {
   store: Pick<AgentStore,
     | 'listJobStepRuns'
     | 'getPlanByJobId'
     | 'listPlanSteps'
   >;
-  stepExecutor: StepExecutor;
+  stepExecutor: StepWorkflow;
   finalizer?: PlanFinalizer;
   requireOwnedJob(jobId: string): Promise<AgentJob>;
 }
 
-export class PlanExecutor {
+export class PlannedJobWorkflow {
   readonly #finalizer: PlanFinalizer;
 
-  constructor(private readonly options: PlanExecutorOptions) {
+  constructor(private readonly options: PlannedJobWorkflowOptions) {
     this.#finalizer = options.finalizer ?? new PlanFinalizer();
   }
 
@@ -59,3 +59,4 @@ export class PlanExecutor {
 function isTerminal(job: AgentJob): boolean {
   return ['completed', 'failed', 'cancelled'].includes(job.status);
 }
+

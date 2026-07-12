@@ -1,9 +1,9 @@
 import type { AgentJob, AgentRealtimeEvent } from '../../domain/index.js';
-import { DirectJobContextLoader } from '../loaders/direct-job-context-loader.js';
-import type { RuntimeEventPublisher } from '../runtime-event-writer.js';
-import { ReactExecutor } from './react-executor.js';
+import { DirectJobContextLoader } from '../../runtime/loaders/direct-job-context-loader.js';
+import type { RuntimeEventPublisher } from '../../runtime/runtime-event-writer.js';
+import { ReactExecutor } from '../../runtime/executors/react-executor.js';
 
-export class DirectJobExecutor {
+export class DirectJobWorkflow {
   constructor(
     private readonly react: ReactExecutor,
     private readonly contexts: DirectJobContextLoader,
@@ -32,3 +32,4 @@ export class DirectJobExecutor {
     }
   }
 }
+

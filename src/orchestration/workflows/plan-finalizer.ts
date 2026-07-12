@@ -19,3 +19,4 @@ function currentTemporalContext(): { currentDate: string; timezone: string } {
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
   return { currentDate: `${values.year}-${values.month}-${values.day}`, timezone };
 }
+
