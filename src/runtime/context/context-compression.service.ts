@@ -58,6 +58,7 @@ export class ContextCompressionService {
         systemPrompt: COMPRESSION_PROMPT,
       },
       groups: sourceGroups.map(item => ({ ...item, mustKeep: true, priority: 1_000 })),
+      bundles: undefined,
       summaries: [],
       audit: {
         ...input.material.audit,

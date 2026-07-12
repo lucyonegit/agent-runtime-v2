@@ -37,6 +37,8 @@ export interface PlanExecutionContext {
   stepRuns: AgentStepRun[];
   sessionBaseline: MessageGroup[];
   currentPlanGroups: MessageGroup[];
+  legacySessionBaseline: MessageGroup[];
+  legacyCurrentPlanGroups: MessageGroup[];
   outputs: Array<{ stepId: string; output: StepOutputV1 }>;
   facts: SessionContextFacts;
 }
@@ -68,6 +70,15 @@ export class PlanContextLoader {
         message.jobId === job.id && message.rowId > goalMessage.rowId
       )) && !messages.some(message => message.messageType === 'plan_created');
     });
+    const legacySessionBaseline = facts.legacyGroups.filter(group => (
+      messagesInGroup(group).every(message => message.rowId <= goalMessage.rowId)
+    ));
+    const legacyCurrentPlanGroups = facts.legacyGroups.filter(group => {
+      const messages = messagesInGroup(group);
+      return messages.some(message => (
+        message.jobId === job.id && message.rowId > goalMessage.rowId
+      )) && !messages.some(message => message.messageType === 'plan_created');
+    });
     const messagesById = new Map(facts.messages.map(message => [message.id, message]));
     const outputs = steps.flatMap(step => {
       if (!step.outputMessageId) return [];
@@ -89,6 +100,8 @@ export class PlanContextLoader {
       )),
       sessionBaseline,
       currentPlanGroups,
+      legacySessionBaseline,
+      legacyCurrentPlanGroups,
       outputs,
       facts,
     };

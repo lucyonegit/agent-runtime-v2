@@ -7,8 +7,24 @@ import type {
   AgentStepRun,
 } from '../src/domain/index.js';
 import { MessageGroupBuilder } from '../src/runtime/context/message-group-builder.js';
+import { TokenBudget } from '../src/runtime/context/token-budget.js';
 
 describe('v6 semantic context projection', () => {
+  it('selects a contiguous recent bundle tail instead of sparse older groups', () => {
+    const items = [
+      { id: 'fixed', value: 'fixed', estimatedTokens: 10, mustKeep: true, priority: 1_000, recency: 0, originalOrder: 0 },
+      { id: 'turn:old', value: 'old', estimatedTokens: 10, mustKeep: false, priority: 40, recency: 1, originalOrder: 1 },
+      { id: 'turn:middle', value: 'middle', estimatedTokens: 80, mustKeep: false, priority: 40, recency: 2, originalOrder: 2 },
+      { id: 'turn:newest', value: 'newest', estimatedTokens: 10, mustKeep: false, priority: 40, recency: 3, originalOrder: 3 },
+    ];
+    const selected = new TokenBudget().selectWithContiguousTail(
+      items,
+      { maxContextTokens: 100, reservedOutputTokens: 10 },
+      new Set(['turn:old', 'turn:middle', 'turn:newest'])
+    );
+    expect(selected.selected.map(item => item.id)).toEqual(['fixed', 'turn:newest']);
+  });
+
   it('projects immutable plan, structured step output and a legacy plan final', () => {
     const output = {
       schemaVersion: 1 as const,

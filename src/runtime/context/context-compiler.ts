@@ -27,6 +27,7 @@ export interface CompiledContext {
   compressibleMessageIds: string[];
   compressionRecommended: boolean;
   annotations: CompiledContextAnnotation[];
+  blockedDiagnostics: NonNullable<ContextMaterial['blockedDiagnostics']>;
 }
 
 export type BuiltContext = CompiledContext;
@@ -193,10 +194,14 @@ export function compileContext(material: ContextMaterial): CompiledContext {
   };
   for (const item of selection.selected) {
     breakdown[item.value.category] += item.estimatedTokens;
-    if (item.value.kind === 'message') formattedMessages.push(item.value.message);
+    if (item.value.kind === 'message') {
+      formattedMessages.push(item.value.message);
+      annotations.push({ groupId: item.id });
+    }
     if (item.value.kind === 'summary') {
       summaryIds.push(item.value.id);
       formattedMessages.push(item.value.message);
+      annotations.push({ groupId: `summary:${item.value.id}` });
     }
     if (item.value.kind === 'group') {
       groupIds.push(item.value.group.id);
@@ -305,6 +310,7 @@ export function compileContext(material: ContextMaterial): CompiledContext {
       || material.compression.newCompressibleMessageCount >= material.compression.messageThreshold
     ),
     annotations,
+    blockedDiagnostics: material.blockedDiagnostics ?? [],
   };
 }
 

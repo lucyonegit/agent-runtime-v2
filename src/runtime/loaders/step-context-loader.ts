@@ -4,6 +4,7 @@ import type { AgentJob, AgentPlanStep, AgentStepRun } from '../../domain/index.j
 import type { AgentStore } from '../../storage/agent-store.js';
 import {
   CONTEXT_RULES_VERSION,
+  LEGACY_CONTEXT_RULES_VERSION,
 } from '../context/context-compiler.js';
 import type { ContextMaterial, ContextModelBudget } from '../context/context-material.js';
 import { messagesInGroup } from '../context/message-group-builder.js';
@@ -35,18 +36,21 @@ export class StepContextLoader {
     originalGoal: string;
     step: AgentPlanStep;
     stepRun: AgentStepRun;
+    contextRulesVersion?: string;
   }): Promise<ContextMaterial> {
+    const contextRulesVersion = input.contextRulesVersion ?? CONTEXT_RULES_VERSION;
     const [context, summaries] = await Promise.all([
       this.#plan.load(input.job, input.originalGoal),
       this.options.store.listActiveContextSummaries(
-        'step_run', input.stepRun.id, 'step_execution', CONTEXT_RULES_VERSION
+        'step_run', input.stepRun.id, 'step_execution', contextRulesVersion
       ),
     ]);
     if (context.plan.id !== input.stepRun.planId || input.step.id !== input.stepRun.stepId) {
       throw new Error(`StepRun ${input.stepRun.id} does not match its PlanStep.`);
     }
     const stableContext = this.options.stableContext?.();
-    const planText = JSON.stringify({
+    const legacy = contextRulesVersion === LEGACY_CONTEXT_RULES_VERSION;
+    const fixedPlanText = JSON.stringify({
       id: context.plan.id,
       title: context.plan.title,
       goal: context.plan.goal,
@@ -55,8 +59,13 @@ export class StepContextLoader {
         position: step.position,
         title: step.title,
         instruction: step.instruction,
+        ...(legacy ? { status: step.status } : {}),
       })),
       currentStepId: input.step.id,
+      ...(legacy ? {
+        currentStepRunId: input.stepRun.id,
+        currentRunNo: input.stepRun.runNo,
+      } : {}),
     });
     const fixedMessages = [{
       id: 'must_keep:system',
@@ -72,15 +81,17 @@ export class StepContextLoader {
     }
     fixedMessages.push({
       id: 'must_keep:plan',
-      message: new SystemMessage(`Current execution plan:\n${planText}`),
-      text: planText,
+      message: new SystemMessage(`Current execution plan:\n${fixedPlanText}`),
+      text: fixedPlanText,
     });
     const currentInstruction =
       `Current PlanStep — execute only this step. Do not execute later PlanSteps:\n${input.step.instruction}`;
-    const allSummaries = [...context.facts.summaries, ...summaries]
+    const allSummaries = [...(legacy ? [] : context.facts.summaries), ...summaries]
       .filter((summary, index, values) => values.findIndex(value => value.id === summary.id) === index);
     const summaryEnd = Math.max(0, ...allSummaries.map(summary => summary.sourceRowIdEnd));
-    const sessionGroups = context.sessionBaseline.map(group => ({
+    const selectedSessionGroups = legacy ? context.legacySessionBaseline : context.sessionBaseline;
+    const selectedPlanGroups = legacy ? context.legacyCurrentPlanGroups : context.currentPlanGroups;
+    const sessionGroups = selectedSessionGroups.map(group => ({
       group,
       segment: 'session_history' as const,
       mustKeep: messagesInGroup(group).some(message => (
@@ -90,7 +101,7 @@ export class StepContextLoader {
         message.id === context.originalGoalMessage.id
       )) ? 1_000 : group.type === 'step_output' ? 80 : 40,
     }));
-    const planGroups = context.currentPlanGroups.map(group => ({
+    const planGroups = selectedPlanGroups.map(group => ({
       group,
       segment: messagesInGroup(group).some(message => (
         message.stepRunId === input.stepRun.id
@@ -116,10 +127,20 @@ export class StepContextLoader {
         stableContext,
         originalGoal: input.originalGoal,
         currentInstruction,
-        plan: planText,
+        plan: fixedPlanText,
       },
       groups: [...sessionGroups, ...planGroups],
-      bundles: context.facts.bundles.map(bundle => {
+      legacyGroups: [
+        ...context.legacySessionBaseline.map(group => ({
+          group, segment: 'session_history' as const,
+          mustKeep: messagesInGroup(group).some(message => message.id === context.originalGoalMessage.id),
+          priority: 40,
+        })),
+        ...context.legacyCurrentPlanGroups.map(group => ({
+          group, segment: 'current_plan' as const, mustKeep: true, priority: 1_000,
+        })),
+      ],
+      ...(legacy ? {} : { bundles: context.facts.bundles.map(bundle => {
         const current = bundle.jobIds.includes(input.job.id);
         const projected = current
           ? {
@@ -135,7 +156,7 @@ export class StepContextLoader {
           mustKeep: current,
           priority: current ? 1_000 : 40,
         };
-      }),
+      }) }),
       summaries: allSummaries.map(summary => ({
         id: summary.id,
         summary: summary.summary,
@@ -146,9 +167,14 @@ export class StepContextLoader {
       model: this.options.model,
       audit: {
         purpose: 'step_execution',
-        contextRulesVersion: CONTEXT_RULES_VERSION,
+        contextRulesVersion,
         systemPromptVersion: this.options.systemPromptVersion,
       },
+      blockedDiagnostics: context.facts.blocked.map(item => ({
+        messageId: item.callMessage.id,
+        reason: item.reason,
+        ...(item.toolCallId ? { toolCallId: item.toolCallId } : {}),
+      })),
       compression: {
         disabled: false,
         newCompressibleMessageCount: context.facts.messages.filter(message => (

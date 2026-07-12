@@ -155,6 +155,11 @@ export class ContextInspectionService {
         contextRulesVersion: CONTEXT_RULES_VERSION,
         systemPromptVersion: this.options.systemPromptVersion,
       },
+      blockedDiagnostics: facts.blocked.map(item => ({
+        messageId: item.callMessage.id,
+        reason: item.reason,
+        ...(item.toolCallId ? { toolCallId: item.toolCallId } : {}),
+      })),
       compression: {
         disabled: false,
         newCompressibleMessageCount: facts.messages.length,
@@ -205,9 +210,14 @@ export class ContextInspectionService {
       const steps = plan ? await this.options.store.listPlanSteps(plan.id) : [];
       const step = steps.find(candidate => candidate.id === stepRun.stepId);
       if (!step) throw new Error(`StepRun ${stepRun.id} has no PlanStep.`);
-      material = await this.#step.load({ job, originalGoal, step, stepRun });
+      material = await this.#step.load({
+        job, originalGoal, step, stepRun,
+        contextRulesVersion: call.inputManifest.contextRulesVersion,
+      });
     } else {
-      material = await this.#direct.load(job, originalGoal);
+      material = await this.#direct.load(
+        job, originalGoal, call.inputManifest.contextRulesVersion
+      );
     }
     const built = this.#modelCalls.reconstruct(call, material);
     return this.#snapshot(query, job.sessionId, built, {

@@ -37,6 +37,7 @@ export interface SessionContextFacts {
   stepRuns: AgentStepRun[];
   summaries: AgentContextSummary[];
   groups: MessageGroup[];
+  legacyGroups: MessageGroup[];
   bundles: TurnBundle[];
   blocked: BlockedMessageGroup[];
 }
@@ -65,10 +66,13 @@ export class SessionContextLoader {
         'session', sessionId, 'conversation', CONTEXT_RULES_VERSION
       ),
     ]);
-    const built = new MessageGroupBuilder().build(messages, invocations, {
+    const builder = new MessageGroupBuilder();
+    const built = builder.build(messages, invocations, {
       jobs, plans, steps, stepRuns,
     });
     const groups = built.groups.filter(isModelVisibleGroup);
+    const legacyBuilt = builder.build(messages, invocations);
+    const legacyGroups = legacyBuilt.groups.filter(isModelVisibleGroup);
     return {
       jobs,
       messages,
@@ -78,6 +82,7 @@ export class SessionContextLoader {
       stepRuns,
       summaries,
       groups,
+      legacyGroups,
       bundles: new TurnBundleBuilder().build({ sessionId, jobs, groups }),
       blocked: built.blocked,
     };

@@ -71,6 +71,7 @@ export interface ContextMaterial {
   trailingMessages?: ContextFixedMessage[];
   fixedPrefix: Record<string, unknown>;
   groups: ContextGroupMaterial[];
+  legacyGroups?: ContextGroupMaterial[];
   bundles?: ContextBundleMaterial[];
   summaries: ContextSummaryMaterial[];
   toolSchemas: StructuredToolInterface[];
@@ -80,6 +81,11 @@ export interface ContextMaterial {
     contextRulesVersion: string;
     systemPromptVersion: string;
   };
+  blockedDiagnostics?: Array<{
+    messageId: string;
+    reason: string;
+    toolCallId?: string;
+  }>;
   compression: {
     disabled: boolean;
     newCompressibleMessageCount: number;

@@ -1,4 +1,5 @@
 import type { AgentContextInputManifest } from '../../domain/index.js';
+import type { CompiledContextAnnotation } from '../../runtime/context/context-material.js';
 
 export interface ContextPreviewMessage {
   index: number;
@@ -11,6 +12,7 @@ export interface ContextPreviewMessage {
     name: string;
     args: Record<string, unknown>;
   }>;
+  source?: CompiledContextAnnotation;
 }
 
 export interface ContextPreviewV1 {
@@ -28,5 +30,15 @@ export interface ContextPreviewV1 {
     reservedOutputTokens: number;
   };
   manifest: AgentContextInputManifest;
+  selection: {
+    selectedBundleIds: string[];
+    summarizedBundleIds: string[];
+    truncatedToolResultMessageIds: string[];
+  };
+  blockedDiagnostics: Array<{
+    messageId: string;
+    reason: string;
+    toolCallId?: string;
+  }>;
   messages: ContextPreviewMessage[];
 }

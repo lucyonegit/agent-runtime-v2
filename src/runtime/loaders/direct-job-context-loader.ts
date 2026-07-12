@@ -5,6 +5,7 @@ import type { AgentStore } from '../../storage/agent-store.js';
 import { jobGoalMessageId } from '../job-goal.js';
 import {
   CONTEXT_RULES_VERSION,
+  LEGACY_CONTEXT_RULES_VERSION,
 } from '../context/context-compiler.js';
 import type { ContextMaterial, ContextModelBudget } from '../context/context-material.js';
 import { messagesInGroup } from '../context/message-group-builder.js';
@@ -40,9 +41,17 @@ export class DirectJobContextLoader {
     this.#session = new SessionContextLoader(options.store);
   }
 
-  async load(job: AgentJob, originalGoal: string): Promise<ContextMaterial> {
+  async load(
+    job: AgentJob,
+    originalGoal: string,
+    contextRulesVersion = CONTEXT_RULES_VERSION
+  ): Promise<ContextMaterial> {
     const facts = await this.#session.load(job.sessionId);
-    const summaries = facts.summaries;
+    const summaries = contextRulesVersion === LEGACY_CONTEXT_RULES_VERSION
+      ? await this.options.store.listActiveContextSummaries(
+          'job', job.id, 'job_execution', LEGACY_CONTEXT_RULES_VERSION
+        )
+      : facts.summaries;
     assertNoBlockedGroups(facts.blocked, blocked => blocked.callMessage.jobId === job.id);
     const goalId = jobGoalMessageId(job);
     const stableContext = this.options.stableContext?.();
@@ -59,6 +68,23 @@ export class DirectJobContextLoader {
       });
     }
     const summaryEnd = Math.max(0, ...summaries.map(summary => summary.sourceRowIdEnd));
+    const groupMaterial = (groups: typeof facts.groups) => groups.map(group => {
+      const messages = messagesInGroup(group);
+      const currentGoal = goalId
+        ? messages.some(message => message.id === goalId)
+        : messages.some(message => (
+            message.jobId === job.id
+            && message.messageType === 'user_message'
+            && message.content === originalGoal
+          ));
+      const currentJob = messages.some(message => message.jobId === job.id);
+      return {
+        group,
+        segment: currentJob ? 'current_job' as const : 'session_history' as const,
+        mustKeep: currentGoal,
+        priority: currentGoal ? 1_000 : group.type === 'step_output' ? 80 : currentJob ? 70 : 40,
+      };
+    });
     return {
       fixedMessages,
       fixedPrefix: {
@@ -67,24 +93,11 @@ export class DirectJobContextLoader {
         originalGoal,
         currentInstruction: undefined,
       },
-      groups: facts.groups.map(group => {
-        const messages = messagesInGroup(group);
-        const currentGoal = goalId
-          ? messages.some(message => message.id === goalId)
-          : messages.some(message => (
-              message.jobId === job.id
-              && message.messageType === 'user_message'
-              && message.content === originalGoal
-            ));
-        const currentJob = messages.some(message => message.jobId === job.id);
-        return {
-          group,
-          segment: currentJob ? 'current_job' as const : 'session_history' as const,
-          mustKeep: currentGoal,
-          priority: currentGoal ? 1_000 : group.type === 'step_output' ? 80 : currentJob ? 70 : 40,
-        };
-      }),
-      bundles: facts.bundles.map(bundle => {
+      groups: contextRulesVersion === LEGACY_CONTEXT_RULES_VERSION
+        ? groupMaterial(facts.legacyGroups)
+        : groupMaterial(facts.groups),
+      legacyGroups: groupMaterial(facts.legacyGroups),
+      ...(contextRulesVersion === LEGACY_CONTEXT_RULES_VERSION ? {} : { bundles: facts.bundles.map(bundle => {
         const current = bundle.jobIds.includes(job.id)
           || (job.retryOfJobId ? bundle.jobIds.includes(job.retryOfJobId) : false);
         return {
@@ -93,7 +106,7 @@ export class DirectJobContextLoader {
           mustKeep: current,
           priority: current ? 1_000 : 40,
         };
-      }),
+      }) }),
       summaries: summaries.map(summary => ({
         id: summary.id,
         summary: summary.summary,
@@ -104,9 +117,14 @@ export class DirectJobContextLoader {
       model: this.options.model,
       audit: {
         purpose: 'job_execution',
-        contextRulesVersion: CONTEXT_RULES_VERSION,
+        contextRulesVersion,
         systemPromptVersion: this.options.systemPromptVersion,
       },
+      blockedDiagnostics: facts.blocked.map(item => ({
+        messageId: item.callMessage.id,
+        reason: item.reason,
+        ...(item.toolCallId ? { toolCallId: item.toolCallId } : {}),
+      })),
       compression: {
         disabled: false,
         newCompressibleMessageCount: facts.messages.filter(message => (

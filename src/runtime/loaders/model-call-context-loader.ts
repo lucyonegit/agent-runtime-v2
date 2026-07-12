@@ -39,7 +39,9 @@ export class ModelCallContextLoader {
     }
     const groupIds = new Set(call.inputManifest.messageGroupIds);
     const summaryIds = new Set(call.inputManifest.summaryIds);
-    const availableGroupIds = new Set(material.groups.map(item => item.group.id));
+    const isV6 = call.inputManifest.contextRulesVersion === CONTEXT_RULES_VERSION;
+    const sourceGroups = isV6 ? material.groups : (material.legacyGroups ?? material.groups);
+    const availableGroupIds = new Set(sourceGroups.map(item => item.group.id));
     const availableSummaryIds = new Set(material.summaries.map(item => item.id));
     const missingGroupIds = [...groupIds].filter(id => !availableGroupIds.has(id));
     const missingSummaryIds = [...summaryIds].filter(id => !availableSummaryIds.has(id));
@@ -49,9 +51,8 @@ export class ModelCallContextLoader {
         + `groups=${JSON.stringify(missingGroupIds)}, summaries=${JSON.stringify(missingSummaryIds)}.`
       );
     }
-    const isV6 = call.inputManifest.contextRulesVersion === CONTEXT_RULES_VERSION;
     const selectedBundleIds = new Set(call.inputManifest.selectedBundleIds ?? []);
-    const selectedGroups = material.groups.filter(item => groupIds.has(item.group.id));
+    const selectedGroups = sourceGroups.filter(item => groupIds.has(item.group.id));
     const built = compileContext({
       ...material,
       groups: selectedGroups,

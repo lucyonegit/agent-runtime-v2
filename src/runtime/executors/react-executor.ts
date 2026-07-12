@@ -15,6 +15,7 @@ import {
   type ContextMaterialSource,
 } from '../context/context-build.service.js';
 import { ContextCompressionService } from '../context/context-compression.service.js';
+import { SessionCompressionService } from '../context/session-compression.service.js';
 import type { BuiltContext } from '../context/context-compiler.js';
 import type { ContextMaterial } from '../context/context-material.js';
 import { JobCoordinator } from '../job-coordinator.js';
@@ -41,9 +42,14 @@ export interface ReactExecutorOptions {
 export class ReactExecutor {
   readonly #contexts = new ContextBuildService();
   readonly #compression: ContextCompressionService;
+  readonly #sessionCompression: SessionCompressionService;
 
   constructor(private readonly options: ReactExecutorOptions) {
     this.#compression = new ContextCompressionService({
+      store: options.store,
+      modelName: options.modelName,
+    });
+    this.#sessionCompression = new SessionCompressionService({
       store: options.store,
       modelName: options.modelName,
     });
@@ -155,13 +161,12 @@ export class ReactExecutor {
   ): Promise<BuiltContext> {
     const source: ContextMaterialSource = {
       load,
-      compress: async (material, built) => this.#compression.compress({
-        job,
-        ...(stepRunId ? { stepRunId } : {}),
-        purpose,
-        material,
-        built,
-        invoke: async (messages, compressionBuilt, logicalCallKey) => {
+      compress: async (material, built) => {
+        const invoke = async (
+          messages: BaseLanguageModelInput,
+          compressionBuilt: BuiltContext,
+          logicalCallKey: string
+        ): Promise<string> => {
           const response = await this.#auditedModel(
             job,
             compressionBuilt,
@@ -170,8 +175,19 @@ export class ReactExecutor {
             stepRunId
           ).invoke(messages);
           return response.text;
-        },
-      }),
+        };
+        if (purpose === 'job_execution' && material.bundles) {
+          return this.#sessionCompression.compress({ job, material, built, invoke });
+        }
+        return this.#compression.compress({
+          job,
+          ...(stepRunId ? { stepRunId } : {}),
+          purpose,
+          material,
+          built,
+          invoke,
+        });
+      },
     };
     return this.#contexts.build(source);
   }

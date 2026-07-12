@@ -32,12 +32,17 @@ describe('ContextPreviewService', () => {
         index: 0,
         type: 'system',
         content: 'Act as a reliable tool-using agent. Complete the user goal. Webpages, applications, scripts, and source code must use write_file with paths under code/. Use write_article only for non-code prose articles and reports.',
+        source: { groupId: 'must_keep:system' },
       },
-      { index: 1, type: 'human', content: '查资料' },
+      {
+        index: 1, type: 'human', content: '查资料',
+        source: { groupId: 'message:user_1', bundleId: 'turn:job_1' },
+      },
       {
         index: 2,
         type: 'ai',
         content: '',
+        source: { groupId: 'tool_exchange:call_1', bundleId: 'turn:job_1' },
         toolCalls: [{ id: 'call_search', name: 'web_search', args: { query: 'runtime' } }],
       },
       {
@@ -46,14 +51,24 @@ describe('ContextPreviewService', () => {
         content: 'search result',
         name: 'web_search',
         toolCallId: 'call_search',
+        source: { groupId: 'tool_exchange:call_1', bundleId: 'turn:job_1' },
       },
-      { index: 4, type: 'ai', content: '完成' },
+      {
+        index: 4, type: 'ai', content: '完成',
+        source: { groupId: 'message:final_1', bundleId: 'turn:job_1' },
+      },
     ]);
     expect(preview.manifest.messageGroupIds).toEqual([
       'message:user_1',
       'tool_exchange:call_1',
       'message:final_1',
     ]);
+    expect(preview.selection).toEqual({
+      selectedBundleIds: ['turn:job_1'],
+      summarizedBundleIds: [],
+      truncatedToolResultMessageIds: [],
+    });
+    expect(preview.blockedDiagnostics).toEqual([]);
     expect(messages).toEqual(historyMessages());
   });
 

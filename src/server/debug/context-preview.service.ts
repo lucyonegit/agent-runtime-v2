@@ -65,12 +65,25 @@ export class ContextPreviewService {
         reservedOutputTokens: snapshot.reservedOutputTokens,
       },
       manifest: snapshot.built.inputManifest,
-      messages: snapshot.built.messages.map(toPreviewMessage),
+      selection: {
+        selectedBundleIds: snapshot.built.inputManifest.selectedBundleIds ?? [],
+        summarizedBundleIds: snapshot.built.inputManifest.summarizedBundleIds ?? [],
+        truncatedToolResultMessageIds:
+          snapshot.built.inputManifest.truncatedToolResultMessageIds ?? [],
+      },
+      blockedDiagnostics: snapshot.built.blockedDiagnostics,
+      messages: snapshot.built.messages.map((message, index) => (
+        toPreviewMessage(message, index, snapshot.built.annotations[index])
+      )),
     };
   }
 }
 
-function toPreviewMessage(message: BaseMessage, index: number): ContextPreviewMessage {
+function toPreviewMessage(
+  message: BaseMessage,
+  index: number,
+  source?: ContextPreviewMessage['source']
+): ContextPreviewMessage {
   const type = message.getType();
   if (isAIMessage(message)) {
     const toolCalls = message.tool_calls ?? [];
@@ -78,6 +91,7 @@ function toPreviewMessage(message: BaseMessage, index: number): ContextPreviewMe
       index,
       type: 'ai',
       content: message.content,
+      ...(source ? { source } : {}),
       ...(message.name ? { name: message.name } : {}),
       ...(toolCalls.length > 0 ? {
         toolCalls: toolCalls.map(call => ({
@@ -93,6 +107,7 @@ function toPreviewMessage(message: BaseMessage, index: number): ContextPreviewMe
       index,
       type: 'tool',
       content: message.content,
+      ...(source ? { source } : {}),
       ...(message.name ? { name: message.name } : {}),
       toolCallId: message.tool_call_id,
     };
@@ -104,6 +119,7 @@ function toPreviewMessage(message: BaseMessage, index: number): ContextPreviewMe
     index,
     type: type === 'system' ? 'system' : 'human',
     content: message.content,
+    ...(source ? { source } : {}),
     ...(message.name ? { name: message.name } : {}),
   };
 }
