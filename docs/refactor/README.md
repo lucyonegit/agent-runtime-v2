@@ -19,7 +19,7 @@
 8. [实现验收与运维手册](./07-实现验收与运维手册.md)
    - 当前实现入口、环境变量、启动、migration/reset、测试、HTTP 契约和故障处置。
 9. [执行器上下文闭环重构方案](./08-执行器上下文闭环重构方案.md)
-   - Review Draft；按 Direct/Plan 执行器、ReAct 内部闭环、完整 Step Context 与 ContextInspectionService 重新划分后端职责。
+   - 已落地；按 Direct/Plan 执行器、ReAct 内部闭环、完整 Step Context 与 ContextInspectionService 重新划分后端职责。
 10. [执行器上下文闭环实施计划](./09-执行器上下文闭环实施计划.md)
    - 按测试先行、冻结写库链、ContextCompiler、完整 Step Context、执行器封装和只读 Inspection 拆分的逐任务计划。
 
@@ -27,8 +27,8 @@
 
 ## 一句话架构
 
-`agent_messages` 是唯一会话事实时间线；`Job` 是工作流与 lease 边界；`StepRun` 是 PlanStep 的执行 checkpoint；LangChain 是消息/模型/tool/provider 的唯一协议边界；`ToolInvocation` 保存每个工具调用的业务恢复状态；`ContextBuilder` 按 purpose 投影；UI 与 SSE 消费提交后的同一批实体。
+`agent_messages` 是唯一会话事实时间线；`Job` 是工作流与 lease 边界；`StepRun` 是 PlanStep 的执行 checkpoint；LangChain 是消息/模型/tool/provider 的唯一协议边界；`ToolInvocation` 保存每个工具调用的业务恢复状态；各执行器的 Loader 选择业务上下文，纯 `ContextCompiler` 只负责编译；UI 与 SSE 消费提交后的同一批实体。
 
 ## 当前维护规则
 
-架构或数据库语义变更先更新第 06 篇，再同步代码、migration、contract tests 与第 07 篇运维说明。第 08 篇当前处于审阅状态，批准后再将其职责边界合并回第 06 篇。不要基于第 03 或第 05 篇继续扩展旧 Task 模型。
+架构或数据库语义变更先更新第 06 篇，再同步代码、migration、contract tests 与第 07 篇运维说明。Context 执行器边界以已落地的第 08 篇为准。不要基于第 03 或第 05 篇继续扩展旧 Task 模型。

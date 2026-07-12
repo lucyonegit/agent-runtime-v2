@@ -5,6 +5,8 @@
 > 本文是 Agent Runtime V2 的统一目标设计。它保留 00–03 中“消息时间线、显式恢复、上下文投影、UI 与数据库统一”的核心方向，选择性采用 04 的命名，并吸收 05 中关于幂等、副作用、锁归属和 SSE 重连的修订。
 >
 > 当本文与 01–05 的目标命名、表结构、模型协议或恢复语义冲突时，以本文为准。
+>
+> 2026-07-12 更新：Context 与执行器内部职责已按第 08 篇落地。本文旧章节中 `ContextBuilder + ContextFilter + purpose/scope` 的描述由 `runtime/loaders -> ContextMaterial -> ContextCompiler` 取代；数据库字段中的 `purpose` 仅保留为兼容审计标签。Direct 使用完整可见 Session 历史；每个 Step 使用完整 Session 基线、完整 Plan、全部历史 StepRun ReAct/tool 消息与 StepOutput。
 
 ## 1. 设计目标
 
@@ -17,7 +19,7 @@
 5. ReAct 循环不感知 PostgreSQL、HTTP、SSE、Plan 或 UI，但其事件顺序必须允许外层在工具副作用前完成持久化。
 6. 工具调用具备显式 invocation 状态、幂等键和副作用等级；未知副作用不得自动重放。
 7. 用户输入请求是正式运行时实体；多个请求全部回答后最多恢复一次。
-8. 上下文按 purpose、owner、预算和完整消息组构建，不把整个 session 无条件塞入模型。
+8. 执行器 Loader 按 owner 组织完整消息组，ContextCompiler 只做预算、摘要覆盖、LangChain 格式化与 Manifest；Direct 与 Step 的完整上下文规则见第 08 篇。
 9. 实时 UI 与刷新后的 `GET /view` 最终一致；断线重连的 MVP 采用全量 view 恢复。
 10. PostgreSQL 使用 canonical schema 和版本化 migration；启动路径不猜测或改写旧结构。
 11. 模型、消息、工具和 provider 能力以 LangChain 为唯一协议边界，不在 Runtime 内复制一套平行 DTO。
