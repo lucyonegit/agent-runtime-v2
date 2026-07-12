@@ -18,6 +18,8 @@
    - canonical design；包含命名、模块、表结构、状态机、事务、恢复、Context、SSE、API、测试和交付顺序。
 8. [实现验收与运维手册](./07-实现验收与运维手册.md)
    - 当前实现入口、环境变量、启动、migration/reset、测试、HTTP 契约和故障处置。
+9. [执行器上下文闭环重构方案](./08-执行器上下文闭环重构方案.md)
+   - Review Draft；按 Direct/Plan 执行器、ReAct 内部闭环、完整 Step Context 与 ContextInspectionService 重新划分后端职责。
 
 当 01–05 与 06 的目标命名、表结构、LangChain 模型协议或恢复语义冲突时，以 06 为准。
 
@@ -27,4 +29,4 @@
 
 ## 当前维护规则
 
-架构或数据库语义变更先更新第 06 篇，再同步代码、migration、contract tests 与第 07 篇运维说明。不要基于第 03 或第 05 篇继续扩展旧 Task 模型。
+架构或数据库语义变更先更新第 06 篇，再同步代码、migration、contract tests 与第 07 篇运维说明。第 08 篇当前处于审阅状态，批准后再将其职责边界合并回第 06 篇。不要基于第 03 或第 05 篇继续扩展旧 Task 模型。
