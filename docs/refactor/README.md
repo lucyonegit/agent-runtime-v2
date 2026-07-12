@@ -20,6 +20,8 @@
    - 当前实现入口、环境变量、启动、migration/reset、测试、HTTP 契约和故障处置。
 9. [执行器上下文闭环重构方案](./08-执行器上下文闭环重构方案.md)
    - Review Draft；按 Direct/Plan 执行器、ReAct 内部闭环、完整 Step Context 与 ContextInspectionService 重新划分后端职责。
+10. [执行器上下文闭环实施计划](./09-执行器上下文闭环实施计划.md)
+   - 按测试先行、冻结写库链、ContextCompiler、完整 Step Context、执行器封装和只读 Inspection 拆分的逐任务计划。
 
 当 01–05 与 06 的目标命名、表结构、LangChain 模型协议或恢复语义冲突时，以 06 为准。
 
