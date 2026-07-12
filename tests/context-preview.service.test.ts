@@ -23,6 +23,8 @@ describe('ContextPreviewService', () => {
       debugOnly: true,
       sessionId: 'session_1',
       basedOnLatestJobId: 'job_1',
+      query: { kind: 'next_turn', sessionId: 'session_1' },
+      verification: { status: 'reconstructed' },
       contextRulesVersion: CONTEXT_RULES_VERSION,
       systemPromptVersion: 'runtime-system-v2',
       limits: { maxContextTokens: 4_000, reservedOutputTokens: 200 },
@@ -100,6 +102,35 @@ describe('ContextPreviewService', () => {
     const service = previewService(storeFixture({ session: undefined }));
 
     await expect(service.preview('missing')).rejects.toMatchObject({ code: 'SESSION_NOT_FOUND' });
+  });
+
+  it('exposes job, StepRun and ModelCall inspection through the preview facade', async () => {
+    const calls: unknown[] = [];
+    const service = previewService({
+      ...storeFixture(),
+      getJob: async id => {
+        calls.push({ kind: 'job', id });
+        return completedJob;
+      },
+      getStepRun: async id => {
+        calls.push({ kind: 'step_run', id });
+        return undefined;
+      },
+      getModelCall: async id => {
+        calls.push({ kind: 'model_call', id });
+        return undefined;
+      },
+    });
+
+    const jobPreview = await service.previewJob('job_1');
+    await expect(service.previewStepRun('run_1')).rejects.toThrow('StepRun "run_1" was not found.');
+    await expect(service.previewModelCall('model_call_1'))
+      .rejects.toThrow('ModelCall "model_call_1" was not found.');
+
+    expect(jobPreview.query).toEqual({ kind: 'job', jobId: 'job_1' });
+    expect(calls).toContainEqual({ kind: 'job', id: 'job_1' });
+    expect(calls).toContainEqual({ kind: 'step_run', id: 'run_1' });
+    expect(calls).toContainEqual({ kind: 'model_call', id: 'model_call_1' });
   });
 });
 

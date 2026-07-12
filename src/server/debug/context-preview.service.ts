@@ -1,6 +1,7 @@
 import { isAIMessage, isToolMessage, type BaseMessage } from '@langchain/core/messages';
 import {
   ContextInspectionService,
+  type ContextQuery,
   type ContextInspectionStore,
 } from '../../orchestration/context-inspection.service.js';
 import { STEP_OUTPUT_INSTRUCTION } from '../../planner/planner-prompts.js';
@@ -46,13 +47,31 @@ export class ContextPreviewService {
     });
   }
 
-  async preview(sessionId: string): Promise<ContextPreviewV1> {
-    const snapshot = await this.#inspection.inspect({ kind: 'next_turn', sessionId });
+  preview(sessionId: string): Promise<ContextPreviewV1> {
+    return this.#preview({ kind: 'next_turn', sessionId });
+  }
+
+  previewJob(jobId: string): Promise<ContextPreviewV1> {
+    return this.#preview({ kind: 'job', jobId });
+  }
+
+  previewStepRun(stepRunId: string): Promise<ContextPreviewV1> {
+    return this.#preview({ kind: 'step_run', stepRunId });
+  }
+
+  previewModelCall(modelCallId: string): Promise<ContextPreviewV1> {
+    return this.#preview({ kind: 'model_call', modelCallId });
+  }
+
+  async #preview(query: ContextQuery): Promise<ContextPreviewV1> {
+    const snapshot = await this.#inspection.inspect(query);
     return {
       schemaVersion: 1,
       debugOnly: true,
       generatedAtMs: snapshot.generatedAtMs,
       sessionId: snapshot.sessionId,
+      query,
+      verification: snapshot.verification,
       ...(snapshot.basedOnLatestJobId
         ? { basedOnLatestJobId: snapshot.basedOnLatestJobId }
         : {}),

@@ -21,6 +21,17 @@ export interface ContextPreviewV1 {
   generatedAtMs: number;
   sessionId: string;
   basedOnLatestJobId?: string;
+  query: {
+    kind: 'next_turn' | 'job' | 'step_run' | 'model_call';
+    sessionId?: string;
+    jobId?: string;
+    stepRunId?: string;
+    modelCallId?: string;
+  };
+  verification: {
+    status: 'reconstructed' | 'exact';
+    checksumMatched?: boolean;
+  };
   contextRulesVersion: string;
   systemPromptVersion: string;
   estimatedInputTokens: number;

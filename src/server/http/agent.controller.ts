@@ -40,6 +40,21 @@ export class AgentController {
     return this.contextPreview.preview(sessionId);
   }
 
+  @Get('jobs/:jobId/context-preview')
+  getJobContextPreview(@Param('jobId') jobId: string) {
+    return this.contextPreview.previewJob(jobId);
+  }
+
+  @Get('step-runs/:stepRunId/context-preview')
+  getStepRunContextPreview(@Param('stepRunId') stepRunId: string) {
+    return this.contextPreview.previewStepRun(stepRunId);
+  }
+
+  @Get('model-calls/:modelCallId/context')
+  getModelCallContext(@Param('modelCallId') modelCallId: string) {
+    return this.contextPreview.previewModelCall(modelCallId);
+  }
+
   @Delete('sessions/:sessionId')
   @HttpCode(204)
   async deleteSession(@Param('sessionId') sessionId: string): Promise<void> {
