@@ -1,4 +1,4 @@
-import type { AgentMessage, AgentToolInvocation } from '../domain/index.js';
+import type { AgentMessage, AgentToolInvocation } from '../../domain/index.js';
 
 export type MessageGroup =
   | { id: string; type: 'single'; messages: [AgentMessage] }

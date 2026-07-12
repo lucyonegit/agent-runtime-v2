@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { SystemMessage } from '@langchain/core/messages';
 import { DynamicStructuredTool } from '@langchain/core/tools';
+import type { StructuredToolInterface } from '@langchain/core/tools';
 import type {
   AgentMessage,
   AgentToolInvocation,
 } from '../src/domain/index.js';
 import {
-  buildContext,
-  IncompleteMessageGroupError,
-} from '../src/context/context-builder.js';
-import { ContextFilter } from '../src/context/context-filter.js';
-import { MessageGroupBuilder } from '../src/context/message-group-builder.js';
-import { ContextOverflowError, TokenBudget } from '../src/context/token-budget.js';
+  compileContext,
+  CONTEXT_RULES_VERSION,
+} from '../src/runtime/context/context-compiler.js';
+import type { ContextMaterial } from '../src/runtime/context/context-material.js';
+import { MessageGroupBuilder, messagesInGroup } from '../src/runtime/context/message-group-builder.js';
+import { ContextOverflowError, TokenBudget } from '../src/runtime/context/token-budget.js';
+import { IncompleteMessageGroupError } from '../src/runtime/loaders/session-context-loader.js';
 
 describe('MessageGroupBuilder', () => {
   it('builds a complete multi-tool exchange in model call order', () => {
@@ -56,78 +59,6 @@ describe('MessageGroupBuilder', () => {
   });
 });
 
-describe('ContextFilter', () => {
-  it('keeps previous StepOutput and current StepRun tail but excludes other StepRun raw runtime', () => {
-    const previousOutput = message({
-      id: 'step_output_previous',
-      rowId: 2,
-      messageType: 'step_output',
-      role: 'assistant',
-      stepRunId: 'run_previous',
-      content: 'validated previous output',
-    });
-    const current = message({
-      id: 'current_runtime',
-      rowId: 3,
-      messageType: 'assistant_message',
-      role: 'assistant',
-      stepRunId: 'run_current',
-      content: 'current runtime',
-    });
-    const other = message({
-      id: 'other_runtime',
-      rowId: 4,
-      messageType: 'assistant_message',
-      role: 'assistant',
-      stepRunId: 'run_other',
-      content: 'must not leak',
-    });
-    const groups = new MessageGroupBuilder().build(
-      [goalMessage, previousOutput, current, other],
-      []
-    ).groups;
-
-    const filtered = new ContextFilter().filter(groups, {
-      purpose: 'step_execution',
-      scope: {
-        kind: 'step_run',
-        jobId: 'job_1',
-        stepRunId: 'run_current',
-        originalGoal: 'goal',
-      },
-    });
-    expect(filtered.map(group => group.id)).toEqual([
-      'message:goal',
-      'step_output:step_output_previous',
-      'message:current_runtime',
-    ]);
-  });
-
-  it('allows plan_final to read only the original goal and validated StepOutput', () => {
-    const raw = message({
-      id: 'raw_runtime',
-      rowId: 2,
-      messageType: 'assistant_message',
-      role: 'assistant',
-      stepRunId: 'run_current',
-      content: 'raw search details',
-    });
-    const output = message({
-      id: 'step_output',
-      rowId: 3,
-      messageType: 'step_output',
-      role: 'assistant',
-      content: 'validated',
-    });
-    const groups = new MessageGroupBuilder().build([goalMessage, raw, output], []).groups;
-
-    expect(new ContextFilter().filter(groups, {
-      purpose: 'plan_final',
-      scope: { kind: 'job', jobId: 'job_1', originalGoal: 'goal' },
-    }).map(group => group.id)).toEqual(['message:goal', 'step_output:step_output']);
-  });
-});
-
 describe('TokenBudget', () => {
   it('never drops mustKeep items and rejects mustKeep overflow', () => {
     const budget = new TokenBudget();
@@ -161,7 +92,7 @@ describe('TokenBudget', () => {
   });
 });
 
-describe('ContextBuilder', () => {
+describe('ContextCompiler', () => {
   it('formats complete tool protocol and emits an auditable manifest', () => {
     const call = toolCallMessage('call_context', 'run_current', [
       { id: 'call_lookup', name: 'lookup', args: { q: 'docs' } },
@@ -461,6 +392,95 @@ describe('ContextBuilder', () => {
     expect(context.compressibleMessageIds).toEqual([]);
   });
 });
+
+interface CompilerFixtureInput {
+  scope:
+    | { kind: 'session_history' }
+    | { kind: 'job'; jobId: string; originalGoal: string; originalGoalMessageId?: string }
+    | {
+        kind: 'step_run';
+        jobId: string;
+        stepRunId: string;
+        originalGoal: string;
+        originalGoalMessageId?: string;
+      };
+  purpose: string;
+  systemPrompt: string;
+  systemPromptVersion: string;
+  currentInstruction?: string;
+  messages: AgentMessage[];
+  invocations: AgentToolInvocation[];
+  summaries?: ContextMaterial['summaries'];
+  model: ContextMaterial['model'];
+  toolSchemas?: StructuredToolInterface[];
+}
+
+function buildContext(input: CompilerFixtureInput) {
+  const built = new MessageGroupBuilder().build(input.messages, input.invocations);
+  if (built.blocked.length > 0) {
+    const blocked = built.blocked[0]!;
+    throw new IncompleteMessageGroupError(
+      `Tool exchange ${JSON.stringify(blocked.callMessage.id)} is incomplete: ${blocked.reason}.`
+    );
+  }
+  const fixedMessages = [{
+    id: 'must_keep:system',
+    message: new SystemMessage(input.systemPrompt),
+    text: input.systemPrompt,
+  }];
+  if (input.currentInstruction) {
+    fixedMessages.push({
+      id: 'must_keep:instruction',
+      message: new SystemMessage(input.currentInstruction),
+      text: input.currentInstruction,
+    });
+  }
+  const executionScope = input.scope.kind === 'session_history' ? undefined : input.scope;
+  return compileContext({
+    fixedMessages,
+    fixedPrefix: {
+      systemPrompt: input.systemPrompt,
+      currentInstruction: input.currentInstruction,
+    },
+    groups: built.groups.map(group => {
+      const messages = messagesInGroup(group);
+      const mustKeep = executionScope !== undefined && (
+        executionScope.originalGoalMessageId
+          ? messages.some(item => item.id === executionScope.originalGoalMessageId)
+          : messages.some(item => (
+              item.jobId === executionScope.jobId
+              && item.messageType === 'user_message'
+              && item.content === executionScope.originalGoal
+            ))
+      );
+      return {
+        group,
+        segment: input.scope.kind === 'session_history'
+          ? 'session_history' as const
+          : messages.some(item => item.jobId === executionScope!.jobId)
+            ? input.scope.kind === 'step_run'
+              ? 'current_plan' as const
+              : 'current_job' as const
+            : 'session_history' as const,
+        mustKeep,
+        priority: mustKeep ? 1_000 : group.type === 'step_output' ? 80 : 40,
+      };
+    }),
+    summaries: input.summaries ?? [],
+    toolSchemas: input.toolSchemas ?? [],
+    model: input.model,
+    audit: {
+      purpose: input.purpose,
+      contextRulesVersion: CONTEXT_RULES_VERSION,
+      systemPromptVersion: input.systemPromptVersion,
+    },
+    compression: {
+      disabled: false,
+      newCompressibleMessageCount: 0,
+      messageThreshold: 50,
+    },
+  });
+}
 
 function message(overrides: Partial<AgentMessage> & Pick<AgentMessage, 'id'>): AgentMessage {
   return {

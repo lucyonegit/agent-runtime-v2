@@ -189,6 +189,20 @@ export class PostgresAgentStore implements AgentStore {
     return result.rows.map(mapAgentStepRunRow);
   }
 
+  async getStepRun(stepRunId: string): Promise<AgentStepRun | undefined> {
+    const result = await this.#pool.query<AgentStepRunRow>(
+      `select * from agent_step_runs where id = $1`, [stepRunId]
+    );
+    return result.rows[0] ? mapAgentStepRunRow(result.rows[0]) : undefined;
+  }
+
+  async getModelCall(modelCallId: string): Promise<AgentModelCall | undefined> {
+    const result = await this.#pool.query<AgentModelCallRow>(
+      `select * from agent_model_calls where id = $1`, [modelCallId]
+    );
+    return result.rows[0] ? mapAgentModelCallRow(result.rows[0]) : undefined;
+  }
+
   async listModelCalls(jobId: string): Promise<AgentModelCall[]> {
     const result = await this.#pool.query<AgentModelCallRow>(
       `select * from agent_model_calls where job_id = $1 order by created_at_ms asc, id asc`,

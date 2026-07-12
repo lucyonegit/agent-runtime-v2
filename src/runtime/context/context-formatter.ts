@@ -5,7 +5,7 @@ import {
   ToolMessage,
   type BaseMessage,
 } from '@langchain/core/messages';
-import type { AgentMessage } from '../domain/index.js';
+import type { AgentMessage } from '../../domain/index.js';
 import type { MessageGroup } from './message-group-builder.js';
 
 export class ContextFormatter {

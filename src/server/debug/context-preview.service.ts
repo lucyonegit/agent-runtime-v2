@@ -1,28 +1,18 @@
 import { isAIMessage, isToolMessage, type BaseMessage } from '@langchain/core/messages';
-import { buildContext } from '../../context/context-builder.js';
-import type { AgentJob } from '../../domain/index.js';
-import { RuntimeError } from '../../runtime/runtime-errors.js';
-import { AgentStoreError, type AgentStore } from '../../storage/agent-store.js';
+import {
+  ContextInspectionService,
+  type ContextInspectionStore,
+} from '../../orchestration/context-inspection.service.js';
+import { STEP_OUTPUT_INSTRUCTION } from '../../planner/planner-prompts.js';
 import type { RuntimeTool } from '../../runtime/tool-executor.js';
 import {
   JOB_EXECUTION_SYSTEM_PROMPT,
   RUNTIME_SYSTEM_PROMPT_VERSION,
+  WORKSPACE_TOOL_ROUTING_INSTRUCTION,
 } from '../runtime/runtime-context-config.js';
 import type { ContextPreviewMessage, ContextPreviewV1 } from './context-preview-contract.js';
 
-const ACTIVE_JOB_STATUSES = new Set<AgentJob['status']>([
-  'created',
-  'running',
-  'waiting_user_input',
-  'resuming',
-]);
-
-export type ContextPreviewStore = Pick<AgentStore,
-  | 'getSession'
-  | 'listSessionJobs'
-  | 'listSessionMessages'
-  | 'listSessionToolInvocations'
->;
+export type ContextPreviewStore = ContextInspectionStore;
 
 export interface ContextPreviewServiceOptions {
   store: ContextPreviewStore;
@@ -36,80 +26,48 @@ export interface ContextPreviewServiceOptions {
 }
 
 export class ContextPreviewService {
-  readonly #options: ContextPreviewServiceOptions;
+  readonly #inspection: ContextInspectionService;
 
-  constructor(options: ContextPreviewServiceOptions) {
-    this.#options = options;
+  constructor(private readonly options: ContextPreviewServiceOptions) {
+    this.#inspection = new ContextInspectionService({
+      store: options.store,
+      tools: options.tools.map(item => item.tool),
+      model: {
+        provider: options.provider,
+        name: options.modelName,
+        maxContextTokens: options.maxContextTokens,
+        reservedOutputTokens: options.reservedOutputTokens,
+      },
+      systemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
+      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
+      stepSystemPrompt: `Execute only the current PlanStep. ${WORKSPACE_TOOL_ROUTING_INSTRUCTION} ${STEP_OUTPUT_INSTRUCTION}`,
+      compressionMessageThreshold: options.compressionMessageThreshold ?? 50,
+      clock: options.clock,
+    });
   }
 
   async preview(sessionId: string): Promise<ContextPreviewV1> {
-    const session = await this.#options.store.getSession(sessionId);
-    if (!session) {
-      throw new AgentStoreError(
-        'SESSION_NOT_FOUND',
-        `Agent session ${JSON.stringify(sessionId)} was not found.`
-      );
-    }
-    const [jobs, messages, invocations] = await Promise.all([
-      this.#options.store.listSessionJobs(sessionId),
-      this.#options.store.listSessionMessages(sessionId),
-      this.#options.store.listSessionToolInvocations(sessionId),
-    ]);
-    assertNoActiveJob(jobs);
-    const maxContextTokens = this.#options.maxContextTokens;
-    const reservedOutputTokens = this.#options.reservedOutputTokens;
-    const built = buildContext({
-      purpose: 'job_execution',
-      scope: { kind: 'session_history' },
-      systemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
-      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
-      messages,
-      invocations,
-      model: {
-        provider: this.#options.provider,
-        name: this.#options.modelName,
-        maxContextTokens,
-        reservedOutputTokens,
-      },
-      toolSchemas: this.#options.tools.map(item => item.tool),
-      newCompressibleMessageCount: messages.length,
-      compressionMessageThreshold: this.#options.compressionMessageThreshold ?? 50,
-    });
-    assertNoActiveJob(await this.#options.store.listSessionJobs(sessionId));
+    const snapshot = await this.#inspection.inspect({ kind: 'next_turn', sessionId });
     return {
       schemaVersion: 1,
       debugOnly: true,
-      generatedAtMs: this.#options.clock?.nowMs() ?? Date.now(),
-      sessionId: session.id,
-      ...latestJobId(jobs),
-      contextRulesVersion: built.contextRulesVersion,
-      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
-      estimatedInputTokens: built.estimatedInputTokens,
-      compressionRecommended: built.compressionRecommended,
-      limits: { maxContextTokens, reservedOutputTokens },
-      manifest: built.inputManifest,
-      messages: built.messages.map(toPreviewMessage),
+      generatedAtMs: snapshot.generatedAtMs,
+      sessionId: snapshot.sessionId,
+      ...(snapshot.basedOnLatestJobId
+        ? { basedOnLatestJobId: snapshot.basedOnLatestJobId }
+        : {}),
+      contextRulesVersion: snapshot.built.contextRulesVersion,
+      systemPromptVersion: snapshot.systemPromptVersion,
+      estimatedInputTokens: snapshot.built.estimatedInputTokens,
+      compressionRecommended: snapshot.built.compressionRecommended,
+      limits: {
+        maxContextTokens: snapshot.maxContextTokens,
+        reservedOutputTokens: snapshot.reservedOutputTokens,
+      },
+      manifest: snapshot.built.inputManifest,
+      messages: snapshot.built.messages.map(toPreviewMessage),
     };
   }
-}
-
-function assertNoActiveJob(jobs: AgentJob[]): void {
-  const active = [...jobs]
-    .filter(job => ACTIVE_JOB_STATUSES.has(job.status))
-    .sort((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
-  if (!active) return;
-  throw new RuntimeError(
-    'concurrency_conflict',
-    `Context preview is unavailable while Job ${JSON.stringify(active.id)} is ${active.status}.`,
-    { details: { jobId: active.id, status: active.status } }
-  );
-}
-
-function latestJobId(jobs: AgentJob[]): { basedOnLatestJobId?: string } {
-  const latest = [...jobs].sort((left, right) => (
-    right.createdAtMs - left.createdAtMs || right.id.localeCompare(left.id)
-  ))[0];
-  return latest ? { basedOnLatestJobId: latest.id } : {};
 }
 
 function toPreviewMessage(message: BaseMessage, index: number): ContextPreviewMessage {
@@ -142,10 +100,9 @@ function toPreviewMessage(message: BaseMessage, index: number): ContextPreviewMe
   if (type !== 'system' && type !== 'human') {
     throw new TypeError(`Unsupported Context preview message type: ${JSON.stringify(type)}.`);
   }
-  const previewType: 'system' | 'human' = type === 'system' ? 'system' : 'human';
   return {
     index,
-    type: previewType,
+    type: type === 'system' ? 'system' : 'human',
     content: message.content,
     ...(message.name ? { name: message.name } : {}),
   };

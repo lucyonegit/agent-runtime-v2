@@ -439,7 +439,9 @@ export interface AgentStore {
   getToolInvocation(jobId: string, toolCallId: string): Promise<AgentToolInvocation | undefined>;
   getPlanByJobId(jobId: string): Promise<AgentPlan | undefined>;
   listPlanSteps(planId: string): Promise<AgentPlanStep[]>;
+  getStepRun(stepRunId: string): Promise<AgentStepRun | undefined>;
   listJobStepRuns(jobId: string): Promise<AgentStepRun[]>;
+  getModelCall(modelCallId: string): Promise<AgentModelCall | undefined>;
   listModelCalls(jobId: string): Promise<AgentModelCall[]>;
   getModelUsageStats(sessionId: string): Promise<AgentModelUsageStats | undefined>;
   listActiveContextSummaries(

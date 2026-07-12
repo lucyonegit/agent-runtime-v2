@@ -5,7 +5,7 @@ import type {
   AgentSession,
   AgentToolInvocation,
 } from '../src/domain/index.js';
-import { CONTEXT_RULES_VERSION } from '../src/context/context-purpose.js';
+import { CONTEXT_RULES_VERSION } from '../src/runtime/context/context-compiler.js';
 import {
   ContextPreviewService,
   type ContextPreviewStore,
@@ -95,9 +95,16 @@ function storeFixture(overrides: {
   const messages = overrides.messages ?? historyMessages();
   return {
     getSession: async () => session,
+    getJob: async () => jobs[0],
+    getStepRun: async () => undefined,
+    getModelCall: async () => undefined,
+    getPlanByJobId: async () => undefined,
+    listPlanSteps: async () => [],
+    listJobStepRuns: async () => [],
     listSessionJobs: async () => jobs,
     listSessionMessages: async () => messages,
     listSessionToolInvocations: async () => [toolInvocation],
+    listActiveContextSummaries: async () => [],
   };
 }
 
