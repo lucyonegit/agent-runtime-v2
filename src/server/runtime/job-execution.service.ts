@@ -10,7 +10,7 @@ import { ReactExecutor } from '../../runtime/executors/react-executor.js';
 import { StepExecutor } from '../../runtime/executors/step-executor.js';
 import { DirectJobContextLoader } from '../../runtime/loaders/direct-job-context-loader.js';
 import { StepContextLoader } from '../../runtime/loaders/step-context-loader.js';
-import { JobCoordinator } from '../../runtime/job-coordinator.js';
+import { JobCoordinator } from '../../orchestration/lifecycle/job-coordinator.js';
 import { resolveJobGoalMessage } from '../../runtime/job-goal.js';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
 import type { RuntimeEventPublisher } from '../../runtime/runtime-event-writer.js';

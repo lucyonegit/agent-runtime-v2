@@ -11,7 +11,7 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { ChatResult } from '@langchain/core/outputs';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import { JobCoordinator } from '../src/runtime/job-coordinator.js';
+import { JobCoordinator } from '../src/orchestration/lifecycle/job-coordinator.js';
 import { AuditedChatModel } from '../src/runtime/audited-chat-model.js';
 import { ToolExecutor } from '../src/runtime/tool-executor.js';
 import { AgentLoop } from '../src/agent-loop/agent-loop.js';

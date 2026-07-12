@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentJob, AgentJobError } from '../domain/index.js';
+import type { AgentJob, AgentJobError } from '../../domain/index.js';
 import {
   AgentStoreError,
   type AgentStore,
   type AnswerInputAndClaimResumeResult,
   type CreateJobAndAppendUserMessageResult,
   type CreateRetryJobResult,
-} from '../storage/agent-store.js';
-import { resolveExecutionLimits, type ExecutionLimits } from './execution-limits.js';
-import { RuntimeError, mapStoreError } from './runtime-errors.js';
-import { resolveJobGoalMessage, withGoalMessageId } from './job-goal.js';
+} from '../../storage/agent-store.js';
+import { resolveExecutionLimits, type ExecutionLimits } from '../../runtime/execution-limits.js';
+import { RuntimeError, mapStoreError } from '../../runtime/runtime-errors.js';
+import { resolveJobGoalMessage, withGoalMessageId } from '../../runtime/job-goal.js';
 
 export interface RuntimeClock {
   nowMs(): number;
@@ -282,3 +282,4 @@ const randomIds: RuntimeIdGenerator = {
   messageId: () => `message_${randomUUID()}`,
   attemptId: () => `attempt_${randomUUID()}`,
 };
+

@@ -12,7 +12,7 @@ import type {
   AgentMessage,
   AgentUserInputRequest,
 } from '../domain/index.js';
-import { JobCoordinator } from './job-coordinator.js';
+import { JobCoordinator } from '../orchestration/lifecycle/job-coordinator.js';
 import { RuntimeError } from './runtime-errors.js';
 import { RuntimeEventWriter } from './runtime-event-writer.js';
 

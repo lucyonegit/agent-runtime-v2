@@ -18,7 +18,7 @@ import { ContextCompressionService } from '../context/context-compression.servic
 import { SessionCompressionService } from '../context/session-compression.service.js';
 import type { BuiltContext } from '../context/context-compiler.js';
 import type { ContextMaterial } from '../context/context-material.js';
-import { JobCoordinator } from '../job-coordinator.js';
+import { JobCoordinator } from '../../orchestration/lifecycle/job-coordinator.js';
 import { RuntimeEventWriter, type RuntimeEventPublisher } from '../runtime-event-writer.js';
 import { ToolExecutor, type RuntimeTool } from '../tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
