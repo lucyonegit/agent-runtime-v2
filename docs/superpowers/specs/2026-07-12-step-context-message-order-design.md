@@ -27,6 +27,7 @@ Session 基线
 - `ContextMaterial` 增加可选 `trailingMessages`，类型与 `fixedMessages` 相同。
 - `ContextCompiler` 在所有 summary/group item 之后加入 trailing messages；它们仍是 must-keep system 类目，并纳入 token 预算和 Manifest breakdown。
 - `StepContextLoader` 将当前 Step 指令从 `fixedMessages` 移到 `trailingMessages`。
+- Context 规则版本从 `job-step-run-context-v4` 升为 `job-step-run-context-v5`，避免把新旧消息顺序误判为同一规则。
 - DirectJob、Session Preview、压缩、ModelCall 重建沿用现有路径；没有 trailing messages 时行为完全不变。
 
 ## 约束

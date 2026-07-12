@@ -138,7 +138,7 @@ describe('ContextCompiler', () => {
     ]);
     expect(context.inputManifest).toMatchObject({
       purpose: 'step_execution',
-      contextRulesVersion: 'job-step-run-context-v4',
+      contextRulesVersion: 'job-step-run-context-v5',
       systemPromptVersion: 'system-v1',
       messageGroupIds: ['message:goal', 'tool_exchange:call_context'],
       summaryIds: ['summary_1'],

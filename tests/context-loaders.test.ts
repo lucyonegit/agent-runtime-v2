@@ -176,6 +176,11 @@ describe('StepContextLoader', () => {
     ]);
     expect(compiled.messages.map(item => item.content)).toContain('tool evidence');
     expect(compiled.messages.map(item => item.content)).toContain('current tail');
+    const contents = compiled.messages.map(item => item.content);
+    const currentInstruction =
+      'Current PlanStep — execute only this step. Do not execute later PlanSteps:\ndo step two';
+    expect(contents.indexOf('current tail')).toBeLessThan(contents.indexOf(currentInstruction));
+    expect(contents.at(-1)).toBe(currentInstruction);
   });
 });
 

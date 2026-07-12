@@ -30,6 +30,7 @@ export interface ContextModelBudget {
 
 export interface ContextMaterial {
   fixedMessages: ContextFixedMessage[];
+  trailingMessages?: ContextFixedMessage[];
   fixedPrefix: Record<string, unknown>;
   groups: ContextGroupMaterial[];
   summaries: ContextSummaryMaterial[];

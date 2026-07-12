@@ -78,11 +78,8 @@ export class StepContextLoader {
       message: new SystemMessage(`Current execution plan:\n${planText}`),
       text: planText,
     });
-    fixedMessages.push({
-      id: 'must_keep:instruction',
-      message: new SystemMessage(input.step.instruction),
-      text: input.step.instruction,
-    });
+    const currentInstruction =
+      `Current PlanStep — execute only this step. Do not execute later PlanSteps:\n${input.step.instruction}`;
     const summaryEnd = Math.max(0, ...summaries.map(summary => summary.sourceRowIdEnd));
     const sessionGroups = context.sessionBaseline.map(group => ({
       group,
@@ -110,11 +107,16 @@ export class StepContextLoader {
     });
     return {
       fixedMessages,
+      trailingMessages: [{
+        id: 'must_keep:instruction',
+        message: new SystemMessage(currentInstruction),
+        text: currentInstruction,
+      }],
       fixedPrefix: {
         systemPrompt: this.options.systemPrompt,
         stableContext,
         originalGoal: input.originalGoal,
-        currentInstruction: input.step.instruction,
+        currentInstruction,
         plan: planText,
       },
       groups: [...sessionGroups, ...planGroups],

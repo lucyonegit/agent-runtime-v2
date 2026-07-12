@@ -170,9 +170,9 @@ function modelCallFixture(overrides: Partial<AgentModelCall>): AgentModelCall {
   return {
     id: 'model_call_1', sessionId: 'session_1', jobId: 'job_1', attemptId: 'attempt_1',
     logicalCallKey: 'job.react:1', callAttemptNo: 1, callType: 'job.react', status: 'completed',
-    provider: 'test', model: 'model', contextRulesVersion: 'job-step-run-context-v4',
+    provider: 'test', model: 'model', contextRulesVersion: 'job-step-run-context-v5',
     inputManifest: {
-      purpose: 'job_execution', contextRulesVersion: 'job-step-run-context-v4',
+      purpose: 'job_execution', contextRulesVersion: 'job-step-run-context-v5',
       systemPromptVersion: 'system-v1', messageGroupIds: [], summaryIds: [],
       fixedPrefixChecksum: 'checksum',
       estimatedBreakdown: { system: 1, tools: 0, summaries: 0, messages: 1, reservedOutput: 500 },

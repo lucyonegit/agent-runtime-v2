@@ -10,7 +10,7 @@ import {
   type TokenBudgetItem,
 } from './token-budget.js';
 
-export const CONTEXT_RULES_VERSION = 'job-step-run-context-v4';
+export const CONTEXT_RULES_VERSION = 'job-step-run-context-v5';
 
 export interface CompiledContext {
   messages: BaseMessage[];
@@ -102,6 +102,18 @@ export function compileContext(material: ContextMaterial): CompiledContext {
       mustKeep: groupMaterial.mustKeep,
       priority: groupMaterial.priority,
       recency: Math.max(...messages.map(message => message.rowId)),
+      originalOrder: order++,
+    });
+  }
+
+  for (const trailing of material.trailingMessages ?? []) {
+    items.push({
+      id: trailing.id,
+      value: { kind: 'message', message: trailing.message, category: 'system' },
+      estimatedTokens: estimateTextTokens(trailing.text),
+      mustKeep: true,
+      priority: 1_000,
+      recency: Number.MAX_SAFE_INTEGER,
       originalOrder: order++,
     });
   }
