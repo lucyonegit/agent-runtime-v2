@@ -1,11 +1,38 @@
 import { HumanMessage, SystemMessage, type AIMessageChunk } from '@langchain/core/messages';
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import type { Runnable } from '@langchain/core/runnables';
-import type { PlanEnginePort, PlanSpec } from '../../planner/plan-engine.js';
-import type { PlanSummarizerPort, PlanSummaryInput } from '../../planner/plan-summarizer.js';
+import { PlanEngine, type PlanEnginePort, type PlanSpec } from '../../planner/plan-engine.js';
+import {
+  PlanSummarizer,
+  type PlanSummarizerPort,
+  type PlanSummaryInput,
+} from '../../planner/plan-summarizer.js';
+import type { PlanEngineFactory } from '../../orchestration/execution/job-execution-orchestrator.js';
+import type { RuntimeEventPublisher } from '../../runtime/runtime-event-writer.js';
+import type { AgentStore } from '../../storage/agent-store.js';
 import { WORKSPACE_TOOL_ROUTING_INSTRUCTION } from './runtime-context-config.js';
 
 type ChatRunnable = Runnable<BaseLanguageModelInput, AIMessageChunk>;
+
+export interface DefaultPlanEngineFactoryOptions {
+  store: AgentStore;
+  workerId: string;
+  publisher: RuntimeEventPublisher;
+}
+
+export function createDefaultPlanEngineFactory(
+  options: DefaultPlanEngineFactoryOptions
+): PlanEngineFactory {
+  return {
+    create: ({ routeModel, createModel, finalizeModel }) => new PlanEngine({
+      store: options.store,
+      workerId: options.workerId,
+      planner: new DefaultPlanner(routeModel, createModel),
+      summarizer: new PlanSummarizer(new DefaultPlanSummarizer(finalizeModel)),
+      publisher: options.publisher,
+    }),
+  };
+}
 
 const ROUTE_SYSTEM_PROMPT = `Return JSON only: {"strategy":"direct"|"planned"}.
 Choose based on execution complexity, not the number of final deliverables.

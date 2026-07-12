@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Pool } from 'pg';
 import { AgentRuntime } from '../orchestration/agent-runtime.js';
+import { JobExecutionOrchestrator } from '../orchestration/execution/job-execution-orchestrator.js';
 import { PostgresAgentStore } from '../storage/postgres/postgres-agent-store.js';
 import { assertAgentRuntimeSchemaVersion } from '../storage/postgres/migrations.js';
 import { AgentHttpModule } from './http/agent-http.module.js';
@@ -12,10 +13,15 @@ import { RuntimeExceptionFilter } from './http/runtime-exception.filter.js';
 import { ContextPreviewService } from './debug/context-preview.service.js';
 import { removeSessionSandbox } from '../tools/index.js';
 import { createDefaultTools } from './runtime/default-tools.js';
-import { RuntimeJobExecutionService } from './runtime/job-execution.service.js';
+import { createDefaultPlanEngineFactory } from './runtime/default-planner.js';
 import { createLangChainChatModel } from './runtime/langchain-model-provider.js';
 import { resolveModelRuntimeConfig } from './runtime/model-config.js';
 import { RuntimeEventBus } from './runtime/runtime-event-bus.js';
+import {
+  JOB_EXECUTION_SYSTEM_PROMPT,
+  RUNTIME_SYSTEM_PROMPT_VERSION,
+  STEP_EXECUTION_SYSTEM_PROMPT,
+} from './runtime/runtime-context-config.js';
 
 const databaseUrl = requiredEnv('DATABASE_URL');
 const workerId = process.env.AGENT_RUNTIME_WORKER_ID ?? `worker_${process.pid}`;
@@ -39,7 +45,7 @@ const maxContextTokens = numberEnv('MODEL_MAX_CONTEXT_TOKENS', 128_000);
 const reservedOutputTokens = numberEnv('MODEL_RESERVED_OUTPUT_TOKENS', 4_096);
 if (jobHeartbeatMs >= jobLeaseMs) throw new Error('JOB_HEARTBEAT_MS must be shorter than JOB_LEASE_MS.');
 const tools = createDefaultTools();
-const executor = new RuntimeJobExecutionService({
+const executor = new JobExecutionOrchestrator({
   store,
   workerId,
   publisher: events,
@@ -52,6 +58,10 @@ const executor = new RuntimeJobExecutionService({
   reservedOutputTokens,
   jobLeaseMs,
   jobHeartbeatMs,
+  jobSystemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
+  stepSystemPrompt: STEP_EXECUTION_SYSTEM_PROMPT,
+  systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
+  planEngineFactory: createDefaultPlanEngineFactory({ store, workerId, publisher: events }),
 });
 const contextPreview = new ContextPreviewService({
   store,

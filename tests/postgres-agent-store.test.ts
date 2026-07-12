@@ -25,7 +25,13 @@ import { PlanSummarizer } from '../src/planner/plan-summarizer.js';
 import { SessionView } from '../src/view/session-view.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
-import { RuntimeJobExecutionService } from '../src/server/runtime/job-execution.service.js';
+import { JobExecutionOrchestrator } from '../src/orchestration/execution/job-execution-orchestrator.js';
+import { createDefaultPlanEngineFactory } from '../src/server/runtime/default-planner.js';
+import {
+  JOB_EXECUTION_SYSTEM_PROMPT,
+  RUNTIME_SYSTEM_PROMPT_VERSION,
+  STEP_EXECUTION_SYSTEM_PROMPT,
+} from '../src/server/runtime/runtime-context-config.js';
 import type {
   RuntimeTool,
   RuntimeToolContext,
@@ -1217,7 +1223,7 @@ describe('PostgresAgentStore Job transactions', () => {
         }
         return new AIMessage({ content: 'direct final answer', usage_metadata: usage });
       });
-    const executor = new RuntimeJobExecutionService({
+    const executor = new JobExecutionOrchestrator({
       store,
       workerId: 'worker_runtime_e2e',
       publisher: { publish: event => { events.push(event); } },
@@ -1228,6 +1234,14 @@ describe('PostgresAgentStore Job transactions', () => {
       jobLeaseMs: 60_000,
       jobHeartbeatMs: 10_000,
       compressionMessageThreshold: 1,
+      jobSystemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
+      stepSystemPrompt: STEP_EXECUTION_SYSTEM_PROMPT,
+      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
+      planEngineFactory: createDefaultPlanEngineFactory({
+        store,
+        workerId: 'worker_runtime_e2e',
+        publisher: { publish: event => { events.push(event); } },
+      }),
     });
 
     await store.createSession({ id: 'session_runtime_e2e', nowMs: now });

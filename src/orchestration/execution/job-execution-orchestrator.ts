@@ -1,29 +1,35 @@
+import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { AIMessageChunk } from '@langchain/core/messages';
+import type { Runnable } from '@langchain/core/runnables';
 import type { AgentJob } from '../../domain/index.js';
-import type { JobExecutionService } from '../../orchestration/agent-runtime.js';
-import { PlanEngine } from '../../planner/plan-engine.js';
-import { PlanSummarizer } from '../../planner/plan-summarizer.js';
-import { STEP_OUTPUT_INSTRUCTION } from '../../planner/planner-prompts.js';
-import { DirectJobWorkflow } from '../../orchestration/workflows/direct-job-workflow.js';
-import { PlannedJobWorkflow } from '../../orchestration/workflows/planned-job-workflow.js';
-import { StepWorkflow } from '../../orchestration/workflows/step-workflow.js';
-import { ReactExecutor } from '../../runtime/executors/react-executor.js';
+import type { JobExecutionService } from '../agent-runtime.js';
+import type { PlanEngine } from '../../planner/plan-engine.js';
+import type { BuiltContext } from '../../runtime/context/context-compiler.js';
+import { DirectJobWorkflow } from '../workflows/direct-job-workflow.js';
+import { PlannedJobWorkflow } from '../workflows/planned-job-workflow.js';
+import { StepWorkflow } from '../workflows/step-workflow.js';
+import { ReactExecutionRuntime } from '../../runtime/react-execution-runtime.js';
 import { DirectJobContextLoader } from '../../runtime/loaders/direct-job-context-loader.js';
 import { StepContextLoader } from '../../runtime/loaders/step-context-loader.js';
-import { JobCoordinator } from '../../orchestration/lifecycle/job-coordinator.js';
+import { JobCoordinator } from '../lifecycle/job-coordinator.js';
 import { resolveJobGoalMessage } from '../../runtime/job-goal.js';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
 import type { RuntimeEventPublisher } from '../../runtime/runtime-event-writer.js';
 import type { RuntimeTool } from '../../runtime/tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
-import { DefaultPlanner, DefaultPlanSummarizer } from './default-planner.js';
-import {
-  JOB_EXECUTION_SYSTEM_PROMPT,
-  RUNTIME_SYSTEM_PROMPT_VERSION,
-  WORKSPACE_TOOL_ROUTING_INSTRUCTION,
-} from './runtime-context-config.js';
+import { ExecutionContextProvider } from './execution-context-provider.js';
 
-export interface RuntimeJobExecutionOptions {
+export interface PlanEngineFactory {
+  create(input: {
+    job: AgentJob;
+    routeModel: Runnable<BaseLanguageModelInput, AIMessageChunk>;
+    createModel: Runnable<BaseLanguageModelInput, AIMessageChunk>;
+    finalizeModel: Runnable<BaseLanguageModelInput, AIMessageChunk>;
+  }): PlanEngine;
+}
+
+export interface JobExecutionOrchestratorOptions {
   store: AgentStore;
   workerId: string;
   publisher: RuntimeEventPublisher;
@@ -40,19 +46,23 @@ export interface RuntimeJobExecutionOptions {
   jobLeaseMs?: number;
   jobHeartbeatMs?: number;
   compressionMessageThreshold?: number;
+  jobSystemPrompt: string;
+  stepSystemPrompt: string;
+  systemPromptVersion: string;
+  planEngineFactory: PlanEngineFactory;
 }
 
-export class RuntimeJobExecutionService implements JobExecutionService {
+export class JobExecutionOrchestrator implements JobExecutionService {
   readonly #running = new Set<string>();
-  readonly #options: Required<Omit<RuntimeJobExecutionOptions,
+  readonly #options: Required<Omit<JobExecutionOrchestratorOptions,
     'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName' | 'sandboxRoot'>>
-    & RuntimeJobExecutionOptions;
-  readonly #react: ReactExecutor;
-  readonly #directContext: DirectJobContextLoader;
+    & JobExecutionOrchestratorOptions;
+  readonly #react: ReactExecutionRuntime;
+  readonly #contexts: ExecutionContextProvider;
   readonly #directExecutor: DirectJobWorkflow;
   readonly #planExecutor: PlannedJobWorkflow;
 
-  constructor(options: RuntimeJobExecutionOptions) {
+  constructor(options: JobExecutionOrchestratorOptions) {
     this.#options = {
       maxContextTokens: 128_000,
       reservedOutputTokens: 4_096,
@@ -74,23 +84,23 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       reservedOutputTokens: this.#options.reservedOutputTokens,
     };
     const toolSchemas = this.#options.tools.map(tool => tool.tool);
-    this.#directContext = new DirectJobContextLoader({
+    const directContext = new DirectJobContextLoader({
       store: this.#options.store,
-      systemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
-      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
+      systemPrompt: this.#options.jobSystemPrompt,
+      systemPromptVersion: this.#options.systemPromptVersion,
       model: modelBudget,
       toolSchemas,
       compressionMessageThreshold: this.#options.compressionMessageThreshold,
     });
     const stepContexts = new StepContextLoader({
       store: this.#options.store,
-      systemPrompt: `Execute only the current PlanStep. ${WORKSPACE_TOOL_ROUTING_INSTRUCTION} ${STEP_OUTPUT_INSTRUCTION}`,
-      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
+      systemPrompt: this.#options.stepSystemPrompt,
+      systemPromptVersion: this.#options.systemPromptVersion,
       model: modelBudget,
       toolSchemas,
       compressionMessageThreshold: this.#options.compressionMessageThreshold,
     });
-    this.#react = new ReactExecutor({
+    this.#react = new ReactExecutionRuntime({
       store: this.#options.store,
       workerId: this.#options.workerId,
       publisher: this.#options.publisher,
@@ -105,14 +115,29 @@ export class RuntimeJobExecutionService implements JobExecutionService {
       maxToolCalls: this.#options.maxToolCalls,
       executionDeadlineMs: this.#options.executionDeadlineMs,
     });
+    this.#contexts = new ExecutionContextProvider({
+      store: this.#options.store,
+      modelName: this.#options.modelName,
+      directContext,
+      stepContext: stepContexts,
+      compressionModels: {
+        create: ({ job, context, logicalCallKey, stepRunId }) => this.#react.createAuditedModel(
+          job,
+          context,
+          'context.compress',
+          logicalCallKey,
+          stepRunId
+        ),
+      },
+    });
     this.#directExecutor = new DirectJobWorkflow(
       this.#react,
-      this.#directContext,
+      this.#contexts,
       this.#options.publisher
     );
     this.#planExecutor = new PlannedJobWorkflow({
       store: this.#options.store,
-      stepExecutor: new StepWorkflow(this.#react, stepContexts),
+      stepExecutor: new StepWorkflow(this.#react, this.#contexts),
       requireOwnedJob: jobId => this.#requireOwnedJob(jobId),
     });
   }
@@ -139,12 +164,7 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     const goalMessage = resolveJobGoalMessage(job, messages);
     const originalGoal = goalMessage?.content;
     if (!originalGoal) throw new Error(`Job ${job.id} has no original user goal.`);
-    const jobContext = await this.#react.buildContext(
-      job,
-      'job_execution',
-      undefined,
-      () => this.#directContext.load(job, originalGoal)
-    );
+    const jobContext = await this.#contexts.buildPlanningContext(job, originalGoal);
     const planner = this.#createPlanEngine(job, jobContext);
 
     if (!job.strategy || job.stage === 'planning' && !await this.#options.store.getPlanByJobId(job.id)) {
@@ -162,16 +182,15 @@ export class RuntimeJobExecutionService implements JobExecutionService {
     await this.#planExecutor.execute(job, originalGoal, planner);
   }
 
-  #createPlanEngine(job: AgentJob, built: Awaited<ReturnType<ReactExecutor['buildContext']>>): PlanEngine {
+  #createPlanEngine(job: AgentJob, built: BuiltContext): PlanEngine {
     const route = this.#react.createAuditedModel(job, built, 'planner.route', 'planner.route');
     const create = this.#react.createAuditedModel(job, built, 'planner.create', 'planner.create');
     const finalize = this.#react.createAuditedModel(job, built, 'plan.finalize', 'plan.finalize');
-    return new PlanEngine({
-      store: this.#options.store,
-      workerId: this.#options.workerId,
-      planner: new DefaultPlanner(route, create),
-      summarizer: new PlanSummarizer(new DefaultPlanSummarizer(finalize)),
-      publisher: this.#options.publisher,
+    return this.#options.planEngineFactory.create({
+      job,
+      routeModel: route,
+      createModel: create,
+      finalizeModel: finalize,
     });
   }
 

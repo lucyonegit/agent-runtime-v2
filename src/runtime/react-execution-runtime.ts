@@ -4,26 +4,19 @@ import type { BaseLanguageModelInput } from '@langchain/core/language_models/bas
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { Runnable } from '@langchain/core/runnables';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import { AgentLoop } from '../../agent-loop/agent-loop.js';
-import type { AgentJob, AgentModelCallType, AgentStepRun } from '../../domain/index.js';
-import { STEP_OUTPUT_REPAIR_INSTRUCTION } from '../../planner/planner-prompts.js';
-import { StepRunner, type StepRunnerResult } from '../../planner/step-runner.js';
-import { AgentRunner, type DirectAgentRunResult } from '../agent-runner.js';
-import { AuditedChatModel } from '../audited-chat-model.js';
-import {
-  ContextBuildService,
-  type ContextMaterialSource,
-} from '../context/context-build.service.js';
-import { ContextCompressionService } from '../context/context-compression.service.js';
-import { SessionCompressionService } from '../context/session-compression.service.js';
-import type { BuiltContext } from '../context/context-compiler.js';
-import type { ContextMaterial } from '../context/context-material.js';
-import { JobCoordinator } from '../../orchestration/lifecycle/job-coordinator.js';
-import { RuntimeEventWriter, type RuntimeEventPublisher } from '../runtime-event-writer.js';
-import { ToolExecutor, type RuntimeTool } from '../tool-executor.js';
-import type { AgentStore } from '../../storage/agent-store.js';
+import { AgentLoop } from '../agent-loop/agent-loop.js';
+import type { AgentJob, AgentModelCallType, AgentStepRun } from '../domain/index.js';
+import { STEP_OUTPUT_REPAIR_INSTRUCTION } from '../planner/planner-prompts.js';
+import { StepRunner, type StepRunnerResult } from '../planner/step-runner.js';
+import { AgentRunner, type DirectAgentRunResult } from './agent-runner.js';
+import { AuditedChatModel } from './audited-chat-model.js';
+import type { BuiltContext } from './context/context-compiler.js';
+import { JobCoordinator } from '../orchestration/lifecycle/job-coordinator.js';
+import { RuntimeEventWriter, type RuntimeEventPublisher } from './runtime-event-writer.js';
+import { ToolExecutor, type RuntimeTool } from './tool-executor.js';
+import type { AgentStore } from '../storage/agent-store.js';
 
-export interface ReactExecutorOptions {
+export interface ReactExecutionRuntimeOptions {
   store: AgentStore;
   workerId: string;
   publisher: RuntimeEventPublisher;
@@ -39,32 +32,14 @@ export interface ReactExecutorOptions {
   executionDeadlineMs: number;
 }
 
-export class ReactExecutor {
-  readonly #contexts = new ContextBuildService();
-  readonly #compression: ContextCompressionService;
-  readonly #sessionCompression: SessionCompressionService;
-
-  constructor(private readonly options: ReactExecutorOptions) {
-    this.#compression = new ContextCompressionService({
-      store: options.store,
-      modelName: options.modelName,
-    });
-    this.#sessionCompression = new SessionCompressionService({
-      store: options.store,
-      modelName: options.modelName,
-    });
-  }
+export class ReactExecutionRuntime {
+  constructor(private readonly options: ReactExecutionRuntimeOptions) {}
 
   async runDirect(input: {
     job: AgentJob;
-    loadContext(): Promise<ContextMaterial>;
+    context: BuiltContext;
   }): Promise<DirectAgentRunResult> {
-    const built = await this.buildContext(
-      input.job,
-      'job_execution',
-      undefined,
-      input.loadContext
-    );
+    const built = input.context;
     const toolExecutor = this.#toolExecutor();
     const tools = toolExecutor.tools();
     const runner = new AgentRunner({
@@ -91,14 +66,9 @@ export class ReactExecutor {
   async runStep(input: {
     job: AgentJob;
     stepRun: AgentStepRun;
-    loadContext(): Promise<ContextMaterial>;
+    context: BuiltContext;
   }): Promise<StepRunnerResult> {
-    const built = await this.buildContext(
-      input.job,
-      'step_execution',
-      input.stepRun.id,
-      input.loadContext
-    );
+    const built = input.context;
     const toolExecutor = this.#toolExecutor();
     const tools = toolExecutor.tools();
     const runner = new StepRunner({
@@ -151,45 +121,6 @@ export class ReactExecutor {
     tools: StructuredToolInterface[] = []
   ): AuditedChatModel {
     return this.#auditedModel(job, built, callType, logicalCallKey, stepRunId, tools);
-  }
-
-  async buildContext(
-    job: AgentJob,
-    purpose: 'job_execution' | 'step_execution',
-    stepRunId: string | undefined,
-    load: () => Promise<ContextMaterial>
-  ): Promise<BuiltContext> {
-    const source: ContextMaterialSource = {
-      load,
-      compress: async (material, built) => {
-        const invoke = async (
-          messages: BaseLanguageModelInput,
-          compressionBuilt: BuiltContext,
-          logicalCallKey: string
-        ): Promise<string> => {
-          const response = await this.#auditedModel(
-            job,
-            compressionBuilt,
-            'context.compress',
-            logicalCallKey,
-            stepRunId
-          ).invoke(messages);
-          return response.text;
-        };
-        if (purpose === 'job_execution' && material.bundles) {
-          return this.#sessionCompression.compress({ job, material, built, invoke });
-        }
-        return this.#compression.compress({
-          job,
-          ...(stepRunId ? { stepRunId } : {}),
-          purpose,
-          material,
-          built,
-          invoke,
-        });
-      },
-    };
-    return this.#contexts.build(source);
   }
 
   #auditedModel(
@@ -260,3 +191,4 @@ export class ReactExecutor {
 function outputId(): string {
   return `output_${randomUUID()}`;
 }
+

@@ -1,24 +1,24 @@
 import type { AgentJob, AgentPlanStep, AgentStepRun } from '../../domain/index.js';
-import { StepContextLoader } from '../../runtime/loaders/step-context-loader.js';
-import { ReactExecutor } from '../../runtime/executors/react-executor.js';
+import type { ExecutionContextProviderPort } from '../execution/execution-context-provider.js';
+import { ReactExecutionRuntime } from '../../runtime/react-execution-runtime.js';
 
 export class StepWorkflow {
   constructor(
-    private readonly react: ReactExecutor,
-    private readonly contexts: StepContextLoader
+    private readonly react: ReactExecutionRuntime,
+    private readonly contexts: ExecutionContextProviderPort
   ) {}
 
-  execute(input: {
+  async execute(input: {
     job: AgentJob;
     originalGoal: string;
     step: AgentPlanStep;
     stepRun: AgentStepRun;
   }) {
+    const context = await this.contexts.buildStepContext(input);
     return this.react.runStep({
       job: input.job,
       stepRun: input.stepRun,
-      loadContext: () => this.contexts.load(input),
+      context,
     });
   }
 }
-
