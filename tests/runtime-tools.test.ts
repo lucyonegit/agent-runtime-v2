@@ -51,6 +51,8 @@ describe('LangChain runtime tools', () => {
       'web_search',
     ]);
     expect(new Set(tools.map(item => item.tool.name)).size).toBe(tools.length);
+    expect(tools.filter(item => item.requiresFreshContext).map(item => item.tool.name))
+      .toEqual(['write_article', 'write_file']);
   });
 
   it('runs basic tools through LangChain ToolCall and returns ToolMessage artifacts', async () => {
@@ -95,10 +97,17 @@ describe('LangChain runtime tools', () => {
       title: 'Hello/World',
       content: '# Hello',
       format: 'markdown',
-    }) as { fileName: string; path: string };
+    }) as { fileName: string; path: string; artifacts: Array<{ storagePath: string }> };
     expect(result.fileName).toBe('Hello_World.md');
-    expect(result.path).toContain(join('sessions', 'session_1', 'workspace', 'artifacts'));
-    await expect(readFile(result.path, 'utf8')).resolves.toBe('# Hello');
+    expect(result.path).toBe('artifacts/Hello_World.md');
+    await expect(readFile(
+      join(sandboxRoot, 'sessions', 'session_1', 'workspace', result.path),
+      'utf8'
+    )).resolves.toBe('# Hello');
+    await expect(readFile(
+      join(sandboxRoot, 'sessions', 'session_1', 'workspace', result.artifacts[0]!.storagePath),
+      'utf8'
+    )).resolves.toBe('# Hello');
   });
 
   it('routes source code to write_file and keeps write_article prose-only', async () => {

@@ -13,6 +13,7 @@ export const AGENT_REALTIME_ENTITY_EVENT_TYPES = [
   'tool_invocation.upserted',
   'user_input.upserted',
   'model_usage.updated',
+  'artifact.upserted',
 ] as const;
 
 export type AgentRealtimeEvent =
@@ -43,4 +44,6 @@ export type AgentRealtimeEvent =
   | { type: 'plan_step.upserted'; sessionId: string; step: AgentPlanStep }
   | { type: 'tool_invocation.upserted'; sessionId: string; invocation: AgentToolInvocation }
   | { type: 'user_input.upserted'; sessionId: string; request: AgentUserInputRequest }
-  | { type: 'model_usage.updated'; sessionId: string; stats: AgentModelUsageStats };
+  | { type: 'model_usage.updated'; sessionId: string; stats: AgentModelUsageStats }
+  | { type: 'artifact.upserted'; sessionId: string; artifact: AgentArtifact };
+import type { AgentArtifact } from './artifact.js';

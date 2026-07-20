@@ -1,5 +1,10 @@
 import type { PoolClient } from 'pg';
-import type { AgentJob, AgentMessage, AgentSession } from '../../domain/index.js';
+import type {
+  AgentJob,
+  AgentMessage,
+  AgentPlanStepResult,
+  AgentSession,
+} from '../../domain/index.js';
 import {
   AgentStoreError,
   type CancelJobInput,
@@ -26,12 +31,14 @@ import {
   type StartModelCallInput,
   type CompleteModelCallInput,
   type CompleteModelCallResult,
+  type SetModelCallOutputDispositionInput,
   type ReplaceContextSummaryInput,
   type FailJobInput,
   type RenewJobLeaseInput,
 } from '../agent-store.js';
 import {
   mapAgentJobRow,
+  mapAgentArtifactRow,
   mapAgentMessageRow,
   mapAgentSessionRow,
   mapAgentPlanRow,
@@ -42,6 +49,7 @@ import {
   mapAgentToolInvocationRow,
   mapAgentUserInputRequestRow,
   type AgentJobRow,
+  type AgentArtifactRow,
   type AgentMessageRow,
   type AgentSessionRow,
   type AgentPlanRow,
@@ -477,12 +485,88 @@ export async function commitToolResultCommand(
         input.nowMs,
       ]
     );
+    const artifactRows: AgentArtifactRow[] = [];
+    if (input.outcome.status === 'completed') {
+      for (const artifact of input.outcome.artifacts ?? []) {
+        const inserted = await client.query<AgentArtifactRow>(
+          `insert into agent_artifacts(
+             id, session_id, job_id, plan_id, plan_step_id,
+             tool_invocation_id, result_message_id,
+             kind, area, title, file_name, logical_path, storage_path,
+             media_type, size, checksum, revision, metadata, created_at_ms
+           ) values (
+             $1, $2, $3, $4, $5,
+             $6, $7,
+             $8, $9, $10, $11, $12, $13,
+             $14, $15, $16,
+             (select coalesce(max(existing.revision), 0) + 1
+                from agent_artifacts existing
+               where existing.session_id = $2 and existing.logical_path = $12),
+             $17, $18
+           ) returning *`,
+          [
+            artifact.id,
+            input.sessionId,
+            input.jobId,
+            invocation.plan_id,
+            invocation.plan_step_id,
+            invocation.id,
+            input.messageId,
+            artifact.kind,
+            artifact.area,
+            artifact.title,
+            artifact.fileName,
+            artifact.logicalPath,
+            artifact.storagePath,
+            artifact.mediaType,
+            artifact.size,
+            artifact.checksum,
+            artifact.metadata ?? null,
+            input.nowMs,
+          ]
+        );
+        artifactRows.push(requireRow(inserted.rows[0], 'create artifact'));
+      }
+      // update_plan is orchestration bookkeeping, not evidence produced by the step.
+      // Only task tools may contribute durable evidence/artifacts to PlanStep.result.
+      if (invocation.plan_step_id && invocation.tool_name !== 'update_plan') {
+        const planStepResult = await client.query<AgentPlanStepRow>(
+          `select * from agent_plan_steps where id = $1 for update`,
+          [invocation.plan_step_id]
+        );
+        const currentStep = requireRow(planStepResult.rows[0], 'lock artifact plan step');
+        const currentResult = mapAgentPlanStepRow(currentStep).result;
+        await client.query(
+          `update agent_plan_steps
+           set result = $2,
+               version = version + 1,
+               updated_at_ms = $3
+           where id = $1`,
+          [
+            invocation.plan_step_id,
+            JSON.stringify({
+              ...currentResult,
+              evidenceMessageIds: mergeStringLists(
+                currentResult?.evidenceMessageIds,
+                [input.messageId]
+              ),
+              artifactIds: mergeStringLists(
+                currentResult?.artifactIds,
+                artifactRows.map(artifact => artifact.id)
+              ),
+            }),
+            input.nowMs,
+          ]
+        );
+      }
+    }
     await touchSession(client, input.sessionId, input.nowMs);
     return {
       message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'create tool-result message')),
       invocation: mapAgentToolInvocationRow(
         requireRow(updatedInvocation.rows[0], 'complete tool invocation')
       ),
+      artifacts: artifactRows.map(mapAgentArtifactRow),
     };
   });
 }
@@ -1071,7 +1155,10 @@ export async function applyPlanUpdateCommand(
             step.title,
             step.description ?? null,
             step.status,
-            step.result ? JSON.stringify(step.result) : null,
+            serializePlanStepResult(
+              step.result,
+              mapAgentPlanStepRow(current).result
+            ),
             step.error?.code ?? null,
             step.error?.message ?? null,
             step.error?.details ?? null,
@@ -1120,6 +1207,34 @@ export async function applyPlanUpdateCommand(
       steps: stepRows.sort((left, right) => left.position - right.position).map(mapAgentPlanStepRow),
     };
   });
+}
+
+function mergePlanStepResult(
+  incoming: AgentPlanStepResult | undefined,
+  current: AgentPlanStepResult | undefined
+): AgentPlanStepResult | undefined {
+  if (!incoming && !current) return undefined;
+  return {
+    ...(incoming?.summary !== undefined
+      ? { summary: incoming.summary }
+      : current?.summary !== undefined ? { summary: current.summary } : {}),
+    ...(current?.evidenceMessageIds?.length
+      ? { evidenceMessageIds: current.evidenceMessageIds }
+      : {}),
+    ...(current?.artifactIds?.length ? { artifactIds: current.artifactIds } : {}),
+  };
+}
+
+function serializePlanStepResult(
+  incoming: AgentPlanStepResult | undefined,
+  current: AgentPlanStepResult | undefined
+): string | null {
+  const merged = mergePlanStepResult(incoming, current);
+  return merged ? JSON.stringify(merged) : null;
+}
+
+function mergeStringLists(left: string[] | undefined, right: string[] | undefined): string[] {
+  return [...new Set([...(left ?? []), ...(right ?? [])])];
 }
 
 function validatePlanUpdate(input: ApplyPlanUpdateInput): void {
@@ -1181,13 +1296,13 @@ export async function startModelCallCommand(
        logical_call_key, call_attempt_no, call_type, status,
        provider, model, context_rules_version, input_manifest, input_messages, input_checksum,
        max_context_tokens, reserved_output_tokens, estimated_input_tokens,
-       usage_source, metadata, created_at_ms
+       usage_source, output_id, output_disposition, metadata, created_at_ms
      ) values (
        $1, $2, $3, $4,
        $5, $6, $7, 'started',
        $8, $9, $10, $11, $12, $13,
        $14, $15, $16,
-       'estimated', $17, $18
+       'estimated', $17, $18, $19, $20
      ) returning *`,
     [
       input.id, input.sessionId, input.jobId, input.attemptId,
@@ -1195,10 +1310,31 @@ export async function startModelCallCommand(
       input.provider, input.model, input.contextRulesVersion,
       JSON.stringify(input.inputManifest), JSON.stringify(input.inputMessages), input.inputChecksum,
       input.maxContextTokens, input.reservedOutputTokens, input.estimatedInputTokens,
-      input.metadata ?? null, input.nowMs,
+      input.outputId ?? null,
+      input.outputId ? 'pending' : null,
+      input.metadata ?? null,
+      input.nowMs,
     ]
   );
   return mapAgentModelCallRow(requireRow(result.rows[0], 'start model call'));
+}
+
+export async function setModelCallOutputDispositionCommand(
+  client: PoolClient,
+  input: SetModelCallOutputDispositionInput
+) {
+  const result = await client.query<AgentModelCallRow>(
+    `update agent_model_calls
+     set output_disposition = $3,
+         output_disposition_reason = $4
+     where job_id = $1 and output_id = $2
+     returning *`,
+    [input.jobId, input.outputId, input.disposition, input.reason ?? null]
+  );
+  return mapAgentModelCallRow(requireRow(
+    result.rows[0],
+    `set disposition for ModelCall output ${JSON.stringify(input.outputId)}`
+  ));
 }
 
 export async function completeModelCallCommand(
@@ -1222,7 +1358,7 @@ export async function completeModelCallCommand(
            cache_read_input_tokens = $6,
            cache_write_input_tokens = $7,
            usage_source = $8,
-           output_id = $9,
+           output_id = coalesce($9, output_id),
            result_type = $10,
            result_payload = $11,
            tool_names = $12,

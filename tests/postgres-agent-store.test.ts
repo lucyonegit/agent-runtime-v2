@@ -489,7 +489,18 @@ describe('PostgresAgentStore Job transactions', () => {
       durableBeforeExternalExecution = (
         await store.getToolInvocation(context.jobId, context.toolCallId)
       )?.status === 'running';
-      return { content: 'lookup result', result: { value: 42 } };
+      return {
+        content: 'lookup result',
+        result: {
+          value: 42,
+          artifacts: [{
+            kind: 'file', area: 'docs', title: 'Lookup result', fileName: 'lookup.md',
+            logicalPath: 'docs/lookup.md',
+            storagePath: '.revisions/runtime_invocation_1/docs/lookup.md',
+            mediaType: 'text/markdown', size: 42, checksum: 'checksum_lookup',
+          }],
+        },
+      };
     });
     const definition = runtimeLookup.tool;
     const toolExecutor = new ToolExecutor({
@@ -527,6 +538,7 @@ describe('PostgresAgentStore Job transactions', () => {
         eventId: () => 'event_direct',
         messageId: () => `runtime_message_${messageNo++}`,
         toolInvocationId: () => `runtime_invocation_${invocationNo++}`,
+        artifactId: () => 'artifact_direct_1',
         userInputRequestId: () => 'runtime_input_1',
       },
       clock: { nowMs: () => 36 },
@@ -576,18 +588,25 @@ describe('PostgresAgentStore Job transactions', () => {
       'tool_invocation.upserted',
       'message.upserted',
       'tool_invocation.upserted',
+      'artifact.upserted',
       'message.upserted',
       'job.upserted',
     ]);
     const directView = await new SessionView(store, { nowMs: () => 50 }).load('session_direct');
+    expect(directView.artifacts).toEqual([
+      expect.objectContaining({
+        id: 'artifact_direct_1', logicalPath: 'docs/lookup.md', revision: 1,
+        toolInvocationId: 'runtime_invocation_1',
+      }),
+    ]);
     expect(directView).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       generatedAtMs: 50,
       cursor: { latestMessageRowId: 4 },
       timeline: {
         flat: [
           { type: 'message' },
-          { type: 'tool_exchange', status: 'completed' },
+          { type: 'tool_exchange', status: 'completed', artifacts: [{ id: 'artifact_direct_1' }] },
           { type: 'message' },
         ],
       },
@@ -615,23 +634,30 @@ describe('PostgresAgentStore Job transactions', () => {
       throw new Error('Malformed tool arguments must not execute the tool.');
     });
     let modelCalls = 0;
+    const delegate = new TestChatRunnable(async input => {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return new AIMessageChunk({
+          content: '',
+          tool_call_chunks: [{
+            index: 0,
+            id: 'call_invalid_tool_args',
+            name: 'lookup',
+            args: '{not-json',
+          }],
+        });
+      }
+      expect(inputMessages(input)).toHaveLength(2);
+      return new AIMessageChunk('recovered after invalid tool arguments');
+    });
     const loop = new AgentLoop({
       streaming: false,
-      model: new TestChatRunnable(async input => {
-        modelCalls += 1;
-        if (modelCalls === 1) {
-          return new AIMessageChunk({
-            content: '',
-            tool_call_chunks: [{
-              index: 0,
-              id: 'call_invalid_tool_args',
-              name: 'lookup',
-              args: '{not-json',
-            }],
-          });
-        }
-        expect(inputMessages(input)).toHaveLength(2);
-        return new AIMessageChunk('recovered after invalid tool arguments');
+      model: auditedTestModel({
+        store,
+        job: claimed,
+        delegate,
+        workerId: 'worker_invalid_tool_args',
+        nowMs: 34,
       }),
       clock: { nowMs: () => 35 },
     });
@@ -701,6 +727,65 @@ describe('PostgresAgentStore Job transactions', () => {
       toolCallId: 'call_invalid_tool_args',
       toolResult: { status: 'failed', error: 'Malformed args.' },
     });
+    expect(await store.listModelCalls('job_invalid_tool_args')).toMatchObject([
+      {
+        outputId: 'invalid_tool_output_1', outputDisposition: 'accepted',
+        resultType: 'tool_calls', toolNames: ['lookup'],
+        resultPayload: { invalidToolCalls: [expect.objectContaining({ name: 'lookup' })] },
+      },
+      {
+        outputId: 'invalid_tool_output_2', outputDisposition: 'accepted',
+        resultType: 'text',
+      },
+    ]);
+  });
+
+  it('persists accepted and rejected ModelCall output dispositions', async () => {
+    await store.createSession({ id: 'session_disposition', nowMs: 10 });
+    await createJob(store, 'session_disposition', 'job_disposition', 'message_disposition', 20);
+    const claimed = await store.claimJob({
+      jobId: 'job_disposition', expectedVersion: 0, workerId: 'worker_disposition',
+      attemptId: 'attempt_disposition', nowMs: 30, leaseUntilMs: 100,
+    });
+    let modelCalls = 0;
+    const model = auditedTestModel({
+      store,
+      job: claimed,
+      workerId: 'worker_disposition',
+      delegate: new TestChatRunnable(async () => new AIMessageChunk(
+        ++modelCalls === 1 ? 'premature' : 'accepted final'
+      )),
+      nowMs: 34,
+    });
+    const runner = new AgentRunner({
+      loop: new AgentLoop({ model, streaming: false, clock: { nowMs: () => 35 } }),
+      writer: new RuntimeEventWriter({
+        store, workerId: 'worker_disposition', tools: [], requireModelCallAudit: true,
+        clock: { nowMs: () => 36 },
+      }),
+      coordinator: new JobCoordinator({
+        store, workerId: 'worker_disposition', clock: { nowMs: () => 36 },
+      }),
+    });
+    let outputNo = 0;
+    const result = await runner.runJob({
+      job: claimed, messages: [], tools: [],
+      toolExecutor: { execute: async () => ({ type: 'completed', content: 'unused' }) },
+      outputIdFactory: () => `output_disposition_${++outputNo}`,
+      validateFinalAnswer: async candidate => candidate.content === 'premature'
+        ? { type: 'retry', feedback: 'Complete the durable work first.' }
+        : { type: 'accept' },
+      limits: { maxIterations: 3, maxToolCalls: 1, deadlineMs: 90 },
+    });
+
+    expect(result).toMatchObject({ type: 'completed', message: { content: 'accepted final' } });
+    expect(await store.listModelCalls('job_disposition')).toMatchObject([
+      {
+        outputId: 'output_disposition_1', outputDisposition: 'rejected',
+        outputDispositionReason: 'Complete the durable work first.',
+      },
+      { outputId: 'output_disposition_2', outputDisposition: 'accepted' },
+    ]);
   });
 
   it('runs direct HITL through waiting, answer-as-tool-result, resume claim, and final completion', async () => {
@@ -831,16 +916,22 @@ describe('PostgresAgentStore Job transactions', () => {
       logicalCallKey: call.logicalCallKey,
       callAttemptNo: call.callAttemptNo,
       attemptId: call.attemptId,
+      outputId: call.outputId,
+      outputDisposition: call.outputDisposition,
     }))).toEqual([
       {
         logicalCallKey: 'job.react:1',
         callAttemptNo: 1,
         attemptId: 'attempt_hitl_1',
+        outputId: 'hitl_output_1',
+        outputDisposition: 'accepted',
       },
       {
         logicalCallKey: 'job.react:1',
         callAttemptNo: 2,
         attemptId: 'attempt_hitl_2',
+        outputId: 'hitl_output_2',
+        outputDisposition: 'accepted',
       },
     ]);
   });
@@ -898,6 +989,46 @@ describe('PostgresAgentStore Job transactions', () => {
         { key: 'write', status: 'in_progress' },
       ],
     });
+    await store.commitModelToolCalls({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', outputId: 'output_plan_write',
+      messageId: 'message_plan_write_call', content: '', nowMs: 32,
+      invocations: [{
+        invocationId: 'invocation_plan_write',
+        call: { id: 'call_plan_write', name: 'write_article', args: { title: 'Report' } },
+        argumentsChecksum: checksumToolArguments({ title: 'Report' }),
+        sideEffectLevel: 'idempotent', idempotencyKey: 'job_plan_tool:call_plan_write',
+      }],
+    });
+    await store.claimToolInvocation({
+      jobId: job.id, toolCallId: 'call_plan_write', workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', nowMs: 32,
+    });
+    await store.commitToolResult({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', toolCallId: 'call_plan_write',
+      messageId: 'message_plan_write_result', nowMs: 32,
+      outcome: {
+        status: 'completed', content: 'written', result: { path: 'artifacts/report.md' },
+        durationMs: 1,
+        artifacts: [{
+          id: 'artifact_plan_write', kind: 'file', area: 'artifacts', title: 'Report',
+          fileName: 'report.md', logicalPath: 'artifacts/report.md',
+          storagePath: '.revisions/invocation_plan_write/artifacts/report.md',
+          mediaType: 'text/markdown', size: 100, checksum: 'checksum_report',
+        }],
+      },
+    });
+    expect(await store.listPlanSteps('plan_tool')).toMatchObject([
+      { key: 'research' },
+      {
+        key: 'write',
+        result: {
+          evidenceMessageIds: ['message_plan_write_result'],
+          artifactIds: ['artifact_plan_write'],
+        },
+      },
+    ]);
     await expect(store.applyPlanUpdate({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 1,
@@ -920,11 +1051,23 @@ describe('PostgresAgentStore Job transactions', () => {
         },
         {
           id: 'plan_step_write', key: 'write', position: 1, title: 'Write',
-          status: 'completed', result: { summary: 'Report written' },
+          status: 'completed',
+          result: {
+            summary: 'Report written',
+            evidenceMessageIds: ['message_hallucinated_by_model'],
+            artifactIds: ['artifact_hallucinated_by_model'],
+          },
         },
       ],
     });
     expect(completed.plan).toMatchObject({ status: 'completed', version: 2 });
+    expect(completed.steps[1]).toMatchObject({
+      result: {
+        summary: 'Report written',
+        evidenceMessageIds: ['message_plan_write_result'],
+        artifactIds: ['artifact_plan_write'],
+      },
+    });
     await expect(store.applyPlanUpdate({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 2,
@@ -1144,12 +1287,13 @@ function auditedTestModel(input: {
   store: PostgresAgentStore;
   job: { sessionId: string; id: string; currentAttemptId?: string; attemptNo: number };
   delegate: TestChatRunnable;
+  workerId?: string;
   nowMs: number;
 }): AuditedChatModel {
   return new AuditedChatModel({
     delegate: input.delegate,
     store: input.store,
-    workerId: 'worker_hitl',
+    workerId: input.workerId ?? 'worker_hitl',
     target: {
       sessionId: input.job.sessionId,
       jobId: input.job.id,

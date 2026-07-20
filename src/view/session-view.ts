@@ -22,6 +22,7 @@ export class SessionView {
       planSteps,
       allMessages,
       toolInvocations,
+      artifacts,
       userInputRequests,
       modelUsage,
     ] = await Promise.all([
@@ -30,6 +31,7 @@ export class SessionView {
       this.store.listSessionPlanSteps(sessionId),
       this.store.listSessionMessages(sessionId),
       this.store.listSessionToolInvocations(sessionId),
+      this.store.listSessionArtifacts(sessionId),
       this.store.listSessionUserInputRequests(sessionId),
       this.store.getModelUsageStats(sessionId),
     ]);
@@ -39,9 +41,10 @@ export class SessionView {
     const timeline = this.#timeline.build({
       messages,
       toolInvocations: projected.invocations,
+      artifacts,
     });
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       generatedAtMs: this.clock.nowMs(),
       session,
       jobs,
@@ -49,6 +52,7 @@ export class SessionView {
       planSteps,
       messages,
       toolInvocations: projected.invocations,
+      artifacts,
       userInputRequests: projected.requests,
       ...(modelUsage ? { modelUsage } : {}),
       timeline,

@@ -1,3 +1,4 @@
+export * from './artifact.js';
 export * from './context-summary.js';
 export * from './job.js';
 export * from './message.js';

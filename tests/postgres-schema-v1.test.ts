@@ -15,6 +15,7 @@ const databaseUrl = process.env.DATABASE_URL
   ?? 'postgresql://postgres:postgres@127.0.0.1:55433/agent_runtime_test';
 
 const EXPECTED_TABLES = [
+  'agent_artifacts',
   'agent_context_summaries',
   'agent_jobs',
   'agent_messages',

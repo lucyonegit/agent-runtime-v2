@@ -1,5 +1,6 @@
 import type {
   AgentToolCall,
+  AgentArtifactDraft,
   AgentUserInputAnswerMode,
   AgentUserInputSchema,
   AgentUserInputSource,
@@ -51,6 +52,7 @@ export type LoopEvent =
       toolName: string;
       content: string;
       result?: unknown;
+      artifacts?: AgentArtifactDraft[];
       durationMs: number;
     }
   | {

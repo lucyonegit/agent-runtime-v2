@@ -75,6 +75,7 @@ describe('canonical runtime domain', () => {
       'tool_invocation.upserted',
       'user_input.upserted',
       'model_usage.updated',
+      'artifact.upserted',
     ]);
   });
 });

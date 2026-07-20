@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, extname, join, relative } from 'node:path';
+import { basename, dirname, extname, join, relative } from 'node:path';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { RuntimeTool, RuntimeToolContext } from '../runtime/tool-executor.js';
 import { resolveWorkspacePath, workspaceRoot } from './sandbox.js';
@@ -102,10 +103,38 @@ export function createFilesystemTools(): RuntimeTool[] {
       const existed = await stat(filePath).then(() => true, () => false);
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, content, 'utf8');
+      const area = artifactArea(path);
+      const size = Buffer.byteLength(content, 'utf8');
+      const checksum = createHash('sha256').update(content).digest('hex');
+      const artifacts = area ? [{
+        kind: 'file' as const,
+        area,
+        title: basename(path),
+        fileName: basename(path),
+        logicalPath: path,
+        storagePath: `.revisions/${context.toolInvocationId}/${path}`,
+        mediaType: mediaTypeForPath(path),
+        size,
+        checksum,
+        metadata: { operation: existed ? 'updated' : 'created' } as Record<string, unknown>,
+      }] : [];
+      if (artifacts.length > 0) {
+        const revisionPath = await resolveWorkspacePath(
+          context,
+          `.revisions/${context.toolInvocationId}/${path}`
+        );
+        await mkdir(dirname(revisionPath), { recursive: true });
+        await writeFile(revisionPath, content, 'utf8');
+        artifacts[0]!.metadata = {
+          ...artifacts[0]!.metadata,
+          snapshot: true,
+        };
+      }
       return jsonToolOutput({
         path,
-        size: Buffer.byteLength(content, 'utf8'),
+        size,
         operation: existed ? 'updated' : 'created',
+        ...(artifacts.length > 0 ? { artifacts } : {}),
       });
     },
   });
@@ -169,7 +198,7 @@ export function createFilesystemTools(): RuntimeTool[] {
   return [
     { tool: listFiles, sideEffectLevel: 'read_only' },
     { tool: readFileTool, sideEffectLevel: 'read_only' },
-    { tool: writeFileTool, sideEffectLevel: 'idempotent' },
+    { tool: writeFileTool, sideEffectLevel: 'idempotent', requiresFreshContext: true },
     { tool: grepFiles, sideEffectLevel: 'read_only' },
     { tool: listSymbols, sideEffectLevel: 'read_only' },
   ];
@@ -270,6 +299,30 @@ function isSymbolPath(path: string): boolean {
 
 function isTextPath(path: string): boolean {
   return isSymbolPath(path) || ['.json', '.md', '.css', '.html', '.txt'].includes(extname(path));
+}
+
+function artifactArea(path: string): 'code' | 'docs' | 'artifacts' | 'downloads' | undefined {
+  const area = path.replaceAll('\\', '/').split('/')[0];
+  return area === 'code' || area === 'docs' || area === 'artifacts' || area === 'downloads'
+    ? area
+    : undefined;
+}
+
+function mediaTypeForPath(path: string): string {
+  return ({
+    '.md': 'text/markdown',
+    '.txt': 'text/plain',
+    '.json': 'application/json',
+    '.html': 'text/html',
+    '.css': 'text/css',
+    '.js': 'text/javascript',
+    '.mjs': 'text/javascript',
+    '.ts': 'text/typescript',
+    '.tsx': 'text/typescript',
+    '.jsx': 'text/javascript',
+    '.csv': 'text/csv',
+    '.pdf': 'application/pdf',
+  } as Record<string, string>)[extname(path).toLowerCase()] ?? 'application/octet-stream';
 }
 
 function normalizeRelative(root: string, value: string): string {

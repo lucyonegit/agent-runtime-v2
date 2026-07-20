@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import type {
+  AgentArtifact,
   AgentJob,
   AgentContextOwnerType,
   AgentContextPurpose,
@@ -39,6 +40,7 @@ import type {
   StartModelCallInput,
   CompleteModelCallInput,
   CompleteModelCallResult,
+  SetModelCallOutputDispositionInput,
   ReplaceContextSummaryInput,
   FailJobInput,
   RenewJobLeaseInput,
@@ -58,6 +60,7 @@ import {
   applyPlanUpdateCommand,
   startModelCallCommand,
   completeModelCallCommand,
+  setModelCallOutputDispositionCommand,
   abandonStartedModelCallsCommand,
   replaceContextSummaryCommand,
   failJobCommand,
@@ -65,6 +68,7 @@ import {
 } from './transaction-commands.js';
 import {
   mapAgentJobRow,
+  mapAgentArtifactRow,
   mapAgentMessageRow,
   mapAgentSessionRow,
   mapAgentPlanRow,
@@ -75,6 +79,7 @@ import {
   mapAgentUserInputRequestRow,
   mapAgentToolInvocationRow,
   type AgentJobRow,
+  type AgentArtifactRow,
   type AgentMessageRow,
   type AgentSessionRow,
   type AgentPlanRow,
@@ -176,7 +181,8 @@ export class PostgresAgentStore implements AgentStore {
 
   async listModelCalls(jobId: string): Promise<AgentModelCall[]> {
     const result = await this.#pool.query<AgentModelCallRow>(
-      `select * from agent_model_calls where job_id = $1 order by created_at_ms asc, id asc`,
+      `select * from agent_model_calls where job_id = $1
+       order by created_at_ms asc, call_attempt_no asc, logical_call_key asc, id asc`,
       [jobId]
     );
     return result.rows.map(mapAgentModelCallRow);
@@ -246,6 +252,15 @@ export class PostgresAgentStore implements AgentStore {
        order by created_at_ms asc, id asc`, [sessionId]
     );
     return result.rows.map(mapAgentToolInvocationRow);
+  }
+
+  async listSessionArtifacts(sessionId: string): Promise<AgentArtifact[]> {
+    const result = await this.#pool.query<AgentArtifactRow>(
+      `select * from agent_artifacts where session_id = $1
+       order by created_at_ms asc, id asc`,
+      [sessionId]
+    );
+    return result.rows.map(mapAgentArtifactRow);
   }
 
   async listSessionUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]> {
@@ -318,6 +333,12 @@ export class PostgresAgentStore implements AgentStore {
 
   async completeModelCall(input: CompleteModelCallInput): Promise<CompleteModelCallResult> {
     return this.#withClient(client => completeModelCallCommand(client, input));
+  }
+
+  async setModelCallOutputDisposition(
+    input: SetModelCallOutputDispositionInput
+  ): Promise<AgentModelCall> {
+    return this.#withClient(client => setModelCallOutputDispositionCommand(client, input));
   }
 
   async abandonStartedModelCalls(nowMs: number): Promise<AgentModelCall[]> {

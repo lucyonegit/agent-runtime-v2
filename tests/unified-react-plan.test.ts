@@ -56,12 +56,23 @@ describe('unified ReAct planning', () => {
       args: {
         title: 'Build report',
         explanation: 'The work needs research and synthesis.',
-        steps: [{ key: 'research', title: 'Research', status: 'in_progress' }],
+        steps: [{
+          key: 'research',
+          title: 'Research',
+          status: 'in_progress',
+          result: {
+            summary: 'Starting research',
+            artifactIds: ['artifact_hallucinated_by_model'],
+            evidenceMessageIds: ['message_hallucinated_by_model'],
+          },
+        }],
       },
     }, { configurable: { agentRuntimeContext: context } });
 
     expect(runtimeTool.exclusive).toBe(true);
     expect(runtimeTool.sideEffectLevel).toBe('idempotent');
+    expect(JSON.stringify(runtimeTool.tool.schema)).not.toContain('evidenceMessageIds');
+    expect(JSON.stringify(runtimeTool.tool.schema)).not.toContain('artifactIds');
     expect(isToolMessage(output)).toBe(true);
     expect(applyPlanUpdate).toHaveBeenCalledWith(expect.objectContaining({
       planId: 'plan_1',
@@ -70,6 +81,7 @@ describe('unified ReAct planning', () => {
       metadata: expect.objectContaining({ lastToolCallId: 'call_plan' }),
       steps: [expect.objectContaining({
         id: 'step_1', key: 'research', position: 0, status: 'in_progress',
+        result: { summary: 'Starting research' },
       })],
     }));
     expect(publishedTypes).toEqual([
@@ -122,6 +134,26 @@ describe('unified ReAct planning', () => {
     const built = await provider.buildJobContext(job(), 'Create a report');
     expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
     expect(load).toHaveBeenCalledTimes(2);
+    expect(compress).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the already-budgeted context when rolling compression fails', async () => {
+    const load = vi.fn().mockResolvedValue(material(true));
+    const compress = vi.fn(async () => {
+      throw new Error('Session context compression returned invalid JSON.');
+    });
+    const provider = new ExecutionContextProvider({
+      store: {} as AgentStore,
+      modelName: 'model',
+      jobContext: { load },
+      compressionModels: { create: () => ({ invoke: async () => ({ text: 'not-json' }) }) },
+      sessionCompression: { compress },
+    });
+
+    const built = await provider.buildJobContext(job(), 'Create a report');
+
+    expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
+    expect(load).toHaveBeenCalledTimes(1);
     expect(compress).toHaveBeenCalledTimes(1);
   });
 });

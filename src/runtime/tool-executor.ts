@@ -4,7 +4,11 @@ import {
 } from '@langchain/core/tools';
 import { resolve } from 'node:path';
 import { isToolMessage } from '@langchain/core/messages';
-import type { AgentToolInvocation, AgentToolSideEffectLevel } from '../domain/index.js';
+import type {
+  AgentArtifactDraft,
+  AgentToolInvocation,
+  AgentToolSideEffectLevel,
+} from '../domain/index.js';
 import type { ToolUserInputRequest } from '../agent-loop/loop-events.js';
 import {
   FatalToolExecutionError,
@@ -31,6 +35,12 @@ export interface RuntimeTool {
   tool: StructuredToolInterface;
   sideEffectLevel: AgentToolSideEffectLevel;
   exclusive?: boolean;
+  /**
+   * This tool must be chosen after the model has observed the results from
+   * earlier calls. It cannot safely share one model-produced batch with
+   * searches, reads, or any other operation whose result may affect its input.
+   */
+  requiresFreshContext?: boolean;
   sensitiveArgumentPaths?: string[];
 }
 
@@ -129,6 +139,7 @@ export class ToolExecutor implements ToolExecutorPort {
           type: 'completed',
           content: output.text,
           result: output.artifact ?? output.content,
+          artifacts: readArtifactDrafts(output.artifact),
         };
       }
       return {
@@ -181,6 +192,26 @@ function isUserInputArtifact(value: unknown): value is RuntimeUserInputArtifact 
 
 function stringifyToolOutput(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function readArtifactDrafts(value: unknown): AgentArtifactDraft[] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidates = (value as { artifacts?: unknown }).artifacts;
+  if (!Array.isArray(candidates)) return undefined;
+  const artifacts = candidates.filter(isArtifactDraft);
+  return artifacts.length > 0 ? artifacts : undefined;
+}
+
+function isArtifactDraft(value: unknown): value is AgentArtifactDraft {
+  if (!value || typeof value !== 'object') return false;
+  const draft = value as Partial<AgentArtifactDraft>;
+  return draft.kind === 'file'
+    && ['code', 'docs', 'artifacts', 'downloads'].includes(String(draft.area))
+    && [draft.title, draft.fileName, draft.logicalPath, draft.storagePath,
+      draft.mediaType, draft.checksum].every(item => typeof item === 'string' && item.length > 0)
+    && typeof draft.size === 'number'
+    && Number.isSafeInteger(draft.size)
+    && draft.size >= 0;
 }
 
 function isAbortError(error: unknown): boolean {

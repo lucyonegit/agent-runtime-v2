@@ -276,6 +276,36 @@ create index idx_agent_tool_invocations_plan_step
   on agent_tool_invocations(plan_step_id, created_at_ms asc)
   where plan_step_id is not null;
 
+create table agent_artifacts (
+  id text primary key,
+  session_id text not null references agent_sessions(id) on delete cascade,
+  job_id text not null references agent_jobs(id) on delete cascade,
+  plan_id text references agent_plans(id) on delete set null,
+  plan_step_id text references agent_plan_steps(id) on delete set null,
+  tool_invocation_id text not null references agent_tool_invocations(id) on delete restrict,
+  result_message_id text not null references agent_messages(id) on delete restrict,
+  kind text not null check (kind in ('file')),
+  area text not null check (area in ('code', 'docs', 'artifacts', 'downloads')),
+  title text not null,
+  file_name text not null,
+  logical_path text not null,
+  storage_path text not null,
+  media_type text not null,
+  size bigint not null check (size >= 0),
+  checksum text not null,
+  revision integer not null check (revision > 0),
+  metadata jsonb,
+  created_at_ms bigint not null,
+  unique (session_id, logical_path, revision),
+  unique (tool_invocation_id, storage_path)
+);
+
+create index idx_agent_artifacts_session
+  on agent_artifacts(session_id, created_at_ms asc, id asc);
+
+create index idx_agent_artifacts_tool_invocation
+  on agent_artifacts(tool_invocation_id, created_at_ms asc, id asc);
+
 create table agent_user_input_requests (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
@@ -437,6 +467,10 @@ create table agent_model_calls (
   ),
 
   output_id text,
+  output_disposition text check (
+    output_disposition in ('pending', 'accepted', 'rejected')
+  ),
+  output_disposition_reason text,
   result_type text,
   result_payload jsonb,
   tool_names jsonb,
@@ -460,6 +494,10 @@ create index idx_agent_model_calls_session
 
 create index idx_agent_model_calls_job
   on agent_model_calls(job_id, created_at_ms asc, id asc);
+
+create unique index uniq_agent_model_calls_job_output
+  on agent_model_calls(job_id, output_id)
+  where output_id is not null;
 
 create index idx_agent_model_calls_incomplete
   on agent_model_calls(status, created_at_ms asc)

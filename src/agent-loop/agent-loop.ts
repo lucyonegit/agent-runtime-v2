@@ -7,7 +7,7 @@ import {
   type UsageMetadata,
 } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import type { AgentToolCall } from '../domain/index.js';
+import type { AgentArtifactDraft, AgentToolCall } from '../domain/index.js';
 import {
   LOOP_EVENT_TYPES,
   type LoopEvent,
@@ -44,8 +44,19 @@ export interface AgentLoopInput {
   deltaChannel?: LoopMessageChannel;
   prepareMessages?: (iteration: number) => Promise<BaseMessage[]>;
   exclusiveToolNames?: ReadonlySet<string>;
+  validateToolCalls?: ToolCallsValidator;
   validateFinalAnswer?: FinalAnswerValidator;
 }
+
+export type ToolCallsValidation =
+  | { type: 'accept' }
+  | { type: 'retry'; feedback: string };
+
+export type ToolCallsValidator = (candidate: {
+  outputId: string;
+  content: string;
+  toolCalls: AgentToolCall[];
+}) => Promise<ToolCallsValidation>;
 
 export type FinalAnswerValidation =
   | { type: 'accept' }
@@ -58,7 +69,7 @@ export type FinalAnswerValidator = (candidate: {
 }) => Promise<FinalAnswerValidation>;
 
 export type ToolExecutionResult =
-  | { type: 'completed'; content: string; result?: unknown }
+  | { type: 'completed'; content: string; result?: unknown; artifacts?: AgentArtifactDraft[] }
   | { type: 'failed'; code: string; message: string; details?: unknown }
   | { type: 'requires_user_input'; request: ToolUserInputRequest };
 
@@ -202,6 +213,26 @@ export class AgentLoop {
         return { type: 'completed', outputId: turn.outputId, content: turn.content };
       }
 
+      const toolCallsValidation = input.validateToolCalls
+        ? await input.validateToolCalls({
+            outputId: turn.outputId,
+            content: turn.content,
+            toolCalls: turn.toolCalls,
+          })
+        : { type: 'accept' as const };
+      if (toolCallsValidation.type === 'retry') {
+        yield {
+          type: LOOP_EVENT_TYPES.ModelOutputRejected,
+          outputId: turn.outputId,
+          reason: toolCallsValidation.feedback,
+        };
+        correctionMessages = [
+          new AIMessage(turn.content || 'I attempted an invalid tool batch.'),
+          new HumanMessage(toolCallsValidation.feedback),
+        ];
+        continue;
+      }
+
       const exclusiveCalls = turn.toolCalls.filter(call => input.exclusiveToolNames?.has(call.name));
       if (exclusiveCalls.length > 0 && turn.toolCalls.length !== 1) {
         const feedback = [
@@ -303,7 +334,7 @@ export class AgentLoop {
 
   async #readModelTurn(input: AgentLoopInput, messages: BaseMessage[]): Promise<ModelTurn> {
     const outputId = input.outputIdFactory();
-    const response = await this.#model.invoke(messages, { signal: input.limits.signal });
+    const response = await this.#model.invoke(messages, modelRunnableConfig(outputId, input.limits.signal));
     return modelTurn(response, outputId);
   }
 
@@ -314,7 +345,7 @@ export class AgentLoop {
     const outputId = input.outputIdFactory();
     let content = '';
     let combined: AIMessageChunk | undefined;
-    const stream = await this.#model.stream(messages, { signal: input.limits.signal });
+    const stream = await this.#model.stream(messages, modelRunnableConfig(outputId, input.limits.signal));
     for await (const chunk of stream) {
       const cancelled = this.#terminalPreflight(input.limits);
       if (cancelled) throw new LoopTerminatedError(cancelled);
@@ -403,6 +434,7 @@ export class AgentLoop {
         toolName: call.name,
         content: result.content,
         result: result.result,
+        artifacts: result.artifacts,
         durationMs,
       },
       toolMessageContent: result.content,
@@ -430,6 +462,13 @@ export class AgentLoop {
       message: error instanceof Error ? error.message : 'Model call failed.',
     };
   }
+}
+
+function modelRunnableConfig(outputId: string, signal: AbortSignal | undefined) {
+  return {
+    signal,
+    configurable: { agentRuntimeOutputId: outputId },
+  };
 }
 
 class LoopTerminatedError extends Error {

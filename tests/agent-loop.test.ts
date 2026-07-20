@@ -112,6 +112,50 @@ describe('AgentLoop with LangChain messages', () => {
     expect(run.result).toMatchObject({ type: 'completed', content: 'finished' });
   });
 
+  it('rejects dependency-sensitive sibling tool calls before persisting or executing them', async () => {
+    let calls = 0;
+    const execute = vi.fn<ToolExecutorPort['execute']>(async ({ call }) => ({
+      type: 'completed', content: `${call.name}:done`,
+    }));
+    const loop = new AgentLoop({
+      streaming: false,
+      model: invokeModel(() => {
+        calls += 1;
+        if (calls === 1) {
+          return toolChunk([
+            { id: 'call_search_bad', name: 'web_search', args: { query: 'topic' } },
+            { id: 'call_write_bad', name: 'write_article', args: { title: 'report' } },
+          ]);
+        }
+        if (calls === 2) {
+          return toolChunk([{ id: 'call_search_ok', name: 'web_search', args: { query: 'topic' } }]);
+        }
+        return chunk('finished');
+      }),
+    });
+    const validateToolCalls = vi.fn<NonNullable<AgentLoopInput['validateToolCalls']>>(async ({ toolCalls }) => (
+      toolCalls.some(call => call.name === 'write_article') && toolCalls.length > 1
+        ? { type: 'retry' as const, feedback: 'Search first, then write in a later turn.' }
+        : { type: 'accept' as const }
+    ));
+
+    const run = await consume(loop.run(loopInput({
+      tools: [toolDefinition('web_search'), toolDefinition('write_article')],
+      validateToolCalls,
+      toolExecutor: { execute },
+    })));
+
+    expect(run.events.map(event => event.type)).toEqual([
+      LOOP_EVENT_TYPES.ModelOutputRejected,
+      LOOP_EVENT_TYPES.ModelOutputCompleted,
+      LOOP_EVENT_TYPES.ToolResultCompleted,
+      LOOP_EVENT_TYPES.ModelOutputCompleted,
+    ]);
+    expect(run.events[0]).toMatchObject({ reason: 'Search first, then write in a later turn.' });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[0].call.id).toBe('call_search_ok');
+  });
+
   it('does not execute a tool until its AIMessage event has been consumed', async () => {
     let calls = 0;
     const execute = vi.fn<ToolExecutorPort['execute']>(async () => ({

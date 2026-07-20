@@ -16,6 +16,7 @@ import type {
 } from '../domain/index.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { canonicalJson } from './transaction-commands.js';
+import { estimateTextTokens } from './context/token-budget.js';
 
 export interface AuditedChatModelOptions {
   delegate: Runnable<BaseLanguageModelInput, AIMessageChunk>;
@@ -55,13 +56,13 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
   }
 
   async invoke(input: BaseLanguageModelInput, options?: Partial<RunnableConfig>): Promise<AIMessageChunk> {
-    const callId = await this.#start(input);
+    const outputId = runtimeOutputId(options);
+    const callId = await this.#start(input, outputId);
     try {
       const response = await this.#options.delegate.invoke(input, options);
       await this.#complete(callId, response.usage_metadata, {
-        resultType: response.tool_calls?.length ? 'tool_calls' : 'text',
-        resultPayload: { content: response.content, responseMetadata: response.response_metadata },
-        toolNames: response.tool_calls?.map(call => call.name),
+        outputId,
+        ...modelResult(response),
       });
       return response;
     } catch (error) {
@@ -74,7 +75,8 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
     input: BaseLanguageModelInput,
     options?: Partial<RunnableConfig>
   ): AsyncGenerator<AIMessageChunk> {
-    const callId = await this.#start(input);
+    const outputId = runtimeOutputId(options);
+    const callId = await this.#start(input, outputId);
     let combined: AIMessageChunk | undefined;
     let completed = false;
     try {
@@ -85,9 +87,8 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       }
       const response = combined ?? new AIMessageChunk('');
       await this.#complete(callId, response.usage_metadata, {
-        resultType: response.tool_calls?.length ? 'tool_calls' : 'text',
-        resultPayload: { content: response.content, responseMetadata: response.response_metadata },
-        toolNames: response.tool_calls?.map(call => call.name),
+        outputId,
+        ...modelResult(response),
       });
       completed = true;
     } catch (error) {
@@ -110,7 +111,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
     }
   }
 
-  async #start(input: BaseLanguageModelInput): Promise<string> {
+  async #start(input: BaseLanguageModelInput, outputId: string | undefined): Promise<string> {
     this.#logicalCallNo += 1;
     const id = this.#ids.modelCallId();
     const inputMessages = storeModelInput(input);
@@ -135,7 +136,11 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       inputChecksum: sha256(serialized),
       maxContextTokens: this.#options.maxContextTokens,
       reservedOutputTokens: this.#options.reservedOutputTokens,
-      estimatedInputTokens: Math.max(1, Math.ceil(serialized.length / 4)),
+      estimatedInputTokens: Math.max(
+        estimateTextTokens(serialized),
+        manifestInputTokens(manifest)
+      ),
+      outputId,
       nowMs: this.#clock.nowMs(),
     });
     return id;
@@ -144,7 +149,12 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
   async #complete(
     id: string,
     usage: UsageMetadata | undefined,
-    result: { resultType: string; resultPayload: unknown; toolNames?: string[] }
+    result: {
+      outputId?: string;
+      resultType: string;
+      resultPayload: unknown;
+      toolNames?: string[];
+    }
   ): Promise<void> {
     const completed = await this.#options.store.completeModelCall({
       id,
@@ -180,6 +190,33 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       // SessionView is authoritative when realtime delivery fails.
     }
   }
+}
+
+function runtimeOutputId(options: Partial<RunnableConfig> | undefined): string | undefined {
+  const value = options?.configurable?.agentRuntimeOutputId;
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function modelResult(response: AIMessageChunk) {
+  const validCalls = response.tool_calls ?? [];
+  const invalidCalls = response.invalid_tool_calls ?? [];
+  const toolNames = [...validCalls, ...invalidCalls]
+    .map(call => call.name)
+    .filter((name): name is string => typeof name === 'string' && name.length > 0);
+  return {
+    resultType: toolNames.length > 0 ? 'tool_calls' : 'text',
+    resultPayload: {
+      content: response.content,
+      responseMetadata: response.response_metadata,
+      ...(invalidCalls.length > 0 ? { invalidToolCalls: invalidCalls } : {}),
+    },
+    ...(toolNames.length > 0 ? { toolNames } : {}),
+  };
+}
+
+function manifestInputTokens(manifest: AgentContextInputManifest): number {
+  const breakdown = manifest.estimatedBreakdown;
+  return breakdown.system + breakdown.tools + breakdown.summaries + breakdown.messages;
 }
 
 function usageFields(usage: UsageMetadata | undefined) {

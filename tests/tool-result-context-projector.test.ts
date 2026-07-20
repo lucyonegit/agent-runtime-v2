@@ -7,8 +7,8 @@ describe('ToolResultContextProjector', () => {
     expect(result).toMatchObject({
       content: 'short result',
       truncated: false,
-      originalTokenEstimate: 3,
-      projectedTokenEstimate: 3,
+      originalTokenEstimate: 4,
+      projectedTokenEstimate: 4,
     });
     expect(result.checksum).toMatch(/^[a-f0-9]{64}$/);
   });

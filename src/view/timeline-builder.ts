@@ -1,25 +1,28 @@
-import type { AgentMessage, AgentToolInvocation } from '../domain/index.js';
+import type { AgentArtifact, AgentMessage, AgentToolInvocation } from '../domain/index.js';
 import type { FlatTimelineItem } from './view-contract.js';
 
 export interface TimelineBuilderInput {
   messages: AgentMessage[];
   toolInvocations: AgentToolInvocation[];
+  artifacts: AgentArtifact[];
 }
 
 /** Projects the canonical message sequence; plans are separate durable view data. */
 export class TimelineBuilder {
   build(input: TimelineBuilderInput): { flat: FlatTimelineItem[] } {
-    return { flat: buildFlat(input.messages, input.toolInvocations) };
+    return { flat: buildFlat(input.messages, input.toolInvocations, input.artifacts) };
   }
 }
 
 function buildFlat(
   messages: AgentMessage[],
-  invocations: AgentToolInvocation[]
+  invocations: AgentToolInvocation[],
+  artifacts: AgentArtifact[]
 ): FlatTimelineItem[] {
   const ordered = [...messages].sort((left, right) => left.rowId - right.rowId);
   const messagesById = new Map(ordered.map(message => [message.id, message]));
   const invocationsByCall = groupBy(invocations, invocation => invocation.callMessageId);
+  const artifactsByInvocation = groupBy(artifacts, artifact => artifact.toolInvocationId);
   const consumed = new Set<string>();
   const flat: FlatTimelineItem[] = [];
   for (const message of ordered) {
@@ -34,12 +37,16 @@ function buildFlat(
       .filter((result): result is AgentMessage => Boolean(result));
     resultMessages.forEach(result => consumed.add(result.id));
     const status = aggregateToolStatus(toolInvocations);
+    const toolArtifacts = toolInvocations.flatMap(
+      invocation => artifactsByInvocation.get(invocation.id) ?? []
+    );
     flat.push({
       type: 'tool_exchange',
       rowId: message.rowId,
       callMessage: message,
       invocations: toolInvocations,
       resultMessages,
+      artifacts: toolArtifacts,
       status,
       ...(status === 'unknown'
         ? { warning: 'Tool outcome is unknown and requires recovery confirmation.' }

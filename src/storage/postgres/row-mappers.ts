@@ -1,4 +1,7 @@
 import type {
+  AgentArtifact,
+  AgentArtifactArea,
+  AgentArtifactKind,
   AgentJob,
   AgentJobStatus,
   AgentContextSummary,
@@ -15,6 +18,7 @@ import type {
   AgentModelCall,
   AgentModelCallStatus,
   AgentModelCallType,
+  AgentModelOutputDisposition,
   AgentModelUsageSource,
   AgentModelUsageStats,
   AgentPlan,
@@ -43,6 +47,28 @@ export interface AgentSessionRow {
   version: number;
   created_at_ms: string | number;
   updated_at_ms: string | number;
+}
+
+export interface AgentArtifactRow {
+  id: string;
+  session_id: string;
+  job_id: string;
+  plan_id: string | null;
+  plan_step_id: string | null;
+  tool_invocation_id: string;
+  result_message_id: string;
+  kind: string;
+  area: string;
+  title: string;
+  file_name: string;
+  logical_path: string;
+  storage_path: string;
+  media_type: string;
+  size: string | number;
+  checksum: string;
+  revision: number;
+  metadata: unknown;
+  created_at_ms: string | number;
 }
 
 export interface AgentJobRow {
@@ -225,6 +251,8 @@ export interface AgentModelCallRow {
   cache_write_input_tokens: number | null;
   usage_source: string;
   output_id: string | null;
+  output_disposition: string | null;
+  output_disposition_reason: string | null;
   result_type: string | null;
   result_payload: unknown;
   tool_names: unknown;
@@ -262,6 +290,30 @@ export function mapAgentSessionRow(row: AgentSessionRow): AgentSession {
     version: row.version,
     createdAtMs: mapBigint(row.created_at_ms, 'agent_sessions.created_at_ms'),
     updatedAtMs: mapBigint(row.updated_at_ms, 'agent_sessions.updated_at_ms'),
+  };
+}
+
+export function mapAgentArtifactRow(row: AgentArtifactRow): AgentArtifact {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    jobId: row.job_id,
+    ...(row.plan_id === null ? {} : { planId: row.plan_id }),
+    ...(row.plan_step_id === null ? {} : { planStepId: row.plan_step_id }),
+    toolInvocationId: row.tool_invocation_id,
+    resultMessageId: row.result_message_id,
+    kind: row.kind as AgentArtifactKind,
+    area: row.area as AgentArtifactArea,
+    title: row.title,
+    fileName: row.file_name,
+    logicalPath: row.logical_path,
+    storagePath: row.storage_path,
+    mediaType: row.media_type,
+    size: mapBigint(row.size, 'agent_artifacts.size'),
+    checksum: row.checksum,
+    revision: row.revision,
+    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_artifacts.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_artifacts.created_at_ms'),
   };
 }
 
@@ -508,6 +560,12 @@ export function mapAgentModelCallRow(row: AgentModelCallRow): AgentModelCall {
     ...(row.cache_write_input_tokens === null ? {} : { cacheWriteInputTokens: row.cache_write_input_tokens }),
     usageSource: row.usage_source as AgentModelUsageSource,
     ...(row.output_id === null ? {} : { outputId: row.output_id }),
+    ...(row.output_disposition === null
+      ? {}
+      : { outputDisposition: row.output_disposition as AgentModelOutputDisposition }),
+    ...(row.output_disposition_reason === null
+      ? {}
+      : { outputDispositionReason: row.output_disposition_reason }),
     ...(row.result_type === null ? {} : { resultType: row.result_type }),
     ...(row.result_payload === null ? {} : { resultPayload: row.result_payload }),
     ...(row.tool_names === null ? {} : { toolNames: row.tool_names as string[] }),

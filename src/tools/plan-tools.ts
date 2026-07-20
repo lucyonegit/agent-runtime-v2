@@ -29,6 +29,7 @@ export function createPlanTools(options: CreatePlanToolsOptions): RuntimeTool[] 
       'Keep existing step keys stable. Mark finished steps completed with a result summary,',
       'mark removed work skipped, and keep exactly one step in_progress until all work is terminal.',
       'Terminal steps are immutable; add a new stable key when recovery work is required.',
+      'Only provide result.summary; evidence message IDs and artifact IDs are attached by the runtime.',
     ].join(' '),
     schema: {
       type: 'object',
@@ -57,10 +58,11 @@ export function createPlanTools(options: CreatePlanToolsOptions): RuntimeTool[] 
                 type: 'object',
                 properties: {
                   summary: { type: 'string' },
-                  evidenceMessageIds: { type: 'array', items: { type: 'string' } },
-                  artifactIds: { type: 'array', items: { type: 'string' } },
                 },
-                additionalProperties: false,
+                // Some providers echo runtime-owned fields from a prior tool result.
+                // Accept them at the LangChain boundary, then parseResult deliberately
+                // projects only summary so the model can never own evidence/artifact IDs.
+                additionalProperties: true,
               },
             },
             required: ['key', 'title', 'status'],
@@ -226,18 +228,11 @@ function parseResult(value: unknown, index: number): AgentPlanStepResult {
   const result = value as Record<string, unknown>;
   return {
     ...(typeof result.summary === 'string' ? { summary: result.summary } : {}),
-    ...(isStringArray(result.evidenceMessageIds)
-      ? { evidenceMessageIds: result.evidenceMessageIds } : {}),
-    ...(isStringArray(result.artifactIds) ? { artifactIds: result.artifactIds } : {}),
   };
 }
 
 function isPlanStepStatus(value: unknown): value is ParsedPlanStep['status'] {
   return ['pending', 'in_progress', 'completed', 'failed', 'skipped'].includes(String(value));
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(item => typeof item === 'string');
 }
 
 async function safePublish(

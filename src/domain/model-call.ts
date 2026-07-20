@@ -7,6 +7,7 @@ export const AGENT_MODEL_CALL_TYPES = [
 
 export type AgentModelCallType = typeof AGENT_MODEL_CALL_TYPES[number];
 export type AgentModelCallStatus = 'started' | 'completed' | 'failed' | 'cancelled';
+export type AgentModelOutputDisposition = 'pending' | 'accepted' | 'rejected';
 export type AgentModelUsageSource = 'provider' | 'estimated' | 'mixed' | 'unavailable';
 
 export interface AgentContextInputManifest {
@@ -56,6 +57,8 @@ export interface AgentModelCall {
   cacheWriteInputTokens?: number;
   usageSource: AgentModelUsageSource;
   outputId?: string;
+  outputDisposition?: AgentModelOutputDisposition;
+  outputDispositionReason?: string;
   resultType?: string;
   resultPayload?: unknown;
   toolNames?: string[];

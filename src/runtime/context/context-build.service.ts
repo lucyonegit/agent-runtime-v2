@@ -11,7 +11,14 @@ export class ContextBuildService {
     const material = await source.load();
     const built = compileContext(material);
     if (!built.compressionRecommended) return built;
-    await source.compress(material, built);
+    try {
+      await source.compress(material, built);
+    } catch {
+      // Rolling compression is an optimization. The already-compiled context has
+      // passed the token budget and remains safe to execute when summarization or
+      // its persistence fails.
+      return built;
+    }
     return compileContext(await source.load());
   }
 }

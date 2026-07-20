@@ -12,7 +12,11 @@ import {
 } from '../src/runtime/context/context-compiler.js';
 import type { ContextMaterial } from '../src/runtime/context/context-material.js';
 import { MessageGroupBuilder, messagesInGroup } from '../src/runtime/context/message-group-builder.js';
-import { ContextOverflowError, TokenBudget } from '../src/runtime/context/token-budget.js';
+import {
+  ContextOverflowError,
+  TokenBudget,
+  estimateTextTokens,
+} from '../src/runtime/context/token-budget.js';
 import { IncompleteMessageGroupError } from '../src/runtime/loaders/session-context-loader.js';
 
 describe('MessageGroupBuilder', () => {
@@ -60,6 +64,11 @@ describe('MessageGroupBuilder', () => {
 });
 
 describe('TokenBudget', () => {
+  it('uses a CJK-aware estimate instead of treating Chinese as four chars per token', () => {
+    expect(estimateTextTokens('abcdefghijklmnop')).toBe(5);
+    expect(estimateTextTokens('这是一个中文上下文估算测试')).toBeGreaterThanOrEqual(13);
+  });
+
   it('never drops mustKeep items and rejects mustKeep overflow', () => {
     const budget = new TokenBudget();
     expect(() => budget.select([{

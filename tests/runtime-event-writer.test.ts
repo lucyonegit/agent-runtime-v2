@@ -6,8 +6,9 @@ import type { AgentStore } from '../src/storage/agent-store.js';
 describe('RuntimeEventWriter rejected model output', () => {
   it('publishes message.discarded for an uncommitted streaming draft', async () => {
     const publish = vi.fn(async () => undefined);
+    const setModelCallOutputDisposition = vi.fn(async () => ({}) as never);
     const writer = new RuntimeEventWriter({
-      store: {} as AgentStore,
+      store: { setModelCallOutputDisposition } as unknown as AgentStore,
       workerId: 'worker_1',
       tools: [],
       publisher: { publish },
@@ -28,6 +29,12 @@ describe('RuntimeEventWriter rejected model output', () => {
     });
 
     expect(result).toEqual({ type: 'discarded_output' });
+    expect(setModelCallOutputDisposition).toHaveBeenCalledWith({
+      jobId: 'job_1',
+      outputId: 'output_1',
+      disposition: 'rejected',
+      reason: 'The durable plan is still active.',
+    });
     expect(publish).toHaveBeenCalledWith({
       type: 'message.discarded',
       eventId: 'event_1',

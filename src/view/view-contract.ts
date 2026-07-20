@@ -1,4 +1,5 @@
 import type {
+  AgentArtifact,
   AgentJob,
   AgentMessage,
   AgentModelUsageStats,
@@ -17,12 +18,13 @@ export type FlatTimelineItem =
       callMessage: AgentMessage;
       invocations: AgentToolInvocation[];
       resultMessages: AgentMessage[];
+      artifacts: AgentArtifact[];
       status: 'pending' | 'running' | 'waiting_user_input' | 'completed' | 'failed' | 'unknown' | 'cancelled';
       warning?: string;
     };
 
 export interface SessionViewV1 {
-  schemaVersion: 2;
+  schemaVersion: 3;
   generatedAtMs: number;
   session: AgentSession;
   jobs: AgentJob[];
@@ -30,6 +32,7 @@ export interface SessionViewV1 {
   planSteps: AgentPlanStep[];
   messages: AgentMessage[];
   toolInvocations: AgentToolInvocation[];
+  artifacts: AgentArtifact[];
   userInputRequests: AgentUserInputRequest[];
   modelUsage?: AgentModelUsageStats;
   timeline: {

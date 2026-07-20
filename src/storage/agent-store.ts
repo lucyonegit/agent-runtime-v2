@@ -1,4 +1,6 @@
 import type {
+  AgentArtifact,
+  AgentArtifactDraft,
   AgentJob,
   AgentContextInputManifest,
   AgentContextOwnerType,
@@ -9,6 +11,7 @@ import type {
   AgentMessage,
   AgentModelCall,
   AgentModelCallType,
+  AgentModelOutputDisposition,
   AgentModelUsageSource,
   AgentModelUsageStats,
   AgentPlan,
@@ -165,7 +168,13 @@ export interface ClaimToolInvocationResult {
 }
 
 export type CommittedToolOutcome =
-  | { status: 'completed'; content: string; result?: unknown; durationMs: number }
+  | {
+      status: 'completed';
+      content: string;
+      result?: unknown;
+      artifacts?: Array<AgentArtifactDraft & { id: string }>;
+      durationMs: number;
+    }
   | {
       status: 'failed';
       executionStarted?: boolean;
@@ -189,6 +198,7 @@ export interface CommitToolResultInput {
 export interface CommitToolResultResult {
   message: AgentMessage;
   invocation: AgentToolInvocation;
+  artifacts: AgentArtifact[];
 }
 
 export interface CompleteJobWithFinalMessageInput {
@@ -303,8 +313,16 @@ export interface StartModelCallInput {
   maxContextTokens: number;
   reservedOutputTokens: number;
   estimatedInputTokens: number;
+  outputId?: string;
   metadata?: Record<string, unknown>;
   nowMs: number;
+}
+
+export interface SetModelCallOutputDispositionInput {
+  jobId: string;
+  outputId: string;
+  disposition: Exclude<AgentModelOutputDisposition, 'pending'>;
+  reason?: string;
 }
 
 export interface CompleteModelCallInput {
@@ -382,6 +400,7 @@ export interface AgentStore {
   listSessionPlans(sessionId: string): Promise<AgentPlan[]>;
   listSessionPlanSteps(sessionId: string): Promise<AgentPlanStep[]>;
   listSessionToolInvocations(sessionId: string): Promise<AgentToolInvocation[]>;
+  listSessionArtifacts(sessionId: string): Promise<AgentArtifact[]>;
   listSessionUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
@@ -404,6 +423,9 @@ export interface AgentStore {
   applyPlanUpdate(input: ApplyPlanUpdateInput): Promise<ApplyPlanUpdateResult>;
   startModelCall(input: StartModelCallInput): Promise<AgentModelCall>;
   completeModelCall(input: CompleteModelCallInput): Promise<CompleteModelCallResult>;
+  setModelCallOutputDisposition(
+    input: SetModelCallOutputDispositionInput
+  ): Promise<AgentModelCall>;
   abandonStartedModelCalls(nowMs: number): Promise<AgentModelCall[]>;
   replaceContextSummary(input: ReplaceContextSummaryInput): Promise<AgentContextSummary>;
   failJob(input: FailJobInput): Promise<AgentJob>;

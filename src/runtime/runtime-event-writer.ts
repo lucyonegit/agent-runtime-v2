@@ -18,6 +18,7 @@ export interface RuntimeEventWriterIds {
   eventId(): string;
   messageId(): string;
   toolInvocationId(): string;
+  artifactId?(): string;
   userInputRequestId(): string;
 }
 
@@ -28,6 +29,7 @@ export interface RuntimeEventWriterOptions {
   publisher?: RuntimeEventPublisher;
   ids?: RuntimeEventWriterIds;
   clock?: { nowMs(): number };
+  requireModelCallAudit?: boolean;
   onPublishError?: (error: unknown, event: AgentRealtimeEvent) => void;
 }
 
@@ -51,6 +53,7 @@ export class RuntimeEventWriter {
   readonly #ids: RuntimeEventWriterIds;
   readonly #clock: { nowMs(): number };
   readonly #onPublishError?: (error: unknown, event: AgentRealtimeEvent) => void;
+  readonly #requireModelCallAudit: boolean;
   readonly #messageIdsByOutput = new Map<string, string>();
 
   constructor(options: RuntimeEventWriterOptions) {
@@ -61,6 +64,7 @@ export class RuntimeEventWriter {
     this.#ids = options.ids ?? randomWriterIds;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
     this.#onPublishError = options.onPublishError;
+    this.#requireModelCallAudit = options.requireModelCallAudit ?? false;
   }
 
   async record(event: LoopEvent, target: AgentLoopTarget): Promise<RuntimeEventRecordResult> {
@@ -79,6 +83,12 @@ export class RuntimeEventWriter {
     }
 
     if (event.type === LOOP_EVENT_TYPES.ModelOutputRejected) {
+      await this.#setModelCallOutputDisposition({
+        jobId: target.jobId,
+        outputId: event.outputId,
+        disposition: 'rejected',
+        reason: event.reason,
+      });
       await this.#publish({
         type: 'message.discarded',
         eventId: this.#ids.eventId(),
@@ -92,6 +102,11 @@ export class RuntimeEventWriter {
     }
 
     if (event.type === LOOP_EVENT_TYPES.ModelOutputCompleted) {
+      await this.#setModelCallOutputDisposition({
+        jobId: target.jobId,
+        outputId: event.outputId,
+        disposition: 'accepted',
+      });
       if (event.toolCalls.length === 0) return { type: 'final_candidate', event };
       try {
         const committed = await this.#store.commitModelToolCalls({
@@ -146,6 +161,10 @@ export class RuntimeEventWriter {
               status: 'completed' as const,
               content: event.content,
               result: event.result,
+              artifacts: event.artifacts?.map(artifact => ({
+                ...artifact,
+                id: this.#ids.artifactId?.() ?? `artifact_${randomUUID()}`,
+              })),
               durationMs: event.durationMs,
             }
           : {
@@ -176,6 +195,13 @@ export class RuntimeEventWriter {
           sessionId: target.sessionId,
           invocation: committed.invocation,
         });
+        for (const artifact of committed.artifacts) {
+          await this.#publish({
+            type: 'artifact.upserted',
+            sessionId: target.sessionId,
+            artifact,
+          });
+        }
         return { type: 'committed_tool_result', message: committed.message };
       } catch (error) {
         throw mapStoreError(error);
@@ -277,6 +303,16 @@ export class RuntimeEventWriter {
     return messageId;
   }
 
+  async #setModelCallOutputDisposition(
+    input: Parameters<AgentStore['setModelCallOutputDisposition']>[0]
+  ): Promise<void> {
+    try {
+      await this.#store.setModelCallOutputDisposition(input);
+    } catch (error) {
+      if (this.#requireModelCallAudit) throw error;
+    }
+  }
+
   async #publish(event: AgentRealtimeEvent): Promise<void> {
     if (!this.#publisher) return;
     try {
@@ -318,5 +354,6 @@ const randomWriterIds: RuntimeEventWriterIds = {
   eventId: () => `event_${randomUUID()}`,
   messageId: () => `message_${randomUUID()}`,
   toolInvocationId: () => `invocation_${randomUUID()}`,
+  artifactId: () => `artifact_${randomUUID()}`,
   userInputRequestId: () => `input_${randomUUID()}`,
 };

@@ -22,6 +22,7 @@ export interface JobAgentRunInput {
   prepareMessages?: (iteration: number) => Promise<BaseMessage[]>;
   tools: StructuredToolInterface[];
   exclusiveToolNames?: ReadonlySet<string>;
+  validateToolCalls?: Parameters<AgentLoop['run']>[0]['validateToolCalls'];
   validateFinalAnswer?: Parameters<AgentLoop['run']>[0]['validateFinalAnswer'];
   toolExecutor: ToolExecutorPort;
   outputIdFactory: () => string;
@@ -75,6 +76,7 @@ export class AgentRunner {
       limits: input.limits,
       prepareMessages: input.prepareMessages,
       exclusiveToolNames: input.exclusiveToolNames,
+      validateToolCalls: input.validateToolCalls,
       validateFinalAnswer: input.validateFinalAnswer,
     });
 

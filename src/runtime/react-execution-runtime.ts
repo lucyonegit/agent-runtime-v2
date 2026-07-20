@@ -74,6 +74,7 @@ export class ReactExecutionRuntime {
       exclusiveToolNames: new Set(
         this.options.tools.filter(tool => tool.exclusive).map(tool => tool.tool.name)
       ),
+      validateToolCalls: candidate => this.#validateToolCalls(candidate.toolCalls),
       validateFinalAnswer: () => this.#validateFinalAnswer(input.job.id),
       toolExecutor,
       outputIdFactory: outputId,
@@ -151,6 +152,7 @@ export class ReactExecutionRuntime {
       workerId: this.options.workerId,
       tools: this.options.tools,
       publisher: this.options.publisher,
+      requireModelCallAudit: true,
     });
   }
 
@@ -159,6 +161,23 @@ export class ReactExecutionRuntime {
       maxIterations: this.options.maxIterations,
       maxToolCalls: this.options.maxToolCalls,
       deadlineMs: Date.now() + this.options.executionDeadlineMs,
+    };
+  }
+
+  async #validateToolCalls(toolCalls: Array<{ name: string }>) {
+    const contractByName = new Map(this.options.tools.map(tool => [tool.tool.name, tool]));
+    const freshContextCall = toolCalls.find(call => contractByName.get(call.name)?.requiresFreshContext);
+    const prerequisiteSibling = freshContextCall
+      ? toolCalls.find(call => !contractByName.get(call.name)?.requiresFreshContext)
+      : undefined;
+    if (!freshContextCall || !prerequisiteSibling) return { type: 'accept' as const };
+    return {
+      type: 'retry' as const,
+      feedback: [
+        `Runtime validation rejected the previous tool batch because ${JSON.stringify(freshContextCall.name)} cannot share a model turn with prerequisite tool ${JSON.stringify(prerequisiteSibling.name)}.`,
+        `The rejected batch was not persisted or executed: ${JSON.stringify(toolCalls.map(call => call.name))}.`,
+        'Execute searches and reads first, wait for their ToolMessages, then call the write tool alone using those observed results.',
+      ].join('\n'),
     };
   }
 
