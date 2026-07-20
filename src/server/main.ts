@@ -13,14 +13,12 @@ import { RuntimeExceptionFilter } from './http/runtime-exception.filter.js';
 import { ContextPreviewService } from './debug/context-preview.service.js';
 import { removeSessionSandbox } from '../tools/index.js';
 import { createDefaultTools } from './runtime/default-tools.js';
-import { createDefaultPlanEngineFactory } from './runtime/default-planner.js';
 import { createLangChainChatModel } from './runtime/langchain-model-provider.js';
 import { resolveModelRuntimeConfig } from './runtime/model-config.js';
 import { RuntimeEventBus } from './runtime/runtime-event-bus.js';
 import {
   JOB_EXECUTION_SYSTEM_PROMPT,
   RUNTIME_SYSTEM_PROMPT_VERSION,
-  STEP_EXECUTION_SYSTEM_PROMPT,
 } from './runtime/runtime-context-config.js';
 
 const databaseUrl = requiredEnv('DATABASE_URL');
@@ -44,7 +42,7 @@ const jobHeartbeatMs = numberEnv('JOB_HEARTBEAT_MS', Math.max(1_000, Math.floor(
 const maxContextTokens = numberEnv('MODEL_MAX_CONTEXT_TOKENS', 128_000);
 const reservedOutputTokens = numberEnv('MODEL_RESERVED_OUTPUT_TOKENS', 4_096);
 if (jobHeartbeatMs >= jobLeaseMs) throw new Error('JOB_HEARTBEAT_MS must be shorter than JOB_LEASE_MS.');
-const tools = createDefaultTools();
+const tools = createDefaultTools({ store, workerId, publisher: events });
 const executor = new JobExecutionOrchestrator({
   store,
   workerId,
@@ -59,9 +57,7 @@ const executor = new JobExecutionOrchestrator({
   jobLeaseMs,
   jobHeartbeatMs,
   jobSystemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
-  stepSystemPrompt: STEP_EXECUTION_SYSTEM_PROMPT,
   systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
-  planEngineFactory: createDefaultPlanEngineFactory({ store, workerId, publisher: events }),
 });
 const contextPreview = new ContextPreviewService({
   store,

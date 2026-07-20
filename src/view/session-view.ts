@@ -20,7 +20,6 @@ export class SessionView {
       jobs,
       plans,
       planSteps,
-      stepRuns,
       allMessages,
       toolInvocations,
       userInputRequests,
@@ -29,7 +28,6 @@ export class SessionView {
       this.store.listSessionJobs(sessionId),
       this.store.listSessionPlans(sessionId),
       this.store.listSessionPlanSteps(sessionId),
-      this.store.listSessionStepRuns(sessionId),
       this.store.listSessionMessages(sessionId),
       this.store.listSessionToolInvocations(sessionId),
       this.store.listSessionUserInputRequests(sessionId),
@@ -39,22 +37,16 @@ export class SessionView {
     const projected = projectSensitiveAnswers(visibleMessages, toolInvocations, userInputRequests);
     const messages = projected.messages;
     const timeline = this.#timeline.build({
-      jobs,
-      plans,
-      planSteps,
-      stepRuns,
       messages,
       toolInvocations: projected.invocations,
-      userInputRequests: projected.requests,
     });
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       generatedAtMs: this.clock.nowMs(),
       session,
       jobs,
       plans,
       planSteps,
-      stepRuns,
       messages,
       toolInvocations: projected.invocations,
       userInputRequests: projected.requests,

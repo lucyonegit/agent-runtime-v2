@@ -14,7 +14,6 @@ import type {
   AgentPlan,
   AgentPlanStep,
   AgentSession,
-  AgentStepRun,
   AgentToolCall,
   AgentToolInvocation,
   AgentToolSideEffectLevel,
@@ -23,6 +22,7 @@ import type {
   AgentUserInputSchema,
   AgentUserInputSource,
 } from '../domain/index.js';
+import type { StoredMessage } from '@langchain/core/messages';
 
 export type AgentStoreErrorCode =
   | 'SESSION_NOT_FOUND'
@@ -43,9 +43,7 @@ export type AgentStoreErrorCode =
   | 'USER_INPUT_ANSWER_CONFLICT'
   | 'PLAN_NOT_FOUND'
   | 'PLAN_STEP_NOT_FOUND'
-  | 'STEP_RUN_NOT_FOUND'
-  | 'INVALID_PLAN_STATE'
-  | 'INVALID_STEP_RUN_STATE';
+  | 'INVALID_PLAN_STATE';
 
 export class AgentStoreError extends Error {
   readonly code: AgentStoreErrorCode;
@@ -139,7 +137,6 @@ export interface PendingToolInvocationInput {
 export interface CommitModelToolCallsInput {
   sessionId: string;
   jobId: string;
-  stepRunId?: string;
   attemptId: string;
   workerId: string;
   outputId: string;
@@ -181,7 +178,6 @@ export type CommittedToolOutcome =
 export interface CommitToolResultInput {
   sessionId: string;
   jobId: string;
-  stepRunId?: string;
   attemptId: string;
   workerId: string;
   toolCallId: string;
@@ -203,7 +199,6 @@ export interface CompleteJobWithFinalMessageInput {
   outputId: string;
   messageId: string;
   content: string;
-  messageType?: 'assistant_message' | 'plan_final';
   nowMs: number;
 }
 
@@ -226,7 +221,6 @@ export interface PendingUserInputRequestInput {
 export interface CreateInputRequestsAndMarkWaitingInput {
   sessionId: string;
   jobId: string;
-  stepRunId?: string;
   attemptId: string;
   workerId: string;
   requests: PendingUserInputRequestInput[];
@@ -260,106 +254,41 @@ export interface AnswerInputAndClaimResumeResult {
   attemptId?: string;
 }
 
-export interface RouteJobInput {
-  jobId: string;
-  workerId: string;
-  attemptId: string;
-  strategy: 'direct' | 'planned';
-  nowMs: number;
-}
-
-export interface CreatePlanStepInput {
+export interface ApplyPlanStepInput {
   id: string;
+  key: string;
+  position: number;
   title: string;
-  instruction: string;
+  description?: string;
+  status: AgentPlanStep['status'];
+  result?: AgentPlanStep['result'];
+  error?: AgentJobError;
   metadata?: Record<string, unknown>;
 }
 
-export interface CreatePlanInput {
+export interface ApplyPlanUpdateInput {
   sessionId: string;
   jobId: string;
   workerId: string;
   attemptId: string;
   planId: string;
-  messageId: string;
+  expectedVersion: number;
   title: string;
   goal: string;
-  steps: CreatePlanStepInput[];
+  steps: ApplyPlanStepInput[];
   metadata?: Record<string, unknown>;
   nowMs: number;
 }
 
-export interface CreatePlanResult {
-  job: AgentJob;
+export interface ApplyPlanUpdateResult {
   plan: AgentPlan;
   steps: AgentPlanStep[];
-  message: AgentMessage;
-}
-
-export interface CreateStepRunInput {
-  sessionId: string;
-  jobId: string;
-  workerId: string;
-  attemptId: string;
-  planId: string;
-  stepId: string;
-  stepRunId: string;
-  maxRunsPerStep: number;
-  nowMs: number;
-}
-
-export interface CreateStepRunResult {
-  job: AgentJob;
-  plan: AgentPlan;
-  step: AgentPlanStep;
-  stepRun: AgentStepRun;
-}
-
-export interface CommitStepOutputInput {
-  sessionId: string;
-  jobId: string;
-  workerId: string;
-  attemptId: string;
-  stepRunId: string;
-  messageId: string;
-  outputId: string;
-  content: string;
-  structuredOutput: unknown;
-  nowMs: number;
-}
-
-export interface CommitStepOutputResult {
-  job: AgentJob;
-  plan: AgentPlan;
-  step: AgentPlanStep;
-  stepRun: AgentStepRun;
-  message: AgentMessage;
-  hasPendingSteps: boolean;
-}
-
-export interface FailStepRunInput {
-  sessionId: string;
-  jobId: string;
-  workerId: string;
-  attemptId: string;
-  stepRunId: string;
-  error: AgentJobError;
-  retryStep: boolean;
-  nowMs: number;
-}
-
-export interface FailStepRunResult {
-  job: AgentJob;
-  plan: AgentPlan;
-  step: AgentPlanStep;
-  stepRun: AgentStepRun;
 }
 
 export interface StartModelCallInput {
   id: string;
   sessionId: string;
   jobId: string;
-  stepRunId?: string;
   attemptId: string;
   workerId: string;
   logicalCallKey: string;
@@ -369,6 +298,7 @@ export interface StartModelCallInput {
   model: string;
   contextRulesVersion: string;
   inputManifest: AgentContextInputManifest;
+  inputMessages: StoredMessage[];
   inputChecksum: string;
   maxContextTokens: number;
   reservedOutputTokens: number;
@@ -405,7 +335,6 @@ export interface ReplaceContextSummaryInput {
   id: string;
   sessionId: string;
   jobId?: string;
-  stepRunId?: string;
   ownerType: AgentContextOwnerType;
   ownerId: string;
   purpose: AgentContextPurpose;
@@ -439,8 +368,6 @@ export interface AgentStore {
   getToolInvocation(jobId: string, toolCallId: string): Promise<AgentToolInvocation | undefined>;
   getPlanByJobId(jobId: string): Promise<AgentPlan | undefined>;
   listPlanSteps(planId: string): Promise<AgentPlanStep[]>;
-  getStepRun(stepRunId: string): Promise<AgentStepRun | undefined>;
-  listJobStepRuns(jobId: string): Promise<AgentStepRun[]>;
   getModelCall(modelCallId: string): Promise<AgentModelCall | undefined>;
   listModelCalls(jobId: string): Promise<AgentModelCall[]>;
   getModelUsageStats(sessionId: string): Promise<AgentModelUsageStats | undefined>;
@@ -454,7 +381,6 @@ export interface AgentStore {
   listSessionJobs(sessionId: string): Promise<AgentJob[]>;
   listSessionPlans(sessionId: string): Promise<AgentPlan[]>;
   listSessionPlanSteps(sessionId: string): Promise<AgentPlanStep[]>;
-  listSessionStepRuns(sessionId: string): Promise<AgentStepRun[]>;
   listSessionToolInvocations(sessionId: string): Promise<AgentToolInvocation[]>;
   listSessionUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
   createJobAndAppendUserMessage(
@@ -475,11 +401,7 @@ export interface AgentStore {
   answerInputAndClaimResume(
     input: AnswerInputAndClaimResumeInput
   ): Promise<AnswerInputAndClaimResumeResult>;
-  routeJob(input: RouteJobInput): Promise<AgentJob>;
-  createPlan(input: CreatePlanInput): Promise<CreatePlanResult>;
-  createStepRun(input: CreateStepRunInput): Promise<CreateStepRunResult>;
-  commitStepOutput(input: CommitStepOutputInput): Promise<CommitStepOutputResult>;
-  failStepRun(input: FailStepRunInput): Promise<FailStepRunResult>;
+  applyPlanUpdate(input: ApplyPlanUpdateInput): Promise<ApplyPlanUpdateResult>;
   startModelCall(input: StartModelCallInput): Promise<AgentModelCall>;
   completeModelCall(input: CompleteModelCallInput): Promise<CompleteModelCallResult>;
   abandonStartedModelCalls(nowMs: number): Promise<AgentModelCall[]>;

@@ -9,13 +9,6 @@ export const AGENT_JOB_STATUSES = [
 ] as const;
 
 export type AgentJobStatus = typeof AGENT_JOB_STATUSES[number];
-export type AgentJobStrategy = 'direct' | 'planned';
-export type AgentJobStage =
-  | 'routing'
-  | 'direct_execution'
-  | 'planning'
-  | 'step_execution'
-  | 'finalizing';
 
 export const ACTIVE_JOB_STATUSES = [
   'created',
@@ -41,8 +34,6 @@ export interface AgentJob {
   sessionId: string;
   retryOfJobId?: string;
   clientRequestId?: string;
-  strategy?: AgentJobStrategy;
-  stage: AgentJobStage;
   status: AgentJobStatus;
   currentAttemptId?: string;
   attemptNo: number;

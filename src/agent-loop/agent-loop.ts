@@ -1,6 +1,7 @@
 import {
   AIMessage,
   AIMessageChunk,
+  HumanMessage,
   ToolMessage,
   type BaseMessage,
   type UsageMetadata,
@@ -23,7 +24,6 @@ import {
 export interface AgentLoopTarget {
   sessionId: string;
   jobId: string;
-  stepRunId?: string;
   attemptId: string;
 }
 
@@ -42,7 +42,20 @@ export interface AgentLoopInput {
   outputIdFactory: () => string;
   limits: AgentLoopLimits;
   deltaChannel?: LoopMessageChannel;
+  prepareMessages?: (iteration: number) => Promise<BaseMessage[]>;
+  exclusiveToolNames?: ReadonlySet<string>;
+  validateFinalAnswer?: FinalAnswerValidator;
 }
+
+export type FinalAnswerValidation =
+  | { type: 'accept' }
+  | { type: 'retry'; feedback: string }
+  | { type: 'fail'; code: 'invalid_plan_state'; message: string; details?: unknown };
+
+export type FinalAnswerValidator = (candidate: {
+  outputId: string;
+  content: string;
+}) => Promise<FinalAnswerValidation>;
 
 export type ToolExecutionResult =
   | { type: 'completed'; content: string; result?: unknown }
@@ -114,13 +127,30 @@ export class AgentLoop {
 
   async *run(input: AgentLoopInput): AsyncGenerator<LoopEvent, LoopResult> {
     assertLimits(input.limits);
-    const messages = [...input.messages];
+    let messages = [...input.messages];
+    let correctionMessages: BaseMessage[] = [];
     const definitions = new Map(input.tools.map(tool => [tool.name, tool]));
     let executedToolCalls = 0;
 
     for (let iteration = 0; iteration < input.limits.maxIterations; iteration += 1) {
       const preflight = this.#terminalPreflight(input.limits);
       if (preflight) return preflight;
+
+      if (input.prepareMessages) {
+        try {
+          messages = [...await input.prepareMessages(iteration)];
+        } catch (error) {
+          return {
+            type: 'failed',
+            code: 'context_build_error',
+            message: error instanceof Error ? error.message : 'Failed to build model context.',
+          };
+        }
+      }
+      if (correctionMessages.length > 0) {
+        messages.push(...correctionMessages);
+        correctionMessages = [];
+      }
 
       let turn: ModelTurn;
       try {
@@ -139,6 +169,29 @@ export class AgentLoop {
             message: 'Model returned neither text nor tool calls.',
           };
         }
+        const validation = input.validateFinalAnswer
+          ? await input.validateFinalAnswer({ outputId: turn.outputId, content: turn.content })
+          : { type: 'accept' as const };
+        if (validation.type !== 'accept') {
+          yield {
+            type: LOOP_EVENT_TYPES.ModelOutputRejected,
+            outputId: turn.outputId,
+            reason: validation.type === 'retry' ? validation.feedback : validation.message,
+          };
+          if (validation.type === 'fail') {
+            return {
+              type: 'failed',
+              code: validation.code,
+              message: validation.message,
+              details: validation.details,
+            };
+          }
+          correctionMessages = [
+            new AIMessage(turn.content),
+            new HumanMessage(validation.feedback),
+          ];
+          continue;
+        }
         yield {
           type: LOOP_EVENT_TYPES.ModelOutputCompleted,
           outputId: turn.outputId,
@@ -147,6 +200,25 @@ export class AgentLoop {
           usage: turn.usage,
         };
         return { type: 'completed', outputId: turn.outputId, content: turn.content };
+      }
+
+      const exclusiveCalls = turn.toolCalls.filter(call => input.exclusiveToolNames?.has(call.name));
+      if (exclusiveCalls.length > 0 && turn.toolCalls.length !== 1) {
+        const feedback = [
+          `Runtime validation rejected the previous tool batch because exclusive tool ${JSON.stringify(exclusiveCalls[0]!.name)} must be called alone.`,
+          `The rejected batch was not persisted or executed: ${JSON.stringify(turn.toolCalls.map(call => call.name))}.`,
+          `Call ${exclusiveCalls[0]!.name} alone now. You may call the other tools in a later turn.`,
+        ].join('\n');
+        yield {
+          type: LOOP_EVENT_TYPES.ModelOutputRejected,
+          outputId: turn.outputId,
+          reason: feedback,
+        };
+        correctionMessages = [
+          new AIMessage(turn.content || 'I attempted an invalid mixed tool batch.'),
+          new HumanMessage(feedback),
+        ];
+        continue;
       }
 
       // The consumer must durably commit this event before requesting the next

@@ -45,15 +45,13 @@ export class TurnBundleBuilder {
         .sort((left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id))
         .map(job => job.id);
       const lineageJobs = jobIds.map(id => jobsById.get(id)).filter((job): job is AgentJob => !!job);
-      const planDefinition = orderedGroups.find(group => group.type === 'plan_definition');
       const rows = orderedGroups.flatMap(messagesInGroup).map(message => message.rowId);
       return {
         id: `turn:${rootJobId}`,
-        type: planDefinition ? 'planned_turn' : 'direct_turn',
+        type: 'turn',
         sessionId: input.sessionId,
         rootJobId,
         jobIds,
-        ...(planDefinition?.type === 'plan_definition' ? { planId: planDefinition.plan.id } : {}),
         terminal: lineageJobs.length > 0 && lineageJobs.every(job => isTerminalJobStatus(job.status)),
         sourceRowIdStart: Math.min(...rows),
         sourceRowIdEnd: Math.max(...rows),

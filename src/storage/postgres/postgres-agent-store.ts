@@ -10,7 +10,6 @@ import type {
   AgentPlan,
   AgentPlanStep,
   AgentSession,
-  AgentStepRun,
   AgentToolInvocation,
   AgentUserInputRequest,
 } from '../../domain/index.js';
@@ -35,15 +34,8 @@ import type {
   CreateRetryJobInput,
   CreateRetryJobResult,
   CreateSessionInput,
-  CreatePlanInput,
-  CreatePlanResult,
-  CreateStepRunInput,
-  CreateStepRunResult,
-  CommitStepOutputInput,
-  CommitStepOutputResult,
-  FailStepRunInput,
-  FailStepRunResult,
-  RouteJobInput,
+  ApplyPlanUpdateInput,
+  ApplyPlanUpdateResult,
   StartModelCallInput,
   CompleteModelCallInput,
   CompleteModelCallResult,
@@ -63,11 +55,7 @@ import {
   createJobAndAppendUserMessageCommand,
   createRetryJobCommand,
   createSessionCommand,
-  createPlanCommand,
-  createStepRunCommand,
-  commitStepOutputCommand,
-  failStepRunCommand,
-  routeJobCommand,
+  applyPlanUpdateCommand,
   startModelCallCommand,
   completeModelCallCommand,
   abandonStartedModelCallsCommand,
@@ -81,7 +69,6 @@ import {
   mapAgentSessionRow,
   mapAgentPlanRow,
   mapAgentPlanStepRow,
-  mapAgentStepRunRow,
   mapAgentModelCallRow,
   mapAgentModelUsageStatsRow,
   mapAgentContextSummaryRow,
@@ -92,7 +79,6 @@ import {
   type AgentSessionRow,
   type AgentPlanRow,
   type AgentPlanStepRow,
-  type AgentStepRunRow,
   type AgentModelCallRow,
   type AgentModelUsageStatsRow,
   type AgentContextSummaryRow,
@@ -181,21 +167,6 @@ export class PostgresAgentStore implements AgentStore {
     return result.rows.map(mapAgentPlanStepRow);
   }
 
-  async listJobStepRuns(jobId: string): Promise<AgentStepRun[]> {
-    const result = await this.#pool.query<AgentStepRunRow>(
-      `select * from agent_step_runs where job_id = $1 order by created_at_ms asc, id asc`,
-      [jobId]
-    );
-    return result.rows.map(mapAgentStepRunRow);
-  }
-
-  async getStepRun(stepRunId: string): Promise<AgentStepRun | undefined> {
-    const result = await this.#pool.query<AgentStepRunRow>(
-      `select * from agent_step_runs where id = $1`, [stepRunId]
-    );
-    return result.rows[0] ? mapAgentStepRunRow(result.rows[0]) : undefined;
-  }
-
   async getModelCall(modelCallId: string): Promise<AgentModelCall | undefined> {
     const result = await this.#pool.query<AgentModelCallRow>(
       `select * from agent_model_calls where id = $1`, [modelCallId]
@@ -269,14 +240,6 @@ export class PostgresAgentStore implements AgentStore {
     return result.rows.map(mapAgentPlanStepRow);
   }
 
-  async listSessionStepRuns(sessionId: string): Promise<AgentStepRun[]> {
-    const result = await this.#pool.query<AgentStepRunRow>(
-      `select * from agent_step_runs where session_id = $1
-       order by created_at_ms asc, run_no asc, id asc`, [sessionId]
-    );
-    return result.rows.map(mapAgentStepRunRow);
-  }
-
   async listSessionToolInvocations(sessionId: string): Promise<AgentToolInvocation[]> {
     const result = await this.#pool.query<AgentToolInvocationRow>(
       `select * from agent_tool_invocations where session_id = $1
@@ -345,24 +308,8 @@ export class PostgresAgentStore implements AgentStore {
     return this.#withClient(client => answerInputAndClaimResumeCommand(client, input));
   }
 
-  async routeJob(input: RouteJobInput): Promise<AgentJob> {
-    return this.#withClient(client => routeJobCommand(client, input));
-  }
-
-  async createPlan(input: CreatePlanInput): Promise<CreatePlanResult> {
-    return this.#withClient(client => createPlanCommand(client, input));
-  }
-
-  async createStepRun(input: CreateStepRunInput): Promise<CreateStepRunResult> {
-    return this.#withClient(client => createStepRunCommand(client, input));
-  }
-
-  async commitStepOutput(input: CommitStepOutputInput): Promise<CommitStepOutputResult> {
-    return this.#withClient(client => commitStepOutputCommand(client, input));
-  }
-
-  async failStepRun(input: FailStepRunInput): Promise<FailStepRunResult> {
-    return this.#withClient(client => failStepRunCommand(client, input));
+  async applyPlanUpdate(input: ApplyPlanUpdateInput): Promise<ApplyPlanUpdateResult> {
+    return this.#withClient(client => applyPlanUpdateCommand(client, input));
   }
 
   async startModelCall(input: StartModelCallInput): Promise<AgentModelCall> {

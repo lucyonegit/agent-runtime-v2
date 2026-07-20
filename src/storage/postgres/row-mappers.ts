@@ -1,8 +1,6 @@
 import type {
   AgentJob,
-  AgentJobStage,
   AgentJobStatus,
-  AgentJobStrategy,
   AgentContextSummary,
   AgentContextOwnerType,
   AgentContextPurpose,
@@ -25,8 +23,6 @@ import type {
   AgentPlanStepStatus,
   AgentSession,
   AgentSessionStatus,
-  AgentStepRun,
-  AgentStepRunStatus,
   AgentToolCall,
   AgentToolInvocation,
   AgentToolInvocationStatus,
@@ -38,6 +34,7 @@ import type {
   AgentUserInputSource,
   AgentUserInputStatus,
 } from '../../domain/index.js';
+import type { StoredMessage } from '@langchain/core/messages';
 
 export interface AgentSessionRow {
   id: string;
@@ -53,8 +50,6 @@ export interface AgentJobRow {
   session_id: string;
   retry_of_job_id: string | null;
   client_request_id: string | null;
-  strategy: string | null;
-  stage: string;
   status: string;
   current_attempt_id: string | null;
   attempt_no: number;
@@ -77,8 +72,7 @@ export interface AgentMessageRow {
   session_id: string;
   job_id: string;
   plan_id: string | null;
-  step_id: string | null;
-  step_run_id: string | null;
+  plan_step_id: string | null;
   attempt_id: string | null;
   output_id: string | null;
   role: string;
@@ -99,8 +93,7 @@ export interface AgentToolInvocationRow {
   session_id: string;
   job_id: string;
   plan_id: string | null;
-  step_id: string | null;
-  step_run_id: string | null;
+  plan_step_id: string | null;
   attempt_id: string;
   call_message_id: string;
   result_message_id: string | null;
@@ -128,8 +121,7 @@ export interface AgentUserInputRequestRow {
   session_id: string;
   job_id: string;
   plan_id: string | null;
-  step_id: string | null;
-  step_run_id: string | null;
+  plan_step_id: string | null;
   tool_invocation_id: string | null;
   source: string;
   answer_mode: string;
@@ -164,11 +156,12 @@ export interface AgentPlanRow {
 export interface AgentPlanStepRow {
   id: string;
   plan_id: string;
+  key: string;
   position: number;
   title: string;
-  instruction: string;
+  description: string | null;
   status: string;
-  output_message_id: string | null;
+  result: unknown;
   error_code: string | null;
   error_message: string | null;
   error_details: unknown;
@@ -176,28 +169,6 @@ export interface AgentPlanStepRow {
   metadata: unknown;
   created_at_ms: string | number;
   updated_at_ms: string | number;
-  completed_at_ms: string | number | null;
-}
-
-export interface AgentStepRunRow {
-  id: string;
-  session_id: string;
-  job_id: string;
-  plan_id: string;
-  step_id: string;
-  run_no: number;
-  status: string;
-  current_attempt_id: string | null;
-  attempt_no: number;
-  output_message_id: string | null;
-  error_code: string | null;
-  error_message: string | null;
-  error_details: unknown;
-  version: number;
-  metadata: unknown;
-  created_at_ms: string | number;
-  updated_at_ms: string | number;
-  started_at_ms: string | number | null;
   completed_at_ms: string | number | null;
 }
 
@@ -205,7 +176,6 @@ export interface AgentContextSummaryRow {
   id: string;
   session_id: string;
   job_id: string | null;
-  step_run_id: string | null;
   owner_type: string;
   owner_id: string;
   purpose: string;
@@ -234,7 +204,6 @@ export interface AgentModelCallRow {
   id: string;
   session_id: string;
   job_id: string;
-  step_run_id: string | null;
   attempt_id: string;
   logical_call_key: string;
   call_attempt_no: number;
@@ -244,6 +213,7 @@ export interface AgentModelCallRow {
   model: string;
   context_rules_version: string;
   input_manifest: unknown;
+  input_messages: unknown;
   input_checksum: string;
   max_context_tokens: number;
   reserved_output_tokens: number;
@@ -301,8 +271,6 @@ export function mapAgentJobRow(row: AgentJobRow): AgentJob {
     sessionId: row.session_id,
     ...(row.retry_of_job_id === null ? {} : { retryOfJobId: row.retry_of_job_id }),
     ...(row.client_request_id === null ? {} : { clientRequestId: row.client_request_id }),
-    ...(row.strategy === null ? {} : { strategy: row.strategy as AgentJobStrategy }),
-    stage: row.stage as AgentJobStage,
     status: row.status as AgentJobStatus,
     ...(row.current_attempt_id === null ? {} : { currentAttemptId: row.current_attempt_id }),
     attemptNo: row.attempt_no,
@@ -339,8 +307,7 @@ export function mapAgentMessageRow(row: AgentMessageRow): AgentMessage {
     sessionId: row.session_id,
     jobId: row.job_id,
     ...(row.plan_id === null ? {} : { planId: row.plan_id }),
-    ...(row.step_id === null ? {} : { stepId: row.step_id }),
-    ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
+    ...(row.plan_step_id === null ? {} : { planStepId: row.plan_step_id }),
     ...(row.attempt_id === null ? {} : { attemptId: row.attempt_id }),
     ...(row.output_id === null ? {} : { outputId: row.output_id }),
     role: row.role as AgentMessageRole,
@@ -365,8 +332,7 @@ export function mapAgentToolInvocationRow(
     sessionId: row.session_id,
     jobId: row.job_id,
     ...(row.plan_id === null ? {} : { planId: row.plan_id }),
-    ...(row.step_id === null ? {} : { stepId: row.step_id }),
-    ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
+    ...(row.plan_step_id === null ? {} : { planStepId: row.plan_step_id }),
     attemptId: row.attempt_id,
     callMessageId: row.call_message_id,
     ...(row.result_message_id === null ? {} : { resultMessageId: row.result_message_id }),
@@ -410,8 +376,7 @@ export function mapAgentUserInputRequestRow(
     sessionId: row.session_id,
     jobId: row.job_id,
     ...(row.plan_id === null ? {} : { planId: row.plan_id }),
-    ...(row.step_id === null ? {} : { stepId: row.step_id }),
-    ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
+    ...(row.plan_step_id === null ? {} : { planStepId: row.plan_step_id }),
     ...(row.tool_invocation_id === null ? {} : { toolInvocationId: row.tool_invocation_id }),
     source: row.source as AgentUserInputSource,
     answerMode: row.answer_mode as AgentUserInputAnswerMode,
@@ -456,11 +421,14 @@ export function mapAgentPlanStepRow(row: AgentPlanStepRow): AgentPlanStep {
   return {
     id: row.id,
     planId: row.plan_id,
+    key: row.key,
     position: row.position,
     title: row.title,
-    instruction: row.instruction,
+    ...(row.description === null ? {} : { description: row.description }),
     status: row.status as AgentPlanStepStatus,
-    ...(row.output_message_id === null ? {} : { outputMessageId: row.output_message_id }),
+    ...(row.result === null ? {} : {
+      result: mapRecord(row.result, 'agent_plan_steps.result'),
+    }),
     ...(row.error_code === null || row.error_message === null
       ? {}
       : {
@@ -482,48 +450,11 @@ export function mapAgentPlanStepRow(row: AgentPlanStepRow): AgentPlanStep {
   };
 }
 
-export function mapAgentStepRunRow(row: AgentStepRunRow): AgentStepRun {
-  return {
-    id: row.id,
-    sessionId: row.session_id,
-    jobId: row.job_id,
-    planId: row.plan_id,
-    stepId: row.step_id,
-    runNo: row.run_no,
-    status: row.status as AgentStepRunStatus,
-    ...(row.current_attempt_id === null ? {} : { currentAttemptId: row.current_attempt_id }),
-    attemptNo: row.attempt_no,
-    ...(row.output_message_id === null ? {} : { outputMessageId: row.output_message_id }),
-    ...(row.error_code === null || row.error_message === null
-      ? {}
-      : {
-          error: {
-            code: row.error_code,
-            message: row.error_message,
-            ...(row.error_details === null ? {} : { details: row.error_details }),
-          },
-        }),
-    version: row.version,
-    ...(row.metadata === null
-      ? {}
-      : { metadata: mapRecord(row.metadata, 'agent_step_runs.metadata') }),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_step_runs.created_at_ms'),
-    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_step_runs.updated_at_ms'),
-    ...(row.started_at_ms === null
-      ? {}
-      : { startedAtMs: mapBigint(row.started_at_ms, 'agent_step_runs.started_at_ms') }),
-    ...(row.completed_at_ms === null
-      ? {}
-      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_step_runs.completed_at_ms') }),
-  };
-}
-
 export function mapAgentContextSummaryRow(row: AgentContextSummaryRow): AgentContextSummary {
   return {
     id: row.id,
     sessionId: row.session_id,
     ...(row.job_id === null ? {} : { jobId: row.job_id }),
-    ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
     ownerType: row.owner_type as AgentContextOwnerType,
     ownerId: row.owner_id,
     purpose: row.purpose as AgentContextPurpose,
@@ -556,7 +487,6 @@ export function mapAgentModelCallRow(row: AgentModelCallRow): AgentModelCall {
     id: row.id,
     sessionId: row.session_id,
     jobId: row.job_id,
-    ...(row.step_run_id === null ? {} : { stepRunId: row.step_run_id }),
     attemptId: row.attempt_id,
     logicalCallKey: row.logical_call_key,
     callAttemptNo: row.call_attempt_no,
@@ -566,6 +496,7 @@ export function mapAgentModelCallRow(row: AgentModelCallRow): AgentModelCall {
     model: row.model,
     contextRulesVersion: row.context_rules_version,
     inputManifest: mapRecord(row.input_manifest, 'agent_model_calls.input_manifest') as unknown as AgentContextInputManifest,
+    inputMessages: mapArray(row.input_messages, 'agent_model_calls.input_messages') as StoredMessage[],
     inputChecksum: row.input_checksum,
     maxContextTokens: row.max_context_tokens,
     reservedOutputTokens: row.reserved_output_tokens,
@@ -619,6 +550,11 @@ function mapBigint(value: string | number, field: string): number {
     throw new RangeError(`${field} is outside the JavaScript safe integer range.`);
   }
   return mapped;
+}
+
+function mapArray(value: unknown, field: string): unknown[] {
+  if (!Array.isArray(value)) throw new TypeError(`${field} must be a JSON array.`);
+  return value;
 }
 
 function mapRecord(value: unknown, field: string): Record<string, unknown> {

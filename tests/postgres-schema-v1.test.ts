@@ -24,7 +24,6 @@ const EXPECTED_TABLES = [
   'agent_plans',
   'agent_schema_versions',
   'agent_sessions',
-  'agent_step_runs',
   'agent_tool_invocations',
   'agent_user_input_requests',
 ];
@@ -74,7 +73,7 @@ describe('canonical PostgreSQL schema v1', () => {
     );
     expect(versions.rows).toEqual([{
       version: AGENT_RUNTIME_SCHEMA_VERSION,
-      name: 'job-step-run-canonical',
+      name: 'unified-job-react-canonical',
       checksum: AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
       applied_at_ms: '1000',
     }]);
@@ -94,16 +93,18 @@ describe('canonical PostgreSQL schema v1', () => {
     await expect(insertJob(client!, 'job_2', 'session_jobs')).resolves.toBeUndefined();
   });
 
-  it('allows only one active StepRun per PlanStep and per Job', async () => {
+  it('enforces stable unique Plan step keys and positions', async () => {
     await seedPlan(client!, 'run');
-    await insertStepRun(client!, 'run_1', 'job_run', 'plan_run', 'step_run_1', 1);
-
-    await expect(
-      insertStepRun(client!, 'run_2', 'job_run', 'plan_run', 'step_run_1', 2)
-    ).rejects.toMatchObject({ code: '23505' });
-    await expect(
-      insertStepRun(client!, 'run_3', 'job_run', 'plan_run', 'step_run_2', 1)
-    ).rejects.toMatchObject({ code: '23505' });
+    await expect(client!.query(
+      `insert into agent_plan_steps(
+         id, plan_id, key, position, title, status, version, created_at_ms, updated_at_ms
+       ) values ('duplicate_key', 'plan_run', 'step_1', 9, 'Duplicate', 'pending', 0, 5, 5)`
+    )).rejects.toMatchObject({ code: '23505' });
+    await expect(client!.query(
+      `insert into agent_plan_steps(
+         id, plan_id, key, position, title, status, version, created_at_ms, updated_at_ms
+       ) values ('duplicate_position', 'plan_run', 'new', 0, 'Duplicate', 'pending', 0, 5, 5)`
+    )).rejects.toMatchObject({ code: '23505' });
   });
 
   it('rejects malformed tool protocol messages', async () => {
@@ -145,7 +146,7 @@ describe('canonical PostgreSQL schema v1', () => {
   it('validates the exact schema version, name, and checksum', async () => {
     await expect(assertAgentRuntimeSchemaVersion(client!)).resolves.toEqual({
       version: AGENT_RUNTIME_SCHEMA_VERSION,
-      name: 'job-step-run-canonical',
+      name: 'unified-job-react-canonical',
       checksum: AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
       appliedAtMs: 1_000,
     });
@@ -221,8 +222,8 @@ async function insertSession(client: PoolClient, id: string): Promise<void> {
 async function insertJob(client: PoolClient, id: string, sessionId: string): Promise<void> {
   await client.query(
     `insert into agent_jobs(
-       id, session_id, stage, status, attempt_no, version, created_at_ms, updated_at_ms
-     ) values ($1, $2, 'routing', 'created', 0, 0, 2, 2)`,
+       id, session_id, status, attempt_no, version, created_at_ms, updated_at_ms
+     ) values ($1, $2, 'created', 0, 0, 2, 2)`,
     [id, sessionId]
   );
 }
@@ -242,28 +243,19 @@ async function seedPlan(client: PoolClient, suffix: string): Promise<void> {
   for (const position of [0, 1]) {
     await client.query(
       `insert into agent_plan_steps(
-         id, plan_id, position, title, instruction, status, version, created_at_ms, updated_at_ms
-       ) values ($1, $2, $3, $4, $5, 'pending', 0, 4, 4)`,
-      [`step_${suffix}_${position + 1}`, planId, position, `Step ${position + 1}`, `Do ${position + 1}`]
+         id, plan_id, key, position, title, description, status,
+         version, created_at_ms, updated_at_ms
+       ) values ($1, $2, $3, $4, $5, $6, 'pending', 0, 4, 4)`,
+      [
+        `step_${suffix}_${position + 1}`,
+        planId,
+        `step_${position + 1}`,
+        position,
+        `Step ${position + 1}`,
+        `Do ${position + 1}`,
+      ]
     );
   }
-}
-
-async function insertStepRun(
-  client: PoolClient,
-  id: string,
-  jobId: string,
-  planId: string,
-  stepId: string,
-  runNo: number
-): Promise<void> {
-  await client.query(
-    `insert into agent_step_runs(
-       id, session_id, job_id, plan_id, step_id, run_no,
-       status, attempt_no, version, created_at_ms, updated_at_ms
-     ) values ($1, 'session_run', $2, $3, $4, $5, 'created', 0, 0, 5, 5)`,
-    [id, jobId, planId, stepId, runNo]
-  );
 }
 
 async function insertSummary(client: PoolClient, id: string, sessionId: string): Promise<void> {
@@ -290,12 +282,12 @@ async function insertModelCall(
   await client.query(
     `insert into agent_model_calls(
        id, session_id, job_id, attempt_id, logical_call_key, call_attempt_no,
-       call_type, status, provider, model, context_rules_version, input_manifest,
+       call_type, status, provider, model, context_rules_version, input_manifest, input_messages,
        input_checksum, max_context_tokens, reserved_output_tokens,
        estimated_input_tokens, usage_source, created_at_ms
      ) values (
        $1, 'session_unique', $2, 'attempt_1', 'route', $3,
-       'planner.route', 'started', 'test', 'test-model', 'v1', '{}'::jsonb,
+       'job.react', 'started', 'test', 'test-model', 'v1', '{}'::jsonb, '[]'::jsonb,
        'checksum', 1000, 100, 10, 'estimated', 7
      )`,
     [id, jobId, callAttemptNo]

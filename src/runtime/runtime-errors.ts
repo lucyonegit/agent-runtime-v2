@@ -12,8 +12,8 @@ export type RuntimeErrorCode =
   | 'tool_failed'
   | 'tool_state_unknown'
   | 'context_overflow'
-  | 'invalid_step_output'
   | 'invalid_job_state'
+  | 'invalid_plan_state'
   | 'idempotency_conflict'
   | 'concurrency_conflict'
   | 'lease_lost'
@@ -67,6 +67,14 @@ export function mapStoreError(error: unknown): RuntimeError {
     case 'INVALID_USER_INPUT_STATE':
     case 'USER_INPUT_REQUEST_NOT_FOUND':
       return new RuntimeError('invalid_job_state', error.message, {
+        details: error.details,
+        cause: error,
+      });
+    case 'INVALID_PLAN_STATE':
+    case 'PLAN_NOT_FOUND':
+    case 'PLAN_STEP_NOT_FOUND':
+      return new RuntimeError('invalid_plan_state', error.message, {
+        retryable: false,
         details: error.details,
         cause: error,
       });

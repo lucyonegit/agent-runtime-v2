@@ -1,20 +1,23 @@
 import type { AgentJobError } from './job.js';
 
 export type AgentPlanStatus =
-  | 'draft'
   | 'active'
-  | 'waiting_user_input'
   | 'completed'
   | 'failed'
   | 'cancelled';
 
 export type AgentPlanStepStatus =
   | 'pending'
-  | 'running'
-  | 'waiting_user_input'
+  | 'in_progress'
   | 'completed'
   | 'failed'
-  | 'cancelled';
+  | 'skipped';
+
+export interface AgentPlanStepResult {
+  summary?: string;
+  evidenceMessageIds?: string[];
+  artifactIds?: string[];
+}
 
 export interface AgentPlan {
   id: string;
@@ -33,11 +36,12 @@ export interface AgentPlan {
 export interface AgentPlanStep {
   id: string;
   planId: string;
+  key: string;
   position: number;
   title: string;
-  instruction: string;
+  description?: string;
   status: AgentPlanStepStatus;
-  outputMessageId?: string;
+  result?: AgentPlanStepResult;
   error?: AgentJobError;
   version: number;
   metadata?: Record<string, unknown>;

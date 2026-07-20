@@ -5,6 +5,8 @@ import { createBrowserTools } from './browser-tools.js';
 import { createFilesystemTools } from './filesystem-tools.js';
 import { createHitlTools } from './hitl-tools.js';
 
+export { createPlanTools, type CreatePlanToolsOptions } from './plan-tools.js';
+
 export {
   SESSION_WORKSPACE_AREAS,
   removeSessionSandbox,

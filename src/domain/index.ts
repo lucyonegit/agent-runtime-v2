@@ -5,6 +5,5 @@ export * from './model-call.js';
 export * from './plan.js';
 export * from './realtime-event.js';
 export * from './session.js';
-export * from './step-run.js';
 export * from './tool-invocation.js';
 export * from './user-input-request.js';

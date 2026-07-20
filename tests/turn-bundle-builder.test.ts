@@ -22,7 +22,7 @@ describe('TurnBundleBuilder', () => {
     expect(bundles).toHaveLength(1);
     expect(bundles[0]).toMatchObject({
       id: 'turn:job_root',
-      type: 'direct_turn',
+      type: 'turn',
       rootJobId: 'job_root',
       jobIds: ['job_root', 'job_retry'],
       terminal: true,
@@ -50,7 +50,7 @@ function single(message_: AgentMessage): MessageGroup {
 
 function job(overrides: Partial<AgentJob> & Pick<AgentJob, 'id'>): AgentJob {
   return {
-    sessionId: 'session_1', stage: 'direct_execution', status: 'completed', attemptNo: 1,
+    sessionId: 'session_1', status: 'completed', attemptNo: 1,
     version: 1, createdAtMs: overrides.id === 'job_root' ? 1 : 2, updatedAtMs: 2,
     ...overrides,
   };

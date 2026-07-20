@@ -9,7 +9,9 @@ export class RuntimeEventBus implements RuntimeEventPublisher {
   publish(event: AgentRealtimeEvent): void {
     this.#subject(event.sessionId).next({
       type: event.type,
-      id: event.type === 'message.delta' ? event.eventId : undefined,
+      id: event.type === 'message.delta' || event.type === 'message.discarded'
+        ? event.eventId
+        : undefined,
       data: event,
     });
   }

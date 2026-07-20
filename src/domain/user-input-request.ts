@@ -1,4 +1,4 @@
-export type AgentUserInputSource = 'tool' | 'agent' | 'planner' | 'recovery';
+export type AgentUserInputSource = 'tool' | 'agent' | 'recovery';
 export type AgentUserInputAnswerMode = 'as_tool_result' | 'as_user_message';
 export type AgentUserInputStatus = 'pending' | 'answered' | 'cancelled' | 'expired';
 
@@ -18,8 +18,7 @@ export interface AgentUserInputRequest {
   sessionId: string;
   jobId: string;
   planId?: string;
-  stepId?: string;
-  stepRunId?: string;
+  planStepId?: string;
   toolInvocationId?: string;
   source: AgentUserInputSource;
   answerMode: AgentUserInputAnswerMode;

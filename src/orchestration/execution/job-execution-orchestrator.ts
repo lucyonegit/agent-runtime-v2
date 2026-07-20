@@ -1,17 +1,8 @@
-import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import type { AIMessageChunk } from '@langchain/core/messages';
-import type { Runnable } from '@langchain/core/runnables';
 import type { AgentJob } from '../../domain/index.js';
 import type { JobExecutionService } from '../agent-runtime.js';
-import type { PlanEngine } from '../../planner/plan-engine.js';
-import type { BuiltContext } from '../../runtime/context/context-compiler.js';
-import { DirectJobWorkflow } from '../workflows/direct-job-workflow.js';
-import { PlannedJobWorkflow } from '../workflows/planned-job-workflow.js';
-import { StepWorkflow } from '../workflows/step-workflow.js';
 import { ReactExecutionRuntime } from '../../runtime/react-execution-runtime.js';
-import { DirectJobContextLoader } from '../../runtime/loaders/direct-job-context-loader.js';
-import { StepContextLoader } from '../../runtime/loaders/step-context-loader.js';
+import { JobContextLoader } from '../../runtime/loaders/job-context-loader.js';
 import { JobCoordinator } from '../lifecycle/job-coordinator.js';
 import { resolveJobGoalMessage } from '../../runtime/job-goal.js';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
@@ -19,15 +10,6 @@ import type { RuntimeEventPublisher } from '../../runtime/runtime-event-writer.j
 import type { RuntimeTool } from '../../runtime/tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { ExecutionContextProvider } from './execution-context-provider.js';
-
-export interface PlanEngineFactory {
-  create(input: {
-    job: AgentJob;
-    routeModel: Runnable<BaseLanguageModelInput, AIMessageChunk>;
-    createModel: Runnable<BaseLanguageModelInput, AIMessageChunk>;
-    finalizeModel: Runnable<BaseLanguageModelInput, AIMessageChunk>;
-  }): PlanEngine;
-}
 
 export interface JobExecutionOrchestratorOptions {
   store: AgentStore;
@@ -47,11 +29,14 @@ export interface JobExecutionOrchestratorOptions {
   jobHeartbeatMs?: number;
   compressionMessageThreshold?: number;
   jobSystemPrompt: string;
-  stepSystemPrompt: string;
   systemPromptVersion: string;
-  planEngineFactory: PlanEngineFactory;
 }
 
+/**
+ * Orchestration owns Job lifecycle, leases and composition. Runtime owns the
+ * replaceable ReAct mechanics. Planning is intentionally absent here because
+ * it is a durable tool used from inside that one loop.
+ */
 export class JobExecutionOrchestrator implements JobExecutionService {
   readonly #running = new Set<string>();
   readonly #options: Required<Omit<JobExecutionOrchestratorOptions,
@@ -59,8 +44,6 @@ export class JobExecutionOrchestrator implements JobExecutionService {
     & JobExecutionOrchestratorOptions;
   readonly #react: ReactExecutionRuntime;
   readonly #contexts: ExecutionContextProvider;
-  readonly #directExecutor: DirectJobWorkflow;
-  readonly #planExecutor: PlannedJobWorkflow;
 
   constructor(options: JobExecutionOrchestratorOptions) {
     this.#options = {
@@ -83,21 +66,12 @@ export class JobExecutionOrchestrator implements JobExecutionService {
       maxContextTokens: this.#options.maxContextTokens,
       reservedOutputTokens: this.#options.reservedOutputTokens,
     };
-    const toolSchemas = this.#options.tools.map(tool => tool.tool);
-    const directContext = new DirectJobContextLoader({
+    const jobContext = new JobContextLoader({
       store: this.#options.store,
       systemPrompt: this.#options.jobSystemPrompt,
       systemPromptVersion: this.#options.systemPromptVersion,
       model: modelBudget,
-      toolSchemas,
-      compressionMessageThreshold: this.#options.compressionMessageThreshold,
-    });
-    const stepContexts = new StepContextLoader({
-      store: this.#options.store,
-      systemPrompt: this.#options.stepSystemPrompt,
-      systemPromptVersion: this.#options.systemPromptVersion,
-      model: modelBudget,
-      toolSchemas,
+      toolSchemas: this.#options.tools.map(tool => tool.tool),
       compressionMessageThreshold: this.#options.compressionMessageThreshold,
     });
     this.#react = new ReactExecutionRuntime({
@@ -118,27 +92,15 @@ export class JobExecutionOrchestrator implements JobExecutionService {
     this.#contexts = new ExecutionContextProvider({
       store: this.#options.store,
       modelName: this.#options.modelName,
-      directContext,
-      stepContext: stepContexts,
+      jobContext,
       compressionModels: {
-        create: ({ job, context, logicalCallKey, stepRunId }) => this.#react.createAuditedModel(
+        create: ({ job, context, logicalCallKey }) => this.#react.createAuditedModel(
           job,
           context,
           'context.compress',
-          logicalCallKey,
-          stepRunId
+          logicalCallKey
         ),
       },
-    });
-    this.#directExecutor = new DirectJobWorkflow(
-      this.#react,
-      this.#contexts,
-      this.#options.publisher
-    );
-    this.#planExecutor = new PlannedJobWorkflow({
-      store: this.#options.store,
-      stepExecutor: new StepWorkflow(this.#react, this.#contexts),
-      requireOwnedJob: jobId => this.#requireOwnedJob(jobId),
     });
   }
 
@@ -159,38 +121,13 @@ export class JobExecutionOrchestrator implements JobExecutionService {
   }
 
   async #executeOwnedJob(jobId: string): Promise<void> {
-    let job = await this.#requireOwnedJob(jobId);
+    const job = await this.#requireOwnedJob(jobId);
     const messages = await this.#options.store.listSessionMessages(job.sessionId);
-    const goalMessage = resolveJobGoalMessage(job, messages);
-    const originalGoal = goalMessage?.content;
+    const originalGoal = resolveJobGoalMessage(job, messages)?.content;
     if (!originalGoal) throw new Error(`Job ${job.id} has no original user goal.`);
-    const jobContext = await this.#contexts.buildPlanningContext(job, originalGoal);
-    const planner = this.#createPlanEngine(job, jobContext);
-
-    if (!job.strategy || job.stage === 'planning' && !await this.#options.store.getPlanByJobId(job.id)) {
-      const routed = await planner.route(job, originalGoal, {
-        ...currentTemporalContext(),
-        availableTools: this.#options.tools.map(item => item.tool.name),
-      });
-      job = routed.job;
-      if (routed.strategy === 'planned' && 'plan' in routed) job = routed.job;
-    }
-    if (job.strategy === 'direct') {
-      await this.#directExecutor.execute(job, originalGoal);
-      return;
-    }
-    await this.#planExecutor.execute(job, originalGoal, planner);
-  }
-
-  #createPlanEngine(job: AgentJob, built: BuiltContext): PlanEngine {
-    const route = this.#react.createAuditedModel(job, built, 'planner.route', 'planner.route');
-    const create = this.#react.createAuditedModel(job, built, 'planner.create', 'planner.create');
-    const finalize = this.#react.createAuditedModel(job, built, 'plan.finalize', 'plan.finalize');
-    return this.#options.planEngineFactory.create({
+    await this.#react.runJob({
       job,
-      routeModel: route,
-      createModel: create,
-      finalizeModel: finalize,
+      loadContext: () => this.#contexts.buildJobContext(job, originalGoal),
     });
   }
 
@@ -221,7 +158,7 @@ export class JobExecutionOrchestrator implements JobExecutionService {
       const renewed = await coordinator.renewJobLease(job);
       await this.#safePublish({ type: 'job.upserted', sessionId: renewed.sessionId, job: renewed });
     } catch {
-      // The next fenced write observes a lost lease and stops this execution.
+      // The next fenced write observes the lost lease.
     }
   }
 
@@ -261,19 +198,7 @@ export class JobExecutionOrchestrator implements JobExecutionService {
     try {
       await this.#options.publisher.publish(event);
     } catch {
-      // The durable SessionView remains authoritative when realtime delivery fails.
+      // SessionView is authoritative when realtime delivery fails.
     }
   }
-}
-
-function currentTemporalContext(): { currentDate: string; timezone: string } {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
-  return { currentDate: `${values.year}-${values.month}-${values.day}`, timezone };
 }

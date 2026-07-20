@@ -4,9 +4,7 @@ import type { MessageGroup } from './message-group-builder.js';
 
 export type ContextSegment =
   | 'session_history'
-  | 'current_job'
-  | 'current_plan'
-  | 'current_step';
+  | 'current_job';
 
 export interface ContextFixedMessage {
   id: string;
@@ -23,11 +21,10 @@ export interface ContextGroupMaterial {
 
 export interface TurnBundle {
   id: string;
-  type: 'direct_turn' | 'planned_turn';
+  type: 'turn';
   sessionId: string;
   rootJobId: string;
   jobIds: string[];
-  planId?: string;
   terminal: boolean;
   sourceRowIdStart: number;
   sourceRowIdEnd: number;
@@ -71,7 +68,6 @@ export interface ContextMaterial {
   trailingMessages?: ContextFixedMessage[];
   fixedPrefix: Record<string, unknown>;
   groups: ContextGroupMaterial[];
-  legacyGroups?: ContextGroupMaterial[];
   bundles?: ContextBundleMaterial[];
   summaries: ContextSummaryMaterial[];
   toolSchemas: StructuredToolInterface[];

@@ -99,13 +99,8 @@ describe('ContextCompiler', () => {
     ]);
     const result = toolResultMessage('result_context', 3, 'call_lookup', 'lookup');
     const context = buildContext({
-      scope: {
-        kind: 'step_run',
-        jobId: 'job_1',
-        stepRunId: 'run_current',
-        originalGoal: 'goal',
-      },
-      purpose: 'step_execution',
+      scope: { kind: 'job', jobId: 'job_1', originalGoal: 'goal' },
+      purpose: 'job_execution',
       systemPrompt: 'system',
       systemPromptVersion: 'system-v1',
       currentInstruction: 'do step',
@@ -137,8 +132,8 @@ describe('ContextCompiler', () => {
       'result:lookup',
     ]);
     expect(context.inputManifest).toMatchObject({
-      purpose: 'step_execution',
-      contextRulesVersion: 'job-step-run-context-v6',
+      purpose: 'job_execution',
+      contextRulesVersion: CONTEXT_RULES_VERSION,
       systemPromptVersion: 'system-v1',
       messageGroupIds: ['message:goal', 'tool_exchange:call_context'],
       summaryIds: ['summary_1'],
@@ -154,13 +149,8 @@ describe('ContextCompiler', () => {
       { id: 'call_wait', name: 'wait', args: {} },
     ]);
     expect(() => buildContext({
-      scope: {
-        kind: 'step_run',
-        jobId: 'job_1',
-        stepRunId: 'run_current',
-        originalGoal: 'goal',
-      },
-      purpose: 'step_execution',
+      scope: { kind: 'job', jobId: 'job_1', originalGoal: 'goal' },
+      purpose: 'job_execution',
       systemPrompt: 'system',
       systemPromptVersion: 'v1',
       currentInstruction: 'step',
@@ -278,9 +268,9 @@ describe('ContextCompiler', () => {
     const previousUser = message({
       id: 'previous_user', rowId: 10, jobId: 'job_previous', content: '调查并生成报告',
     });
-    const planCreated = message({
-      id: 'plan_created', rowId: 11, jobId: 'job_previous', role: 'assistant',
-      messageType: 'plan_created', content: '调查计划',
+    const planningNote = message({
+      id: 'planning_note', rowId: 11, jobId: 'job_previous', role: 'assistant',
+      messageType: 'assistant_message', content: '调查计划',
     });
     const previousCall = {
       ...toolCallMessage('previous_call', 'run_previous', [
@@ -292,15 +282,14 @@ describe('ContextCompiler', () => {
     const previousResult = {
       ...toolResultMessage('previous_result', 13, 'call_search', 'web_search'),
       jobId: 'job_previous',
-      stepRunId: 'run_previous',
     };
     const previousOutput = message({
       id: 'previous_output', rowId: 14, jobId: 'job_previous', role: 'assistant',
-      messageType: 'step_output', stepRunId: 'run_previous', content: 'structured step output',
+      messageType: 'assistant_message', content: 'structured step output',
     });
-    const planFinal = message({
-      id: 'plan_final', rowId: 15, jobId: 'job_previous', role: 'assistant',
-      messageType: 'plan_final', channel: 'final', content: '最终报告',
+    const finalAnswer = message({
+      id: 'final_answer', rowId: 15, jobId: 'job_previous', role: 'assistant',
+      messageType: 'assistant_message', channel: 'final', content: '最终报告',
     });
     const previousInvocation = {
       ...invocation(
@@ -308,12 +297,11 @@ describe('ContextCompiler', () => {
         'call_search', 'web_search', 'completed'
       ),
       jobId: 'job_previous',
-      stepRunId: 'run_previous',
     };
 
     const messages = [
-      previousOutput, previousResult, planFinal,
-      previousCall, planCreated, previousUser,
+      previousOutput, previousResult, finalAnswer,
+      previousCall, planningNote, previousUser,
     ];
     const messagesBeforeBuild = structuredClone(messages);
     const input = {
@@ -330,10 +318,10 @@ describe('ContextCompiler', () => {
 
     expect(context.inputManifest.messageGroupIds).toEqual([
       'message:previous_user',
-      'message:plan_created',
+      'message:planning_note',
       'tool_exchange:previous_call',
-      'step_output:previous_output',
-      'message:plan_final',
+      'message:previous_output',
+      'message:final_answer',
     ]);
     expect(context.messages.map(item => item.content)).toEqual([
       'system',
@@ -347,11 +335,11 @@ describe('ContextCompiler', () => {
     expect(context.mustKeepMessageIds).toEqual([]);
     expect(context.compressibleMessageIds).toEqual([
       'previous_user',
-      'plan_created',
+      'planning_note',
       'previous_call',
       'previous_result',
       'previous_output',
-      'plan_final',
+      'final_answer',
     ]);
     expect(rebuilt.inputManifest).toEqual(context.inputManifest);
     expect(rebuilt.messages.map(item => item.toDict())).toEqual(
@@ -396,14 +384,7 @@ describe('ContextCompiler', () => {
 interface CompilerFixtureInput {
   scope:
     | { kind: 'session_history' }
-    | { kind: 'job'; jobId: string; originalGoal: string; originalGoalMessageId?: string }
-    | {
-        kind: 'step_run';
-        jobId: string;
-        stepRunId: string;
-        originalGoal: string;
-        originalGoalMessageId?: string;
-      };
+    | { kind: 'job'; jobId: string; originalGoal: string; originalGoalMessageId?: string };
   purpose: string;
   systemPrompt: string;
   systemPromptVersion: string;
@@ -458,12 +439,10 @@ function buildContext(input: CompilerFixtureInput) {
         segment: input.scope.kind === 'session_history'
           ? 'session_history' as const
           : messages.some(item => item.jobId === executionScope!.jobId)
-            ? input.scope.kind === 'step_run'
-              ? 'current_plan' as const
-              : 'current_job' as const
+            ? 'current_job' as const
             : 'session_history' as const,
         mustKeep,
-        priority: mustKeep ? 1_000 : group.type === 'step_output' ? 80 : 40,
+        priority: mustKeep ? 1_000 : 40,
       };
     }),
     summaries: input.summaries ?? [],
@@ -499,7 +478,7 @@ function message(overrides: Partial<AgentMessage> & Pick<AgentMessage, 'id'>): A
 
 function toolCallMessage(
   id: string,
-  stepRunId: string,
+  _scopeId: string,
   toolCalls: NonNullable<AgentMessage['toolCalls']>
 ): AgentMessage {
   return message({
@@ -508,7 +487,6 @@ function toolCallMessage(
     role: 'assistant',
     messageType: 'tool_call',
     content: '',
-    stepRunId,
     toolCalls,
   });
 }
@@ -524,7 +502,6 @@ function toolResultMessage(
     rowId,
     role: 'tool',
     messageType: 'tool_result',
-    stepRunId: 'run_current',
     content: `result:${toolName}`,
     toolCallId,
     toolName,
@@ -544,7 +521,6 @@ function invocation(
     id,
     sessionId: 'session_1',
     jobId: 'job_1',
-    stepRunId: callMessage.stepRunId,
     attemptId: 'attempt_1',
     callMessageId: callMessage.id,
     resultMessageId: resultMessage?.id,

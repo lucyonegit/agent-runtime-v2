@@ -3,6 +3,9 @@ import type { BaseLanguageModelInput } from '@langchain/core/language_models/bas
 import {
   AIMessageChunk,
   coerceMessageLikeToMessage,
+  mapChatMessagesToStoredMessages,
+  type BaseMessage,
+  type StoredMessage,
   type UsageMetadata,
 } from '@langchain/core/messages';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
@@ -12,6 +15,7 @@ import type {
   AgentRealtimeEvent,
 } from '../domain/index.js';
 import type { AgentStore } from '../storage/agent-store.js';
+import { canonicalJson } from './transaction-commands.js';
 
 export interface AuditedChatModelOptions {
   delegate: Runnable<BaseLanguageModelInput, AIMessageChunk>;
@@ -20,7 +24,6 @@ export interface AuditedChatModelOptions {
   target: {
     sessionId: string;
     jobId: string;
-    stepRunId?: string;
     attemptId: string;
     attemptNo: number;
   };
@@ -30,7 +33,7 @@ export interface AuditedChatModelOptions {
   model: string;
   maxContextTokens: number;
   reservedOutputTokens: number;
-  baseManifest: AgentContextInputManifest;
+  baseManifest: AgentContextInputManifest | (() => AgentContextInputManifest);
   publisher?: { publish(event: AgentRealtimeEvent): void | Promise<void> };
   ids?: { modelCallId(): string };
   clock?: { nowMs(): number };
@@ -110,12 +113,15 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
   async #start(input: BaseLanguageModelInput): Promise<string> {
     this.#logicalCallNo += 1;
     const id = this.#ids.modelCallId();
-    const serialized = serializeModelInput(input);
+    const inputMessages = storeModelInput(input);
+    const serialized = canonicalJson(inputMessages);
+    const manifest = typeof this.#options.baseManifest === 'function'
+      ? this.#options.baseManifest()
+      : this.#options.baseManifest;
     await this.#options.store.startModelCall({
       id,
       sessionId: this.#options.target.sessionId,
       jobId: this.#options.target.jobId,
-      stepRunId: this.#options.target.stepRunId,
       attemptId: this.#options.target.attemptId,
       workerId: this.#options.workerId,
       logicalCallKey: `${this.#options.logicalCallKey}:${this.#logicalCallNo}`,
@@ -123,8 +129,9 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       callType: this.#options.callType,
       provider: this.#options.provider,
       model: this.#options.model,
-      contextRulesVersion: this.#options.baseManifest.contextRulesVersion,
-      inputManifest: this.#options.baseManifest,
+      contextRulesVersion: manifest.contextRulesVersion,
+      inputManifest: manifest,
+      inputMessages,
       inputChecksum: sha256(serialized),
       maxContextTokens: this.#options.maxContextTokens,
       reservedOutputTokens: this.#options.reservedOutputTokens,
@@ -185,12 +192,16 @@ function usageFields(usage: UsageMetadata | undefined) {
   } : {};
 }
 
-function serializeModelInput(input: BaseLanguageModelInput): string {
-  if (typeof input === 'string') return input;
-  if (Array.isArray(input)) {
-    return JSON.stringify(input.map(coerceMessageLikeToMessage).map(message => message.toDict()));
+function storeModelInput(input: BaseLanguageModelInput): StoredMessage[] {
+  let messages: BaseMessage[];
+  if (typeof input === 'string') {
+    messages = [coerceMessageLikeToMessage(['human', input])];
+  } else if (Array.isArray(input)) {
+    messages = input.map(coerceMessageLikeToMessage);
+  } else {
+    messages = input.toChatMessages();
   }
-  return JSON.stringify(input.toChatMessages().map(message => message.toDict()));
+  return mapChatMessagesToStoredMessages(messages);
 }
 
 function sha256(value: string): string {

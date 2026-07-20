@@ -45,11 +45,6 @@ export class AgentController {
     return this.contextPreview.previewJob(jobId);
   }
 
-  @Get('step-runs/:stepRunId/context-preview')
-  getStepRunContextPreview(@Param('stepRunId') stepRunId: string) {
-    return this.contextPreview.previewStepRun(stepRunId);
-  }
-
   @Get('model-calls/:modelCallId/context')
   getModelCallContext(@Param('modelCallId') modelCallId: string) {
     return this.contextPreview.previewModelCall(modelCallId);

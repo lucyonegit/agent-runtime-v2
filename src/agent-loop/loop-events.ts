@@ -9,6 +9,7 @@ import type { UsageMetadata } from '@langchain/core/messages';
 export const LOOP_EVENT_TYPES = {
   ModelOutputDelta: 'model.output.delta',
   ModelOutputCompleted: 'model.output.completed',
+  ModelOutputRejected: 'model.output.rejected',
   ToolResultCompleted: 'tool.result.completed',
   ToolResultFailed: 'tool.result.failed',
   ToolInputRequired: 'tool.input.required',
@@ -38,6 +39,11 @@ export type LoopEvent =
       content: string;
       toolCalls: AgentToolCall[];
       usage?: UsageMetadata;
+    }
+  | {
+      type: typeof LOOP_EVENT_TYPES.ModelOutputRejected;
+      outputId: string;
+      reason: string;
     }
   | {
       type: typeof LOOP_EVENT_TYPES.ToolResultCompleted;

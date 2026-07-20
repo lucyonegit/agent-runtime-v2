@@ -16,16 +16,19 @@ import { JobCoordinator } from '../orchestration/lifecycle/job-coordinator.js';
 import { RuntimeError } from './runtime-errors.js';
 import { RuntimeEventWriter } from './runtime-event-writer.js';
 
-export interface DirectAgentRunInput {
+export interface JobAgentRunInput {
   job: AgentJob;
   messages: BaseMessage[];
+  prepareMessages?: (iteration: number) => Promise<BaseMessage[]>;
   tools: StructuredToolInterface[];
+  exclusiveToolNames?: ReadonlySet<string>;
+  validateFinalAnswer?: Parameters<AgentLoop['run']>[0]['validateFinalAnswer'];
   toolExecutor: ToolExecutorPort;
   outputIdFactory: () => string;
   limits: AgentLoopLimits;
 }
 
-export type DirectAgentRunResult =
+export type JobAgentRunResult =
   | { type: 'completed'; job: AgentJob; message: AgentMessage }
   | { type: 'waiting_user_input'; job: AgentJob; requests: AgentUserInputRequest[] }
   | { type: 'failed'; job: AgentJob }
@@ -48,7 +51,7 @@ export class AgentRunner {
     this.#coordinator = options.coordinator;
   }
 
-  async runDirect(input: DirectAgentRunInput): Promise<DirectAgentRunResult> {
+  async runJob(input: JobAgentRunInput): Promise<JobAgentRunResult> {
     if (!input.job.currentAttemptId || !input.job.leaseOwner) {
       throw new RuntimeError('lease_lost', `Job ${JSON.stringify(input.job.id)} is not claimed.`);
     }
@@ -70,6 +73,9 @@ export class AgentRunner {
       toolExecutor: input.toolExecutor,
       outputIdFactory: input.outputIdFactory,
       limits: input.limits,
+      prepareMessages: input.prepareMessages,
+      exclusiveToolNames: input.exclusiveToolNames,
+      validateFinalAnswer: input.validateFinalAnswer,
     });
 
     while (true) {

@@ -22,10 +22,9 @@ export interface ContextPreviewV1 {
   sessionId: string;
   basedOnLatestJobId?: string;
   query: {
-    kind: 'next_turn' | 'job' | 'step_run' | 'model_call';
+    kind: 'next_turn' | 'job' | 'model_call';
     sessionId?: string;
     jobId?: string;
-    stepRunId?: string;
     modelCallId?: string;
   };
   verification: {

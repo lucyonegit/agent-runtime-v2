@@ -3,10 +3,7 @@ import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { AgentJob } from '../../domain/index.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { jobGoalMessageId } from '../job-goal.js';
-import {
-  CONTEXT_RULES_VERSION,
-  LEGACY_CONTEXT_RULES_VERSION,
-} from '../context/context-compiler.js';
+import { CONTEXT_RULES_VERSION } from '../context/context-compiler.js';
 import type { ContextMaterial, ContextModelBudget } from '../context/context-material.js';
 import { messagesInGroup } from '../context/message-group-builder.js';
 import {
@@ -14,18 +11,15 @@ import {
   assertNoBlockedGroups,
 } from './session-context-loader.js';
 
-export type DirectJobContextStore = Pick<AgentStore,
+export type JobContextStore = Pick<AgentStore,
   | 'listSessionJobs'
   | 'listSessionMessages'
-  | 'listSessionPlans'
-  | 'listSessionPlanSteps'
-  | 'listSessionStepRuns'
   | 'listSessionToolInvocations'
   | 'listActiveContextSummaries'
 >;
 
-export interface DirectJobContextLoaderOptions {
-  store: DirectJobContextStore;
+export interface JobContextLoaderOptions {
+  store: JobContextStore;
   systemPrompt: string;
   systemPromptVersion: string;
   model: ContextModelBudget;
@@ -34,10 +28,10 @@ export interface DirectJobContextLoaderOptions {
   stableContext?: () => string | undefined;
 }
 
-export class DirectJobContextLoader {
+export class JobContextLoader {
   readonly #session: SessionContextLoader;
 
-  constructor(private readonly options: DirectJobContextLoaderOptions) {
+  constructor(private readonly options: JobContextLoaderOptions) {
     this.#session = new SessionContextLoader(options.store);
   }
 
@@ -47,11 +41,7 @@ export class DirectJobContextLoader {
     contextRulesVersion = CONTEXT_RULES_VERSION
   ): Promise<ContextMaterial> {
     const facts = await this.#session.load(job.sessionId);
-    const summaries = contextRulesVersion === LEGACY_CONTEXT_RULES_VERSION
-      ? await this.options.store.listActiveContextSummaries(
-          'job', job.id, 'job_execution', LEGACY_CONTEXT_RULES_VERSION
-        )
-      : facts.summaries;
+    const summaries = facts.summaries;
     assertNoBlockedGroups(facts.blocked, blocked => blocked.callMessage.jobId === job.id);
     const goalId = jobGoalMessageId(job);
     const stableContext = this.options.stableContext?.();
@@ -68,7 +58,7 @@ export class DirectJobContextLoader {
       });
     }
     const summaryEnd = Math.max(0, ...summaries.map(summary => summary.sourceRowIdEnd));
-    const groupMaterial = (groups: typeof facts.groups) => groups.map(group => {
+    const groupMaterial = facts.groups.map(group => {
       const messages = messagesInGroup(group);
       const currentGoal = goalId
         ? messages.some(message => message.id === goalId)
@@ -82,7 +72,7 @@ export class DirectJobContextLoader {
         group,
         segment: currentJob ? 'current_job' as const : 'session_history' as const,
         mustKeep: currentGoal,
-        priority: currentGoal ? 1_000 : group.type === 'step_output' ? 80 : currentJob ? 70 : 40,
+        priority: currentGoal ? 1_000 : currentJob ? 70 : 40,
       };
     });
     return {
@@ -93,11 +83,8 @@ export class DirectJobContextLoader {
         originalGoal,
         currentInstruction: undefined,
       },
-      groups: contextRulesVersion === LEGACY_CONTEXT_RULES_VERSION
-        ? groupMaterial(facts.legacyGroups)
-        : groupMaterial(facts.groups),
-      legacyGroups: groupMaterial(facts.legacyGroups),
-      ...(contextRulesVersion === LEGACY_CONTEXT_RULES_VERSION ? {} : { bundles: facts.bundles.map(bundle => {
+      groups: groupMaterial,
+      bundles: facts.bundles.map(bundle => {
         const current = bundle.jobIds.includes(job.id)
           || (job.retryOfJobId ? bundle.jobIds.includes(job.retryOfJobId) : false);
         return {
@@ -106,7 +93,7 @@ export class DirectJobContextLoader {
           mustKeep: current,
           priority: current ? 1_000 : 40,
         };
-      }) }),
+      }),
       summaries: summaries.map(summary => ({
         id: summary.id,
         summary: summary.summary,

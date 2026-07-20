@@ -1,10 +1,7 @@
+import type { StoredMessage } from '@langchain/core/messages';
+
 export const AGENT_MODEL_CALL_TYPES = [
-  'planner.route',
-  'planner.create',
   'job.react',
-  'step.react',
-  'step.output_repair',
-  'plan.finalize',
   'context.compress',
 ] as const;
 
@@ -38,7 +35,6 @@ export interface AgentModelCall {
   id: string;
   sessionId: string;
   jobId: string;
-  stepRunId?: string;
   attemptId: string;
   logicalCallKey: string;
   callAttemptNo: number;
@@ -48,6 +44,7 @@ export interface AgentModelCall {
   model: string;
   contextRulesVersion: string;
   inputManifest: AgentContextInputManifest;
+  inputMessages: StoredMessage[];
   inputChecksum: string;
   maxContextTokens: number;
   reservedOutputTokens: number;

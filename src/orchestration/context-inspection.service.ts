@@ -6,17 +6,15 @@ import { AgentStoreError } from '../storage/agent-store.js';
 import { compileContext, CONTEXT_RULES_VERSION } from '../runtime/context/context-compiler.js';
 import type { BuiltContext } from '../runtime/context/context-compiler.js';
 import type { ContextMaterial, ContextModelBudget } from '../runtime/context/context-material.js';
-import { DirectJobContextLoader } from '../runtime/loaders/direct-job-context-loader.js';
+import { JobContextLoader } from '../runtime/loaders/job-context-loader.js';
 import { ModelCallContextLoader } from '../runtime/loaders/model-call-context-loader.js';
 import { SessionContextLoader } from '../runtime/loaders/session-context-loader.js';
-import { StepContextLoader } from '../runtime/loaders/step-context-loader.js';
 import { resolveJobGoalMessage } from '../runtime/job-goal.js';
 import { RuntimeError } from '../runtime/runtime-errors.js';
 
 export type ContextQuery =
   | { kind: 'next_turn'; sessionId: string }
   | { kind: 'job'; jobId: string }
-  | { kind: 'step_run'; stepRunId: string }
   | { kind: 'model_call'; modelCallId: string };
 
 export interface ContextSnapshot {
@@ -38,16 +36,9 @@ const ACTIVE_JOB_STATUSES = new Set<AgentJob['status']>([
 export type ContextInspectionStore = Pick<AgentStore,
   | 'getSession'
   | 'getJob'
-  | 'getStepRun'
   | 'getModelCall'
-  | 'getPlanByJobId'
-  | 'listPlanSteps'
-  | 'listJobStepRuns'
   | 'listSessionJobs'
   | 'listSessionMessages'
-  | 'listSessionPlans'
-  | 'listSessionPlanSteps'
-  | 'listSessionStepRuns'
   | 'listSessionToolInvocations'
   | 'listActiveContextSummaries'
 >;
@@ -58,31 +49,22 @@ export interface ContextInspectionServiceOptions {
   model: ContextModelBudget;
   systemPrompt: string;
   systemPromptVersion: string;
-  stepSystemPrompt: string;
   compressionMessageThreshold: number;
   clock?: { nowMs(): number };
 }
 
+/** Read-only reconstruction for next-turn, Job and exact ModelCall snapshots. */
 export class ContextInspectionService {
   readonly #session: SessionContextLoader;
-  readonly #direct: DirectJobContextLoader;
-  readonly #step: StepContextLoader;
+  readonly #jobs: JobContextLoader;
   readonly #modelCalls: ModelCallContextLoader;
   readonly #clock: { nowMs(): number };
 
   constructor(private readonly options: ContextInspectionServiceOptions) {
     this.#session = new SessionContextLoader(options.store);
-    this.#direct = new DirectJobContextLoader({
+    this.#jobs = new JobContextLoader({
       store: options.store,
       systemPrompt: options.systemPrompt,
-      systemPromptVersion: options.systemPromptVersion,
-      model: options.model,
-      toolSchemas: options.tools,
-      compressionMessageThreshold: options.compressionMessageThreshold,
-    });
-    this.#step = new StepContextLoader({
-      store: options.store,
-      systemPrompt: options.stepSystemPrompt,
       systemPromptVersion: options.systemPromptVersion,
       model: options.model,
       toolSchemas: options.tools,
@@ -93,16 +75,9 @@ export class ContextInspectionService {
   }
 
   async inspect(query: ContextQuery): Promise<ContextSnapshot> {
-    switch (query.kind) {
-      case 'next_turn':
-        return this.#nextTurn(query);
-      case 'job':
-        return this.#job(query.jobId, query);
-      case 'step_run':
-        return this.#stepRun(query.stepRunId, query);
-      case 'model_call':
-        return this.#modelCall(query.modelCallId, query);
-    }
+    if (query.kind === 'next_turn') return this.#nextTurn(query);
+    if (query.kind === 'job') return this.#job(query.jobId, query);
+    return this.#modelCall(query.modelCallId, query);
   }
 
   async #nextTurn(query: Extract<ContextQuery, { kind: 'next_turn' }>): Promise<ContextSnapshot> {
@@ -124,17 +99,12 @@ export class ContextInspectionService {
         message: new SystemMessage(this.options.systemPrompt),
         text: this.options.systemPrompt,
       }],
-      fixedPrefix: {
-        systemPrompt: this.options.systemPrompt,
-        stableContext: undefined,
-        originalGoal: undefined,
-        currentInstruction: undefined,
-      },
+      fixedPrefix: { systemPrompt: this.options.systemPrompt },
       groups: facts.groups.map(group => ({
         group,
         segment: 'session_history',
         mustKeep: false,
-        priority: group.type === 'step_output' ? 80 : 40,
+        priority: 40,
       })),
       bundles: facts.bundles.map(bundle => ({
         bundle,
@@ -175,50 +145,24 @@ export class ContextInspectionService {
 
   async #job(jobId: string, query: ContextQuery): Promise<ContextSnapshot> {
     const job = await this.#requireJob(jobId);
-    if (job.strategy === 'planned') {
-      throw new Error(`Planned Job ${job.id} must be inspected through a StepRun or ModelCall.`);
-    }
     const originalGoal = await this.#originalGoal(job);
-    return this.#snapshot(query, job.sessionId, compileContext(
-      await this.#direct.load(job, originalGoal)
-    ), { basedOnLatestJobId: job.id });
-  }
-
-  async #stepRun(stepRunId: string, query: ContextQuery): Promise<ContextSnapshot> {
-    const stepRun = await this.options.store.getStepRun(stepRunId);
-    if (!stepRun) throw new Error(`StepRun ${JSON.stringify(stepRunId)} was not found.`);
-    const job = await this.#requireJob(stepRun.jobId);
-    const plan = await this.options.store.getPlanByJobId(job.id);
-    const steps = plan ? await this.options.store.listPlanSteps(plan.id) : [];
-    const step = steps.find(candidate => candidate.id === stepRun.stepId);
-    if (!step) throw new Error(`StepRun ${stepRun.id} has no PlanStep.`);
-    const originalGoal = await this.#originalGoal(job);
-    return this.#snapshot(query, job.sessionId, compileContext(await this.#step.load({
-      job, originalGoal, step, stepRun,
-    })), { basedOnLatestJobId: job.id });
+    return this.#snapshot(
+      query,
+      job.sessionId,
+      compileContext(await this.#jobs.load(job, originalGoal)),
+      { basedOnLatestJobId: job.id }
+    );
   }
 
   async #modelCall(modelCallId: string, query: ContextQuery): Promise<ContextSnapshot> {
     const call = await this.#modelCalls.load(modelCallId);
     const job = await this.#requireJob(call.jobId);
     const originalGoal = await this.#originalGoal(job);
-    let material: ContextMaterial;
-    if (call.stepRunId) {
-      const stepRun = await this.options.store.getStepRun(call.stepRunId);
-      if (!stepRun) throw new Error(`StepRun ${JSON.stringify(call.stepRunId)} was not found.`);
-      const plan = await this.options.store.getPlanByJobId(job.id);
-      const steps = plan ? await this.options.store.listPlanSteps(plan.id) : [];
-      const step = steps.find(candidate => candidate.id === stepRun.stepId);
-      if (!step) throw new Error(`StepRun ${stepRun.id} has no PlanStep.`);
-      material = await this.#step.load({
-        job, originalGoal, step, stepRun,
-        contextRulesVersion: call.inputManifest.contextRulesVersion,
-      });
-    } else {
-      material = await this.#direct.load(
-        job, originalGoal, call.inputManifest.contextRulesVersion
-      );
-    }
+    const material = await this.#jobs.load(
+      job,
+      originalGoal,
+      call.inputManifest.contextRulesVersion
+    );
     const built = this.#modelCalls.reconstruct(call, material);
     return this.#snapshot(query, job.sessionId, built, {
       basedOnLatestJobId: job.id,
@@ -253,16 +197,14 @@ export class ContextInspectionService {
       limits?: { maxContextTokens: number; reservedOutputTokens: number };
     } = {}
   ): ContextSnapshot {
-    const {
-      verification = { status: 'reconstructed' },
-      limits = this.options.model,
-      ...metadata
-    } = options;
+    const verification = options.verification ?? { status: 'reconstructed' as const };
+    const limits = options.limits ?? this.options.model;
     return {
       query,
       generatedAtMs: this.#clock.nowMs(),
       sessionId,
-      ...metadata,
+      ...(options.basedOnLatestJobId
+        ? { basedOnLatestJobId: options.basedOnLatestJobId } : {}),
       systemPromptVersion: built.inputManifest.systemPromptVersion,
       maxContextTokens: limits.maxContextTokens,
       reservedOutputTokens: limits.reservedOutputTokens,

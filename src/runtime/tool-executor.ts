@@ -20,7 +20,6 @@ export interface RuntimeToolContext {
   sessionId: string;
   jobId: string;
   sandboxRoot: string;
-  stepRunId?: string;
   attemptId: string;
   toolInvocationId: string;
   toolCallId: string;
@@ -31,6 +30,7 @@ export interface RuntimeToolContext {
 export interface RuntimeTool {
   tool: StructuredToolInterface;
   sideEffectLevel: AgentToolSideEffectLevel;
+  exclusive?: boolean;
   sensitiveArgumentPaths?: string[];
 }
 
@@ -107,7 +107,6 @@ export class ToolExecutor implements ToolExecutorPort {
       sessionId: request.target.sessionId,
       jobId: request.target.jobId,
       sandboxRoot: this.#sandboxRoot,
-      stepRunId: request.target.stepRunId,
       attemptId: request.target.attemptId,
       toolInvocationId: invocation.id,
       toolCallId: invocation.toolCallId,

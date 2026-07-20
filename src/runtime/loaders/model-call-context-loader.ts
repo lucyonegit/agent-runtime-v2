@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
+import { mapStoredMessagesToChatMessages } from '@langchain/core/messages';
 import type { AgentModelCall } from '../../domain/index.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import {
   compileContext,
   CONTEXT_RULES_VERSION,
-  LEGACY_CONTEXT_RULES_VERSION,
   type BuiltContext,
 } from '../context/context-compiler.js';
 import type { ContextMaterial } from '../context/context-material.js';
+import { canonicalJson } from '../transaction-commands.js';
 
 export type ModelCallContextStore = Pick<AgentStore, 'getModelCall'>;
 
@@ -30,8 +31,7 @@ export class ModelCallContextLoader {
   }
 
   reconstruct(call: AgentModelCall, material: ContextMaterial): BuiltContext {
-    if (![LEGACY_CONTEXT_RULES_VERSION, CONTEXT_RULES_VERSION]
-      .includes(call.inputManifest.contextRulesVersion)) {
+    if (call.inputManifest.contextRulesVersion !== CONTEXT_RULES_VERSION) {
       throw new ContextSnapshotUnreconstructableError(
         `ModelCall ${JSON.stringify(call.id)} uses unsupported context rules `
         + `${JSON.stringify(call.inputManifest.contextRulesVersion)}.`
@@ -39,8 +39,7 @@ export class ModelCallContextLoader {
     }
     const groupIds = new Set(call.inputManifest.messageGroupIds);
     const summaryIds = new Set(call.inputManifest.summaryIds);
-    const isV6 = call.inputManifest.contextRulesVersion === CONTEXT_RULES_VERSION;
-    const sourceGroups = isV6 ? material.groups : (material.legacyGroups ?? material.groups);
+    const sourceGroups = material.groups;
     const availableGroupIds = new Set(sourceGroups.map(item => item.group.id));
     const availableSummaryIds = new Set(material.summaries.map(item => item.id));
     const missingGroupIds = [...groupIds].filter(id => !availableGroupIds.has(id));
@@ -53,21 +52,19 @@ export class ModelCallContextLoader {
     }
     const selectedBundleIds = new Set(call.inputManifest.selectedBundleIds ?? []);
     const selectedGroups = sourceGroups.filter(item => groupIds.has(item.group.id));
-    const built = compileContext({
+    const reconstructed = compileContext({
       ...material,
       groups: selectedGroups,
-      ...(isV6 ? {
-        bundles: (material.bundles ?? [])
-          .filter(item => selectedBundleIds.has(item.bundle.id))
-          .map(item => ({
-            ...item,
-            mustKeep: true,
-            bundle: {
-              ...item.bundle,
-              groups: item.bundle.groups.filter(group => groupIds.has(group.id)),
-            },
-          })),
-      } : { bundles: undefined }),
+      bundles: (material.bundles ?? [])
+        .filter(item => selectedBundleIds.has(item.bundle.id))
+        .map(item => ({
+          ...item,
+          mustKeep: true,
+          bundle: {
+            ...item.bundle,
+            groups: item.bundle.groups.filter(group => groupIds.has(group.id)),
+          },
+        })),
       summaries: material.summaries.filter(item => summaryIds.has(item.id)),
       model: {
         provider: call.provider,
@@ -86,11 +83,26 @@ export class ModelCallContextLoader {
         messageThreshold: Number.MAX_SAFE_INTEGER,
       },
     });
-    this.verify(call, built);
-    return built;
+    this.verifyManifest(call, reconstructed);
+    const serialized = canonicalJson(call.inputMessages);
+    if (createHash('sha256').update(serialized).digest('hex') !== call.inputChecksum) {
+      throw new ContextSnapshotUnreconstructableError(
+        `ModelCall ${JSON.stringify(call.id)} persisted input checksum is invalid.`
+      );
+    }
+    const messages = mapStoredMessagesToChatMessages(call.inputMessages);
+    return {
+      ...reconstructed,
+      messages,
+      inputManifest: call.inputManifest,
+      estimatedInputTokens: call.estimatedInputTokens,
+      annotations: messages.map((_, index) => (
+        reconstructed.annotations[index] ?? { groupId: `model_call:${call.id}:input:${index}` }
+      )),
+    };
   }
 
-  private verify(call: AgentModelCall, built: BuiltContext): void {
+  private verifyManifest(call: AgentModelCall, built: BuiltContext): void {
     const manifest = built.inputManifest;
     if (
       manifest.fixedPrefixChecksum !== call.inputManifest.fixedPrefixChecksum
@@ -102,13 +114,6 @@ export class ModelCallContextLoader {
       || JSON.stringify(manifest.truncatedToolResultMessageIds ?? [])
         !== JSON.stringify(call.inputManifest.truncatedToolResultMessageIds ?? [])
     ) {
-      throw new ContextSnapshotUnreconstructableError(
-        `ModelCall ${JSON.stringify(call.id)} cannot be reconstructed from its persisted manifest.`
-      );
-    }
-    const serialized = JSON.stringify(built.messages.map(message => message.toDict()));
-    const checksum = createHash('sha256').update(serialized).digest('hex');
-    if (checksum !== call.inputChecksum) {
       throw new ContextSnapshotUnreconstructableError(
         `ModelCall ${JSON.stringify(call.id)} cannot be reconstructed from its persisted manifest.`
       );

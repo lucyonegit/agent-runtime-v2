@@ -1,14 +1,11 @@
 import { Pool, type PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  AIMessage,
   AIMessageChunk,
   type BaseMessage,
   coerceMessageLikeToMessage,
 } from '@langchain/core/messages';
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
-import { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import type { ChatResult } from '@langchain/core/outputs';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { JobCoordinator } from '../src/orchestration/lifecycle/job-coordinator.js';
@@ -19,19 +16,9 @@ import { AgentRunner } from '../src/runtime/agent-runner.js';
 import { RuntimeEventWriter } from '../src/runtime/runtime-event-writer.js';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
 import { checksumToolArguments } from '../src/runtime/transaction-commands.js';
-import { StepRunner } from '../src/planner/step-runner.js';
-import { PlanEngine } from '../src/planner/plan-engine.js';
-import { PlanSummarizer } from '../src/planner/plan-summarizer.js';
 import { SessionView } from '../src/view/session-view.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
-import { JobExecutionOrchestrator } from '../src/orchestration/execution/job-execution-orchestrator.js';
-import { createDefaultPlanEngineFactory } from '../src/server/runtime/default-planner.js';
-import {
-  JOB_EXECUTION_SYSTEM_PROMPT,
-  RUNTIME_SYSTEM_PROMPT_VERSION,
-  STEP_EXECUTION_SYSTEM_PROMPT,
-} from '../src/server/runtime/runtime-context-config.js';
 import type {
   RuntimeTool,
   RuntimeToolContext,
@@ -84,7 +71,6 @@ describe('PostgresAgentStore Job transactions', () => {
     expect(result.job).toMatchObject({
       id: 'job_create',
       sessionId: 'session_create',
-      stage: 'routing',
       status: 'created',
       version: 0,
     });
@@ -553,7 +539,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const runner = new AgentRunner({ loop, writer, coordinator });
     let outputNo = 1;
 
-    const result = await runner.runDirect({
+    const result = await runner.runJob({
       job: claimed,
       messages: [],
       tools: [definition],
@@ -567,8 +553,6 @@ describe('PostgresAgentStore Job transactions', () => {
       type: 'completed',
       job: {
         id: 'job_direct',
-        strategy: 'direct',
-        stage: 'direct_execution',
         status: 'completed',
         version: 2,
       },
@@ -597,7 +581,7 @@ describe('PostgresAgentStore Job transactions', () => {
     ]);
     const directView = await new SessionView(store, { nowMs: () => 50 }).load('session_direct');
     expect(directView).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       generatedAtMs: 50,
       cursor: { latestMessageRowId: 4 },
       timeline: {
@@ -606,7 +590,6 @@ describe('PostgresAgentStore Job transactions', () => {
           { type: 'tool_exchange', status: 'completed' },
           { type: 'message' },
         ],
-        groupedByStep: [{ type: 'job_group', job: { id: 'job_direct' } }],
       },
     });
   });
@@ -675,7 +658,7 @@ describe('PostgresAgentStore Job transactions', () => {
       }),
     });
 
-    const result = await runner.runDirect({
+    const result = await runner.runJob({
       job: claimed,
       messages: [],
       tools: [runtimeLookup.tool],
@@ -785,7 +768,7 @@ describe('PostgresAgentStore Job transactions', () => {
       writer,
       coordinator,
     });
-    const waiting = await waitingRunner.runDirect({
+    const waiting = await waitingRunner.runJob({
       job: claimed,
       messages: [],
       tools: [definition],
@@ -829,7 +812,7 @@ describe('PostgresAgentStore Job transactions', () => {
       writer,
       coordinator,
     });
-    const resumed = await resumeRunner.runDirect({
+    const resumed = await resumeRunner.runJob({
       job: answered.job,
       messages: [],
       tools: [definition],
@@ -862,230 +845,110 @@ describe('PostgresAgentStore Job transactions', () => {
     ]);
   });
 
-  it('advances a two-step Plan with explicit StepRun retry into plan_final completion', async () => {
-    await store.createSession({ id: 'session_plan', nowMs: 10 });
-    await createJob(store, 'session_plan', 'job_plan', 'message_plan_goal', 20);
-    let job = await store.claimJob({
-      jobId: 'job_plan',
-      expectedVersion: 0,
-      workerId: 'worker_plan',
-      attemptId: 'attempt_plan',
-      nowMs: 30,
-      leaseUntilMs: 200,
+  it('applies versioned Plan snapshots inside the single Job loop', async () => {
+    await store.createSession({ id: 'session_plan_tool', nowMs: 10 });
+    await createJob(store, 'session_plan_tool', 'job_plan_tool', 'message_plan_tool', 20);
+    const job = await store.claimJob({
+      jobId: 'job_plan_tool', expectedVersion: 0, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', nowMs: 30, leaseUntilMs: 200,
     });
-    job = await store.routeJob({
-      jobId: job.id,
-      workerId: 'worker_plan',
-      attemptId: 'attempt_plan',
-      strategy: 'planned',
-      nowMs: 31,
-    });
-    expect(job).toMatchObject({ strategy: 'planned', stage: 'planning', version: 2 });
-    const createdPlan = await store.createPlan({
-      sessionId: 'session_plan',
-      jobId: 'job_plan',
-      workerId: 'worker_plan',
-      attemptId: 'attempt_plan',
-      planId: 'plan_work',
-      messageId: 'message_plan_created',
-      title: 'Two steps',
-      goal: 'finish both',
+    const created = await store.applyPlanUpdate({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 0,
+      title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 31,
+      metadata: { lastToolCallId: 'call_plan_1' },
       steps: [
-        { id: 'step_one', title: 'One', instruction: 'do one' },
-        { id: 'step_two', title: 'Two', instruction: 'do two' },
+        { id: 'plan_step_research', key: 'research', position: 0, title: 'Research', status: 'in_progress' },
+        { id: 'plan_step_write', key: 'write', position: 1, title: 'Write', status: 'pending' },
       ],
-      nowMs: 32,
     });
-    job = createdPlan.job;
-    expect(job).toMatchObject({ stage: 'step_execution', version: 3 });
+    expect(created).toMatchObject({
+      plan: { id: 'plan_tool', status: 'active', version: 0 },
+      steps: [{ key: 'research', status: 'in_progress' }, { key: 'write', status: 'pending' }],
+    });
+    const replayedCreate = await store.applyPlanUpdate({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 0,
+      title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 32,
+      metadata: { lastToolCallId: 'call_plan_1' },
+      steps: [
+        { id: 'plan_step_research', key: 'research', position: 0, title: 'Research', status: 'in_progress' },
+        { id: 'plan_step_write', key: 'write', position: 1, title: 'Write', status: 'pending' },
+      ],
+    });
+    expect(replayedCreate.plan).toMatchObject({ version: 0, updatedAtMs: 31 });
 
-    let firstRun = await store.createStepRun({
-      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
-      attemptId: 'attempt_plan', planId: 'plan_work', stepId: 'step_one',
-      stepRunId: 'run_one_1', maxRunsPerStep: 2, nowMs: 33,
-    });
-    expect(firstRun.stepRun).toMatchObject({ runNo: 1, status: 'running' });
-    const firstOutput = await store.commitStepOutput({
-      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
-      attemptId: 'attempt_plan', stepRunId: 'run_one_1',
-      messageId: 'message_step_one', outputId: 'output_step_one',
-      content: 'step one complete', structuredOutput: { schemaVersion: 1, summary: 'one' }, nowMs: 34,
-    });
-    expect(firstOutput).toMatchObject({
-      hasPendingSteps: true,
-      step: { status: 'completed' },
-      stepRun: { status: 'completed' },
-      job: { stage: 'step_execution', version: 5 },
-    });
-
-    const secondRun = await store.createStepRun({
-      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
-      attemptId: 'attempt_plan', planId: 'plan_work', stepId: 'step_two',
-      stepRunId: 'run_two_1', maxRunsPerStep: 2, nowMs: 35,
-    });
-    const failedForRetry = await store.failStepRun({
-      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
-      attemptId: 'attempt_plan', stepRunId: secondRun.stepRun.id,
-      error: { code: 'invalid_step_output', message: 'repair failed' },
-      retryStep: true, nowMs: 36,
-    });
-    expect(failedForRetry).toMatchObject({
-      job: { status: 'running', stage: 'step_execution', version: 7 },
-      step: { status: 'pending' },
-      stepRun: { status: 'failed', runNo: 1 },
-    });
-    const retryRun = await store.createStepRun({
-      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
-      attemptId: 'attempt_plan', planId: 'plan_work', stepId: 'step_two',
-      stepRunId: 'run_two_2', maxRunsPerStep: 2, nowMs: 37,
-    });
-    expect(retryRun.stepRun).toMatchObject({ runNo: 2, status: 'running' });
-    const lastOutput = await store.commitStepOutput({
-      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
-      attemptId: 'attempt_plan', stepRunId: 'run_two_2',
-      messageId: 'message_step_two', outputId: 'output_step_two',
-      content: 'step two complete', structuredOutput: { schemaVersion: 1, summary: 'two' }, nowMs: 38,
-    });
-    expect(lastOutput).toMatchObject({
-      hasPendingSteps: false,
-      plan: { status: 'completed' },
-      job: { stage: 'finalizing', version: 9 },
-    });
-    const final = await store.completeJobWithFinalMessage({
-      sessionId: 'session_plan', jobId: 'job_plan', workerId: 'worker_plan',
-      attemptId: 'attempt_plan', outputId: 'output_plan_final',
-      messageId: 'message_plan_final', content: 'all steps complete',
-      messageType: 'plan_final', nowMs: 39,
-    });
-    expect(final).toMatchObject({
-      job: { status: 'completed', strategy: 'planned', stage: 'finalizing', version: 10 },
-      message: { messageType: 'plan_final' },
-    });
-    expect((await store.listJobStepRuns('job_plan')).map(run => [run.id, run.runNo, run.status]))
-      .toEqual([
-        ['run_one_1', 1, 'completed'],
-        ['run_two_1', 1, 'failed'],
-        ['run_two_2', 2, 'completed'],
-      ]);
-    const planView = await new SessionView(store).load('session_plan');
-    const planJobGroup = planView.timeline.groupedByStep[0];
-    expect(planJobGroup.items.filter(item => item.type === 'step_group').map(item => (
-      item.type === 'step_group' ? [item.step?.id, item.stepRun?.runNo, item.status] : []
-    ))).toEqual([
-      ['step_one', 1, 'completed'],
-      ['step_two', 1, 'failed'],
-      ['step_two', 2, 'completed'],
-    ]);
-  });
-
-  it('repairs one invalid StepOutput, commits only validated JSON, and summarizes the Plan', async () => {
-    await store.createSession({ id: 'session_step_runner', nowMs: 10 });
-    await createJob(store, 'session_step_runner', 'job_step_runner', 'message_step_goal', 20);
-    let job = await store.claimJob({
-      jobId: 'job_step_runner', expectedVersion: 0, workerId: 'worker_step_runner',
-      attemptId: 'attempt_step_runner', nowMs: 30, leaseUntilMs: 200,
-    });
-    job = await store.routeJob({
-      jobId: job.id, workerId: 'worker_step_runner', attemptId: 'attempt_step_runner',
-      strategy: 'planned', nowMs: 31,
-    });
-    const plan = await store.createPlan({
-      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_step_runner',
-      attemptId: 'attempt_step_runner', planId: 'plan_step_runner',
-      messageId: 'message_step_plan', title: 'One step', goal: 'finish',
-      steps: [{ id: 'step_runner_step', title: 'Step', instruction: 'Do it' }], nowMs: 32,
-    });
-    const started = await store.createStepRun({
-      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_step_runner',
-      attemptId: 'attempt_step_runner', planId: plan.plan.id, stepId: plan.steps[0].id,
-      stepRunId: 'run_step_runner', maxRunsPerStep: 2, nowMs: 33,
-    });
-    let writerMessageNo = 1;
-    const writer = new RuntimeEventWriter({
-      store,
-      workerId: 'worker_step_runner',
-      tools: [],
-      ids: {
-        eventId: () => 'step_event',
-        messageId: () => `step_writer_message_${writerMessageNo++}`,
-        toolInvocationId: () => 'unused_invocation',
-        userInputRequestId: () => 'unused_input',
-      },
-      clock: { nowMs: () => 34 },
-    });
-    let repairCalls = 0;
-    const runner = new StepRunner({
-      loop: new AgentLoop({
-        streaming: false,
-        model: new TestChatRunnable(async () => new AIMessageChunk('not-json')),
-        clock: { nowMs: () => 34 },
-      }),
-      writer,
-      store,
-      repair: {
-        repair: async () => {
-          repairCalls += 1;
-          return {
-            schemaVersion: 1,
-            summary: 'validated after repair',
-            artifacts: [],
-            evidence: [],
-            unresolved: [],
-          };
+    const advanced = await store.applyPlanUpdate({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 0,
+      title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 32,
+      metadata: { lastToolCallId: 'call_plan_2' },
+      steps: [
+        {
+          id: 'plan_step_research', key: 'research', position: 0, title: 'Research',
+          status: 'completed', result: { summary: 'Sources verified' },
         },
-      },
+        { id: 'plan_step_write', key: 'write', position: 1, title: 'Write', status: 'in_progress' },
+      ],
     });
-    const stepResult = await runner.run({
-      job: started.job,
-      stepRun: started.stepRun,
-      messages: [],
-      tools: [],
-      toolExecutor: { execute: async () => { throw new Error('no tools expected'); } },
-      outputIdFactory: () => 'output_repaired_step',
-      limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 100 },
+    expect(advanced).toMatchObject({
+      plan: { status: 'active', version: 1 },
+      steps: [
+        { key: 'research', status: 'completed', result: { summary: 'Sources verified' } },
+        { key: 'write', status: 'in_progress' },
+      ],
     });
-    expect(repairCalls).toBe(1);
-    expect(stepResult).toMatchObject({
-      type: 'completed',
-      output: { schemaVersion: 1, summary: 'validated after repair' },
-      job: { stage: 'finalizing' },
-    });
-    if (stepResult.type !== 'completed') throw new Error('expected completed step');
-    const stepMessages = await store.listSessionMessages('session_step_runner');
-    const committedOutput = stepMessages.find(message => message.messageType === 'step_output')!;
-    expect(JSON.parse(committedOutput.content)).toMatchObject({
-      schemaVersion: 1,
-      summary: 'validated after repair',
-    });
-    expect(committedOutput.content).not.toContain('not-json');
+    await expect(store.applyPlanUpdate({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 1,
+      title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 33,
+      steps: [
+        { id: 'plan_step_research', key: 'research', position: 0, title: 'Research', status: 'pending' },
+        { id: 'plan_step_write', key: 'write', position: 1, title: 'Write', status: 'in_progress' },
+      ],
+    })).rejects.toMatchObject({ code: 'INVALID_PLAN_STATE' });
 
-    const summarize = vi.fn(async ({ outputs }) => `final:${outputs[0].output.summary}`);
-    const engine = new PlanEngine({
-      store,
-      workerId: 'worker_step_runner',
-      planner: {
-        route: async () => 'planned',
-        createPlan: async () => ({ title: 'unused', steps: [] }),
-      },
-      summarizer: new PlanSummarizer({ summarize }),
-      ids: {
-        planId: () => 'unused_plan', stepId: () => 'unused_step',
-        stepRunId: () => 'unused_run', messageId: () => 'message_step_final',
-        outputId: () => 'output_step_final',
-      },
-      clock: { nowMs: () => 35 },
+    const completed = await store.applyPlanUpdate({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 1,
+      title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 34,
+      metadata: { lastToolCallId: 'call_plan_3' },
+      steps: [
+        {
+          id: 'plan_step_research', key: 'research', position: 0, title: 'Research',
+          status: 'completed', result: { summary: 'Sources verified' },
+        },
+        {
+          id: 'plan_step_write', key: 'write', position: 1, title: 'Write',
+          status: 'completed', result: { summary: 'Report written' },
+        },
+      ],
     });
-    const final = await engine.finalize(
-      stepResult.job,
-      'finish',
-      '2026-07-11',
-      'Asia/Shanghai'
-    );
-    expect(final).toMatchObject({
-      job: { status: 'completed', stage: 'finalizing' },
-      message: { messageType: 'plan_final', content: 'final:validated after repair' },
+    expect(completed.plan).toMatchObject({ status: 'completed', version: 2 });
+    await expect(store.applyPlanUpdate({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 2,
+      title: 'Reopen completed work', goal: 'hello job_plan_tool', nowMs: 35,
+      metadata: { lastToolCallId: 'call_plan_4' },
+      steps: [
+        {
+          id: 'plan_step_research', key: 'research', position: 0, title: 'Research',
+          status: 'completed', result: { summary: 'Sources verified' },
+        },
+        {
+          id: 'plan_step_write', key: 'write', position: 1, title: 'Write',
+          status: 'completed', result: { summary: 'Report written' },
+        },
+      ],
+    })).rejects.toMatchObject({ code: 'INVALID_PLAN_STATE' });
+    await expect(store.completeJobWithFinalMessage({
+      sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
+      attemptId: 'attempt_plan_tool', outputId: 'output_plan_tool',
+      messageId: 'message_plan_tool_final', content: 'Report complete', nowMs: 36,
+    })).resolves.toMatchObject({
+      job: { status: 'completed' },
+      message: { messageType: 'assistant_message', channel: 'final' },
     });
-    expect(summarize).toHaveBeenCalledTimes(1);
   });
 
   it('audits ModelCalls, accumulates usage, abandons orphaned calls, and replaces summaries', async () => {
@@ -1111,7 +974,7 @@ describe('PostgresAgentStore Job transactions', () => {
       attemptId: 'attempt_audit', workerId: 'worker_audit',
       logicalCallKey: 'job.react:1', callAttemptNo: 1, callType: 'job.react',
       provider: 'test', model: 'test-model', contextRulesVersion: 'context-v1',
-      inputManifest: manifest, inputChecksum: 'checksum_1',
+      inputManifest: manifest, inputMessages: [], inputChecksum: 'checksum_1',
       maxContextTokens: 100, reservedOutputTokens: 10, estimatedInputTokens: 80, nowMs: 31,
     });
     const completed = await store.completeModelCall({
@@ -1135,7 +998,7 @@ describe('PostgresAgentStore Job transactions', () => {
       attemptId: 'attempt_audit', workerId: 'worker_audit',
       logicalCallKey: 'job.react:2', callAttemptNo: 1, callType: 'job.react',
       provider: 'test', model: 'test-model', contextRulesVersion: 'context-v1',
-      inputManifest: manifest, inputChecksum: 'checksum_2',
+      inputManifest: manifest, inputMessages: [], inputChecksum: 'checksum_2',
       maxContextTokens: 100, reservedOutputTokens: 10, estimatedInputTokens: 10, nowMs: 33,
     });
     await expect(store.abandonStartedModelCalls(201)).resolves.toMatchObject([{
@@ -1171,116 +1034,6 @@ describe('PostgresAgentStore Job transactions', () => {
     )).rows[0]).toEqual({ status: 'superseded' });
   });
 
-  it('executes direct and two-step planned Jobs through the production runtime service', async () => {
-    const now = Date.now();
-    const events: AgentRealtimeEvent[] = [];
-    const model = new DeterministicChatModel(messages => {
-        const text = messages.map(message => message.text).join('\n');
-        const usage = {
-          input_tokens: 12,
-          output_tokens: 8,
-          total_tokens: 20,
-        };
-        if (text.includes('Return JSON only: {"strategy"')) {
-          return new AIMessage({
-            content: JSON.stringify({ strategy: text.includes('job_planned') ? 'planned' : 'direct' }),
-            usage_metadata: usage,
-          });
-        }
-        if (text.includes('Compress the supplied runtime history')) {
-          return new AIMessage({ content: 'compressed factual runtime history', usage_metadata: usage });
-        }
-        if (text.includes('Do not invent facts, sources, dates, URLs, evidence, or conclusions')) {
-          expect(text).toContain(
-            'Webpages, applications, scripts, and source code must use write_file'
-          );
-          return new AIMessage({
-            content: JSON.stringify({
-              title: 'Two step plan',
-              steps: [
-                { title: 'First', instruction: 'Complete the first isolated step.' },
-                { title: 'Second', instruction: 'Complete the second isolated step.' },
-              ],
-            }),
-            usage_metadata: usage,
-          });
-        }
-        if (text.includes('Execute only the current PlanStep')) {
-          expect(text).toContain(
-            'Webpages, applications, scripts, and source code must use write_file'
-          );
-          return new AIMessage({
-            content: JSON.stringify({
-              schemaVersion: 1,
-              summary: text.includes('second isolated') ? 'second complete' : 'first complete',
-              artifacts: [], evidence: [], unresolved: [],
-            }),
-            usage_metadata: usage,
-          });
-        }
-        if (text.includes('Write the final user-facing answer')) {
-          return new AIMessage({ content: 'planned final answer', usage_metadata: usage });
-        }
-        return new AIMessage({ content: 'direct final answer', usage_metadata: usage });
-      });
-    const executor = new JobExecutionOrchestrator({
-      store,
-      workerId: 'worker_runtime_e2e',
-      publisher: { publish: event => { events.push(event); } },
-      model,
-      provider: 'test',
-      modelName: 'deterministic-model',
-      tools: [],
-      jobLeaseMs: 60_000,
-      jobHeartbeatMs: 10_000,
-      compressionMessageThreshold: 1,
-      jobSystemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
-      stepSystemPrompt: STEP_EXECUTION_SYSTEM_PROMPT,
-      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
-      planEngineFactory: createDefaultPlanEngineFactory({
-        store,
-        workerId: 'worker_runtime_e2e',
-        publisher: { publish: event => { events.push(event); } },
-      }),
-    });
-
-    await store.createSession({ id: 'session_runtime_e2e', nowMs: now });
-    for (const id of ['job_direct', 'job_planned']) {
-      await createJob(store, 'session_runtime_e2e', id, `message_${id}`, now + 1);
-      const claimed = await store.claimJob({
-        jobId: id, expectedVersion: 0, workerId: 'worker_runtime_e2e',
-        attemptId: `attempt_${id}`, nowMs: now + 2, leaseUntilMs: now + 60_000,
-      });
-      expect(claimed.status).toBe('running');
-      await executor.execute(id);
-      expect(await store.getJob(id)).toMatchObject({ status: 'completed' });
-    }
-
-    const planned = await store.getPlanByJobId('job_planned');
-    expect(planned).toMatchObject({ status: 'completed', title: 'Two step plan' });
-    expect(await store.listPlanSteps(planned!.id)).toMatchObject([
-      { status: 'completed', outputMessageId: expect.any(String) },
-      { status: 'completed', outputMessageId: expect.any(String) },
-    ]);
-    expect(await store.listJobStepRuns('job_planned')).toMatchObject([
-      { runNo: 1, status: 'completed' },
-      { runNo: 1, status: 'completed' },
-    ]);
-    expect((await store.listSessionMessages('session_runtime_e2e')).at(-1)).toMatchObject({
-      messageType: 'plan_final', content: 'planned final answer',
-    });
-    expect(await store.getModelUsageStats('session_runtime_e2e')).toMatchObject({
-      totalModelCalls: 8,
-      totalActualInputTokens: 96,
-      totalActualOutputTokens: 64,
-      totalTokens: 160,
-    });
-    expect((await store.listModelCalls('job_planned')).some(call => call.callType === 'context.compress')).toBe(true);
-    expect(events.some(event => event.type === 'plan.upserted')).toBe(true);
-    expect(events.some(event => event.type === 'step_run.upserted')).toBe(true);
-    expect(events.some(event => event.type === 'model_usage.updated')).toBe(true);
-  });
-
   it('fails descendants atomically, preserves side-effect uncertainty, and creates retry as a new Job', async () => {
     await store.createSession({ id: 'session_fail', nowMs: 10 });
     await createJob(store, 'session_fail', 'job_fail', 'message_fail', 20);
@@ -1314,7 +1067,6 @@ describe('PostgresAgentStore Job transactions', () => {
       `select
          (select status from agent_plans where id = 'plan_fail') as plan_status,
          (select status from agent_plan_steps where id = 'step_fail') as step_status,
-         (select status from agent_step_runs where id = 'run_fail') as run_status,
          (select status from agent_tool_invocations where id = 'invocation_side') as side_status,
          (select error_code from agent_tool_invocations where id = 'invocation_side') as side_error_code,
          (select status from agent_tool_invocations where id = 'invocation_read') as read_status,
@@ -1323,7 +1075,6 @@ describe('PostgresAgentStore Job transactions', () => {
     expect(descendantStates.rows[0]).toEqual({
       plan_status: 'failed',
       step_status: 'failed',
-      run_status: 'failed',
       side_status: 'unknown',
       side_error_code: 'side_effect_status_unknown',
       read_status: 'cancelled',
@@ -1380,19 +1131,6 @@ class TestChatRunnable extends Runnable<BaseLanguageModelInput, AIMessageChunk> 
     options?: Partial<RunnableConfig>
   ): Promise<AIMessageChunk> {
     return this.handler(input, options);
-  }
-}
-
-class DeterministicChatModel extends BaseChatModel {
-  constructor(private readonly handler: (messages: BaseMessage[]) => AIMessage) {
-    super({});
-  }
-
-  _llmType(): string { return 'deterministic-test'; }
-
-  async _generate(messages: BaseMessage[]): Promise<ChatResult> {
-    const message = this.handler(messages);
-    return { generations: [{ text: message.text, message }] };
   }
 }
 
@@ -1534,25 +1272,19 @@ async function seedRunningDescendants(pool: Pool, attemptId: string): Promise<vo
     );
     await client.query(
       `insert into agent_plan_steps(
-         id, plan_id, position, title, instruction, status, version, created_at_ms, updated_at_ms
-       ) values ('step_fail', 'plan_fail', 0, 'Step', 'Do it', 'running', 0, 32, 32)`
-    );
-    await client.query(
-      `insert into agent_step_runs(
-         id, session_id, job_id, plan_id, step_id, run_no, status,
-         current_attempt_id, attempt_no, version, created_at_ms, updated_at_ms, started_at_ms
+         id, plan_id, key, position, title, description, status,
+         version, created_at_ms, updated_at_ms
        ) values (
-         'run_fail', 'session_fail', 'job_fail', 'plan_fail', 'step_fail', 1,
-         'running', $1, 1, 0, 33, 33, 33
-       )`,
-      [attemptId]
+         'step_fail', 'plan_fail', 'work', 0, 'Step', 'Do it', 'in_progress',
+         0, 32, 32
+       )`
     );
     await client.query(
       `insert into agent_messages(
-         id, session_id, job_id, plan_id, step_id, step_run_id, attempt_id,
+         id, session_id, job_id, plan_id, plan_step_id, attempt_id,
          role, message_type, visibility, channel, content, tool_calls, created_at_ms
        ) values (
-         'tool_calls_fail', 'session_fail', 'job_fail', 'plan_fail', 'step_fail', 'run_fail', $1,
+         'tool_calls_fail', 'session_fail', 'job_fail', 'plan_fail', 'step_fail', $1,
          'assistant', 'tool_call', 'ui', 'normal', '',
          '[{"id":"call_side","name":"write","args":{}},{"id":"call_read","name":"read","args":{}}]'::jsonb,
          34
@@ -1567,11 +1299,11 @@ async function seedRunningDescendants(pool: Pool, attemptId: string): Promise<vo
     }
     await client.query(
       `insert into agent_user_input_requests(
-         id, session_id, job_id, plan_id, step_id, step_run_id,
+         id, session_id, job_id, plan_id, plan_step_id,
          source, answer_mode, status, prompt, input_schema,
          version, created_at_ms, updated_at_ms
        ) values (
-         'input_fail', 'session_fail', 'job_fail', 'plan_fail', 'step_fail', 'run_fail',
+         'input_fail', 'session_fail', 'job_fail', 'plan_fail', 'step_fail',
          'agent', 'as_user_message', 'pending', 'Continue?', '{"type":"approval"}'::jsonb,
          0, 36, 36
        )`
@@ -1588,12 +1320,12 @@ async function insertRunningInvocation(
 ): Promise<void> {
   await client.query(
     `insert into agent_tool_invocations(
-       id, session_id, job_id, plan_id, step_id, step_run_id, attempt_id,
+       id, session_id, job_id, plan_id, plan_step_id, attempt_id,
        call_message_id, tool_call_id, tool_name, arguments, arguments_checksum,
        side_effect_level, idempotency_key, status, version,
        created_at_ms, started_at_ms, updated_at_ms
      ) values (
-       $1, 'session_fail', 'job_fail', 'plan_fail', 'step_fail', 'run_fail', $2,
+       $1, 'session_fail', 'job_fail', 'plan_fail', 'step_fail', $2,
        'tool_calls_fail', $3, $4, '{}'::jsonb, $1,
        $5, $1, 'running', 0,
        35, 35, 35

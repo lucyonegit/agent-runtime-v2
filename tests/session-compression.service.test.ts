@@ -94,7 +94,7 @@ function contextMaterial(bundles: TurnBundle[]): ContextMaterial {
     model: { provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500 },
     audit: {
       purpose: 'job_execution',
-      contextRulesVersion: 'job-step-run-context-v6',
+      contextRulesVersion: 'unified-job-react-context-v1',
       systemPromptVersion: 'test-v1',
     },
     compression: {
@@ -107,7 +107,7 @@ function bundle(jobId: string, rowId: number, terminal: boolean): TurnBundle {
   const message = messageFixture(jobId, rowId);
   return {
     id: `turn:${jobId}`,
-    type: 'direct_turn',
+    type: 'turn',
     sessionId: 'session_1',
     rootJobId: jobId,
     jobIds: [jobId],
@@ -128,7 +128,7 @@ function messageFixture(jobId: string, rowId: number): AgentMessage {
 
 function job(id: string, status: AgentJob['status']): AgentJob {
   return {
-    id, sessionId: 'session_1', stage: 'direct_execution', status, attemptNo: 1,
+    id, sessionId: 'session_1', status, attemptNo: 1,
     version: 1, createdAtMs: 4, updatedAtMs: 4,
   };
 }

@@ -18,8 +18,7 @@ export interface AgentToolInvocation {
   sessionId: string;
   jobId: string;
   planId?: string;
-  stepId?: string;
-  stepRunId?: string;
+  planStepId?: string;
   attemptId: string;
   callMessageId: string;
   resultMessageId?: string;

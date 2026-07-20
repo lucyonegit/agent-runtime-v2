@@ -1,81 +1,15 @@
-import type {
-  AgentJob,
-  AgentMessage,
-  AgentPlan,
-  AgentPlanStep,
-  AgentStepRun,
-  AgentToolInvocation,
-  AgentUserInputRequest,
-} from '../domain/index.js';
-import type {
-  FlatTimelineItem,
-  JobTimelineGroup,
-  StepTimelineGroup,
-} from './view-contract.js';
+import type { AgentMessage, AgentToolInvocation } from '../domain/index.js';
+import type { FlatTimelineItem } from './view-contract.js';
 
 export interface TimelineBuilderInput {
-  jobs: AgentJob[];
-  plans: AgentPlan[];
-  planSteps: AgentPlanStep[];
-  stepRuns: AgentStepRun[];
   messages: AgentMessage[];
   toolInvocations: AgentToolInvocation[];
-  userInputRequests: AgentUserInputRequest[];
 }
 
+/** Projects the canonical message sequence; plans are separate durable view data. */
 export class TimelineBuilder {
-  build(input: TimelineBuilderInput): {
-    flat: FlatTimelineItem[];
-    groupedByStep: JobTimelineGroup[];
-  } {
-    const flat = buildFlat(input.messages, input.toolInvocations);
-    const plansByJob = new Map(input.plans.map(plan => [plan.jobId, plan]));
-    const stepsByPlan = groupBy(input.planSteps, step => step.planId);
-    const runsByStep = groupBy(input.stepRuns, run => run.stepId);
-    const directItemsByJob = groupBy(
-      flat.filter(item => itemStepRunId(item) === undefined),
-      item => itemJobId(item)
-    );
-    const itemsByRun = groupBy(
-      flat.filter(item => itemStepRunId(item) !== undefined),
-      item => itemStepRunId(item)!
-    );
-    const groupedByStep = [...input.jobs]
-      .sort((left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id))
-      .map<JobTimelineGroup>(job => {
-        const items: Array<FlatTimelineItem | StepTimelineGroup> = [
-          ...(directItemsByJob.get(job.id) ?? []),
-        ];
-        const plan = plansByJob.get(job.id);
-        for (const step of [...(plan ? stepsByPlan.get(plan.id) ?? [] : [])]
-          .sort((left, right) => left.position - right.position)) {
-          const runs = [...(runsByStep.get(step.id) ?? [])]
-            .sort((left, right) => left.runNo - right.runNo);
-          if (runs.length === 0) {
-            items.push({
-              type: 'step_group',
-              jobId: job.id,
-              plan,
-              step,
-              status: step.status,
-              items: [],
-            });
-          }
-          for (const run of runs) {
-            items.push({
-              type: 'step_group',
-              jobId: job.id,
-              plan,
-              step,
-              stepRun: run,
-              status: run.status,
-              items: itemsByRun.get(run.id) ?? [],
-            });
-          }
-        }
-        return { type: 'job_group', job, items };
-      });
-    return { flat, groupedByStep };
+  build(input: TimelineBuilderInput): { flat: FlatTimelineItem[] } {
+    return { flat: buildFlat(input.messages, input.toolInvocations) };
   }
 }
 
@@ -118,18 +52,12 @@ function buildFlat(
 function aggregateToolStatus(invocations: AgentToolInvocation[]):
   'pending' | 'running' | 'waiting_user_input' | 'completed' | 'failed' | 'unknown' | 'cancelled' {
   const statuses = new Set(invocations.map(invocation => invocation.status));
-  for (const status of ['unknown', 'waiting_user_input', 'running', 'pending', 'failed', 'cancelled'] as const) {
+  for (const status of [
+    'unknown', 'waiting_user_input', 'running', 'pending', 'failed', 'cancelled',
+  ] as const) {
     if (statuses.has(status)) return status;
   }
   return 'completed';
-}
-
-function itemJobId(item: FlatTimelineItem): string {
-  return item.type === 'message' ? item.message.jobId : item.callMessage.jobId;
-}
-
-function itemStepRunId(item: FlatTimelineItem): string | undefined {
-  return item.type === 'message' ? item.message.stepRunId : item.callMessage.stepRunId;
 }
 
 function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {

@@ -4,12 +4,10 @@ import {
   type ContextQuery,
   type ContextInspectionStore,
 } from '../../orchestration/context-inspection.service.js';
-import { STEP_OUTPUT_INSTRUCTION } from '../../planner/planner-prompts.js';
 import type { RuntimeTool } from '../../runtime/tool-executor.js';
 import {
   JOB_EXECUTION_SYSTEM_PROMPT,
   RUNTIME_SYSTEM_PROMPT_VERSION,
-  WORKSPACE_TOOL_ROUTING_INSTRUCTION,
 } from '../runtime/runtime-context-config.js';
 import type { ContextPreviewMessage, ContextPreviewV1 } from './context-preview-contract.js';
 
@@ -41,7 +39,6 @@ export class ContextPreviewService {
       },
       systemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
       systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
-      stepSystemPrompt: `Execute only the current PlanStep. ${WORKSPACE_TOOL_ROUTING_INSTRUCTION} ${STEP_OUTPUT_INSTRUCTION}`,
       compressionMessageThreshold: options.compressionMessageThreshold ?? 50,
       clock: options.clock,
     });
@@ -53,10 +50,6 @@ export class ContextPreviewService {
 
   previewJob(jobId: string): Promise<ContextPreviewV1> {
     return this.#preview({ kind: 'job', jobId });
-  }
-
-  previewStepRun(stepRunId: string): Promise<ContextPreviewV1> {
-    return this.#preview({ kind: 'step_run', stepRunId });
   }
 
   previewModelCall(modelCallId: string): Promise<ContextPreviewV1> {

@@ -14,8 +14,7 @@ import {
   type TokenBudgetItem,
 } from './token-budget.js';
 
-export const LEGACY_CONTEXT_RULES_VERSION = 'job-step-run-context-v5';
-export const CONTEXT_RULES_VERSION = 'job-step-run-context-v6';
+export const CONTEXT_RULES_VERSION = 'unified-job-react-context-v1';
 
 export interface CompiledContext {
   messages: BaseMessage[];

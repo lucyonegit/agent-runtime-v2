@@ -9,11 +9,6 @@ export const AGENT_MESSAGE_TYPES = [
   'tool_call',
   'tool_result',
   'system_prompt',
-  'plan_created',
-  'plan_updated',
-  'step_instruction',
-  'step_output',
-  'plan_final',
   'progress',
   'error_notice',
   'code_artifact',
@@ -38,8 +33,7 @@ export interface AgentMessage {
   sessionId: string;
   jobId: string;
   planId?: string;
-  stepId?: string;
-  stepRunId?: string;
+  planStepId?: string;
   attemptId?: string;
   outputId?: string;
   role: AgentMessageRole;

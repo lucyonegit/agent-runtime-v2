@@ -64,53 +64,6 @@ export class ContextFormatter {
         ],
       };
     }
-    if (group.type === 'plan_definition') {
-      return {
-        messages: [new AIMessage({
-          content: JSON.stringify({
-            type: 'plan_definition',
-            plan: {
-              id: group.plan.id,
-              title: group.plan.title,
-              goal: group.plan.goal,
-              steps: group.steps.map(step => ({
-                id: step.id,
-                position: step.position,
-                title: step.title,
-                instruction: step.instruction,
-              })),
-            },
-          }),
-        })],
-        truncatedToolResultMessageIds: [],
-        annotations: [{ sourceMessageId: group.anchorMessage.id, projected: true }],
-      };
-    }
-    if (group.type === 'step_output' && group.output && group.step && group.stepRun) {
-      return {
-        messages: [new AIMessage({
-          content: JSON.stringify({
-            type: 'step_output',
-            step: {
-              id: group.step.id,
-              position: group.step.position,
-              title: group.step.title,
-            },
-            stepRunId: group.stepRun.id,
-            output: group.output,
-          }),
-        })],
-        truncatedToolResultMessageIds: [],
-        annotations: [{ sourceMessageId: group.message.id, projected: true }],
-      };
-    }
-    if (group.type === 'plan_final') {
-      return {
-        messages: [formatMessage(group.message)],
-        truncatedToolResultMessageIds: [],
-        annotations: [{ sourceMessageId: group.message.id }],
-      };
-    }
     return {
       messages: [formatMessage(group.messages[0])],
       truncatedToolResultMessageIds: [],

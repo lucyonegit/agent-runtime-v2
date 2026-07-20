@@ -1,10 +1,7 @@
-export const AGENT_CONTEXT_OWNER_TYPES = ['session', 'job', 'step_run'] as const;
+export const AGENT_CONTEXT_OWNER_TYPES = ['session', 'job'] as const;
 export const AGENT_CONTEXT_PURPOSES = [
   'conversation',
   'job_execution',
-  'step_execution',
-  'plan_final',
-  'code_execution',
 ] as const;
 
 export type AgentContextOwnerType = typeof AGENT_CONTEXT_OWNER_TYPES[number];
@@ -22,7 +19,6 @@ export interface AgentContextSummary {
   id: string;
   sessionId: string;
   jobId?: string;
-  stepRunId?: string;
   ownerType: AgentContextOwnerType;
   ownerId: string;
   purpose: AgentContextPurpose;

@@ -35,6 +35,83 @@ describe('AgentLoop with LangChain messages', () => {
     expect(run.result).toEqual({ type: 'completed', outputId: 'output_1', content: 'hello' });
   });
 
+  it('rejects a premature final answer and continues in the same ReAct loop', async () => {
+    let calls = 0;
+    const observedInputs: BaseLanguageModelInput[] = [];
+    const loop = new AgentLoop({
+      streaming: false,
+      model: invokeModel(input => {
+        observedInputs.push(input);
+        calls += 1;
+        return chunk(calls === 1 ? 'premature answer' : 'finished answer');
+      }),
+    });
+    const validateFinalAnswer = vi.fn(async () => calls === 1
+      ? { type: 'retry' as const, feedback: 'Complete the durable plan first.' }
+      : { type: 'accept' as const });
+
+    const run = await consume(loop.run(loopInput({ validateFinalAnswer })));
+
+    expect(run.events).toEqual([
+      {
+        type: LOOP_EVENT_TYPES.ModelOutputRejected,
+        outputId: 'output_1',
+        reason: 'Complete the durable plan first.',
+      },
+      {
+        type: LOOP_EVENT_TYPES.ModelOutputCompleted,
+        outputId: 'output_2',
+        content: 'finished answer',
+        toolCalls: [],
+        usage: undefined,
+      },
+    ]);
+    expect(run.result).toEqual({
+      type: 'completed', outputId: 'output_2', content: 'finished answer',
+    });
+    expect(validateFinalAnswer).toHaveBeenCalledTimes(2);
+    expect(Array.isArray(observedInputs[1]) && observedInputs[1].length).toBe(2);
+  });
+
+  it('corrects a mixed exclusive-tool batch without failing the Job', async () => {
+    let calls = 0;
+    const execute = vi.fn<ToolExecutorPort['execute']>(async ({ call }) => ({
+      type: 'completed', content: `${call.name}:done`,
+    }));
+    const loop = new AgentLoop({
+      streaming: false,
+      model: invokeModel(() => {
+        calls += 1;
+        if (calls === 1) {
+          return toolChunk([
+            { id: 'call_plan_bad', name: 'update_plan', args: {} },
+            { id: 'call_lookup_bad', name: 'lookup', args: {} },
+          ]);
+        }
+        if (calls === 2) {
+          return toolChunk([{ id: 'call_plan_ok', name: 'update_plan', args: {} }]);
+        }
+        return chunk('finished');
+      }),
+    });
+
+    const run = await consume(loop.run(loopInput({
+      tools: [toolDefinition('lookup'), toolDefinition('update_plan')],
+      exclusiveToolNames: new Set(['update_plan']),
+      toolExecutor: { execute },
+    })));
+
+    expect(run.events.map(event => event.type)).toEqual([
+      LOOP_EVENT_TYPES.ModelOutputRejected,
+      LOOP_EVENT_TYPES.ModelOutputCompleted,
+      LOOP_EVENT_TYPES.ToolResultCompleted,
+      LOOP_EVENT_TYPES.ModelOutputCompleted,
+    ]);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[0].call.id).toBe('call_plan_ok');
+    expect(run.result).toMatchObject({ type: 'completed', content: 'finished' });
+  });
+
   it('does not execute a tool until its AIMessage event has been consumed', async () => {
     let calls = 0;
     const execute = vi.fn<ToolExecutorPort['execute']>(async () => ({

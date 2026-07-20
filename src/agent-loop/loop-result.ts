@@ -4,6 +4,9 @@ export type LoopFailureCode =
   | 'max_tool_calls'
   | 'deadline_exceeded'
   | 'invalid_tool_arguments'
+  | 'context_build_error'
+  | 'model_protocol_error'
+  | 'invalid_plan_state'
   | 'model_error'
   | 'context_overflow';
 

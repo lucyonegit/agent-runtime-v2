@@ -7,6 +7,10 @@ import type {
 } from '../src/domain/index.js';
 import { CONTEXT_RULES_VERSION } from '../src/runtime/context/context-compiler.js';
 import {
+  JOB_EXECUTION_SYSTEM_PROMPT,
+  RUNTIME_SYSTEM_PROMPT_VERSION,
+} from '../src/server/runtime/runtime-context-config.js';
+import {
   ContextPreviewService,
   type ContextPreviewStore,
 } from '../src/server/debug/context-preview.service.js';
@@ -26,14 +30,14 @@ describe('ContextPreviewService', () => {
       query: { kind: 'next_turn', sessionId: 'session_1' },
       verification: { status: 'reconstructed' },
       contextRulesVersion: CONTEXT_RULES_VERSION,
-      systemPromptVersion: 'runtime-system-v2',
+      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
       limits: { maxContextTokens: 4_000, reservedOutputTokens: 200 },
     });
     expect(preview.messages).toEqual([
       {
         index: 0,
         type: 'system',
-        content: 'Act as a reliable tool-using agent. Complete the user goal. Webpages, applications, scripts, and source code must use write_file with paths under code/. Use write_article only for non-code prose articles and reports.',
+        content: JOB_EXECUTION_SYSTEM_PROMPT,
         source: { groupId: 'must_keep:system' },
       },
       {
@@ -104,17 +108,13 @@ describe('ContextPreviewService', () => {
     await expect(service.preview('missing')).rejects.toMatchObject({ code: 'SESSION_NOT_FOUND' });
   });
 
-  it('exposes job, StepRun and ModelCall inspection through the preview facade', async () => {
+  it('exposes Job and ModelCall inspection through the preview facade', async () => {
     const calls: unknown[] = [];
     const service = previewService({
       ...storeFixture(),
       getJob: async id => {
         calls.push({ kind: 'job', id });
         return completedJob;
-      },
-      getStepRun: async id => {
-        calls.push({ kind: 'step_run', id });
-        return undefined;
       },
       getModelCall: async id => {
         calls.push({ kind: 'model_call', id });
@@ -123,13 +123,11 @@ describe('ContextPreviewService', () => {
     });
 
     const jobPreview = await service.previewJob('job_1');
-    await expect(service.previewStepRun('run_1')).rejects.toThrow('StepRun "run_1" was not found.');
     await expect(service.previewModelCall('model_call_1'))
       .rejects.toThrow('ModelCall "model_call_1" was not found.');
 
     expect(jobPreview.query).toEqual({ kind: 'job', jobId: 'job_1' });
     expect(calls).toContainEqual({ kind: 'job', id: 'job_1' });
-    expect(calls).toContainEqual({ kind: 'step_run', id: 'run_1' });
     expect(calls).toContainEqual({ kind: 'model_call', id: 'model_call_1' });
   });
 });
@@ -157,16 +155,9 @@ function storeFixture(overrides: {
   return {
     getSession: async () => session,
     getJob: async () => jobs[0],
-    getStepRun: async () => undefined,
     getModelCall: async () => undefined,
-    getPlanByJobId: async () => undefined,
-    listPlanSteps: async () => [],
-    listJobStepRuns: async () => [],
     listSessionJobs: async () => jobs,
     listSessionMessages: async () => messages,
-    listSessionPlans: async () => [],
-    listSessionPlanSteps: async () => [],
-    listSessionStepRuns: async () => [],
     listSessionToolInvocations: async () => [toolInvocation],
     listActiveContextSummaries: async () => [],
   };
@@ -207,7 +198,7 @@ const sessionFixture: AgentSession = {
 };
 
 const completedJob: AgentJob = {
-  id: 'job_1', sessionId: 'session_1', strategy: 'direct', stage: 'direct_execution',
+  id: 'job_1', sessionId: 'session_1',
   status: 'completed', attemptNo: 1, version: 1, createdAtMs: 1, updatedAtMs: 4,
 };
 

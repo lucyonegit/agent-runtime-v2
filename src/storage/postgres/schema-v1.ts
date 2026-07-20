@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 
 export const AGENT_RUNTIME_SCHEMA_VERSION = 1;
-export const AGENT_RUNTIME_SCHEMA_NAME = 'job-step-run-canonical';
+export const AGENT_RUNTIME_SCHEMA_NAME = 'unified-job-react-canonical';
 
 export const AGENT_RUNTIME_SCHEMA_V1_SQL = String.raw`
 create table agent_schema_versions (
@@ -30,10 +30,6 @@ create table agent_jobs (
   retry_of_job_id text references agent_jobs(id) on delete set null,
   client_request_id text,
 
-  strategy text check (strategy is null or strategy in ('direct', 'planned')),
-  stage text not null check (
-    stage in ('routing', 'direct_execution', 'planning', 'step_execution', 'finalizing')
-  ),
   status text not null check (
     status in (
       'created',
@@ -94,7 +90,7 @@ create table agent_plans (
   title text not null,
   goal text not null,
   status text not null check (
-    status in ('draft', 'active', 'waiting_user_input', 'completed', 'failed', 'cancelled')
+    status in ('active', 'completed', 'failed', 'cancelled')
   ),
   version integer not null default 0 check (version >= 0),
   metadata jsonb,
@@ -109,13 +105,14 @@ create index idx_agent_plans_session
 create table agent_plan_steps (
   id text primary key,
   plan_id text not null references agent_plans(id) on delete cascade,
+  key text not null,
   position integer not null check (position >= 0),
   title text not null,
-  instruction text not null,
+  description text,
   status text not null check (
-    status in ('pending', 'running', 'waiting_user_input', 'completed', 'failed', 'cancelled')
+    status in ('pending', 'in_progress', 'completed', 'failed', 'skipped')
   ),
-  output_message_id text,
+  result jsonb,
   error_code text,
   error_message text,
   error_details jsonb,
@@ -124,63 +121,13 @@ create table agent_plan_steps (
   created_at_ms bigint not null,
   updated_at_ms bigint not null,
   completed_at_ms bigint,
-  unique (plan_id, position)
+  unique (plan_id, key),
+  unique (plan_id, position),
+  check (result is null or jsonb_typeof(result) = 'object')
 );
 
 create index idx_agent_plan_steps_status
   on agent_plan_steps(plan_id, status, position asc);
-
-create table agent_step_runs (
-  id text primary key,
-  session_id text not null references agent_sessions(id) on delete cascade,
-  job_id text not null references agent_jobs(id) on delete cascade,
-  plan_id text not null references agent_plans(id) on delete cascade,
-  step_id text not null references agent_plan_steps(id) on delete cascade,
-  run_no integer not null check (run_no > 0),
-
-  status text not null check (
-    status in (
-      'created',
-      'running',
-      'waiting_user_input',
-      'resuming',
-      'completed',
-      'failed',
-      'cancelled'
-    )
-  ),
-
-  current_attempt_id text,
-  attempt_no integer not null default 0 check (attempt_no >= 0),
-  output_message_id text,
-  error_code text,
-  error_message text,
-  error_details jsonb,
-  version integer not null default 0 check (version >= 0),
-  metadata jsonb,
-
-  created_at_ms bigint not null,
-  updated_at_ms bigint not null,
-  started_at_ms bigint,
-  completed_at_ms bigint,
-
-  unique (step_id, run_no),
-  check (
-    (status in ('completed', 'failed', 'cancelled') and completed_at_ms is not null)
-    or status not in ('completed', 'failed', 'cancelled')
-  )
-);
-
-create unique index uniq_agent_step_runs_active_step
-  on agent_step_runs(step_id)
-  where status in ('created', 'running', 'waiting_user_input', 'resuming');
-
-create unique index uniq_agent_step_runs_active_job
-  on agent_step_runs(job_id)
-  where status in ('created', 'running', 'waiting_user_input', 'resuming');
-
-create index idx_agent_step_runs_job
-  on agent_step_runs(job_id, created_at_ms asc, id asc);
 
 create table agent_messages (
   row_id bigserial primary key,
@@ -188,8 +135,7 @@ create table agent_messages (
   session_id text not null references agent_sessions(id) on delete cascade,
   job_id text not null references agent_jobs(id) on delete cascade,
   plan_id text references agent_plans(id) on delete set null,
-  step_id text references agent_plan_steps(id) on delete set null,
-  step_run_id text references agent_step_runs(id) on delete set null,
+  plan_step_id text references agent_plan_steps(id) on delete set null,
   attempt_id text,
   output_id text,
 
@@ -201,11 +147,6 @@ create table agent_messages (
       'tool_call',
       'tool_result',
       'system_prompt',
-      'plan_created',
-      'plan_updated',
-      'step_instruction',
-      'step_output',
-      'plan_final',
       'progress',
       'error_notice',
       'code_artifact'
@@ -247,22 +188,15 @@ create table agent_messages (
     or (message_type in (
       'assistant_message',
       'tool_call',
-      'plan_created',
-      'plan_updated',
-      'step_output',
-      'plan_final',
       'progress',
       'error_notice',
       'code_artifact'
     ) and role = 'assistant')
-    or (message_type in ('system_prompt', 'step_instruction') and role = 'system')
+    or (message_type = 'system_prompt' and role = 'system')
     or (message_type = 'tool_result' and role = 'tool')
   ),
   check (
     message_type <> 'system_prompt' or (role = 'system' and visibility = 'internal')
-  ),
-  check (
-    message_type <> 'step_instruction' or (role = 'system' and visibility = 'internal')
   )
 );
 
@@ -272,12 +206,8 @@ create index idx_agent_messages_session_cursor
 create index idx_agent_messages_job_cursor
   on agent_messages(job_id, row_id asc);
 
-create index idx_agent_messages_step_run_cursor
-  on agent_messages(step_run_id, row_id asc)
-  where step_run_id is not null;
-
 create index idx_agent_messages_plan_step
-  on agent_messages(plan_id, step_id, row_id asc)
+  on agent_messages(plan_id, plan_step_id, row_id asc)
   where plan_id is not null;
 
 create index idx_agent_messages_visible
@@ -287,23 +217,12 @@ create unique index uniq_agent_messages_job_output
   on agent_messages(job_id, output_id)
   where output_id is not null;
 
-alter table agent_plan_steps
-  add constraint fk_agent_plan_steps_output_message
-  foreign key (output_message_id) references agent_messages(id)
-  deferrable initially deferred;
-
-alter table agent_step_runs
-  add constraint fk_agent_step_runs_output_message
-  foreign key (output_message_id) references agent_messages(id)
-  deferrable initially deferred;
-
 create table agent_tool_invocations (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
   job_id text not null references agent_jobs(id) on delete cascade,
   plan_id text references agent_plans(id) on delete set null,
-  step_id text references agent_plan_steps(id) on delete set null,
-  step_run_id text references agent_step_runs(id) on delete set null,
+  plan_step_id text references agent_plan_steps(id) on delete set null,
   attempt_id text not null,
 
   call_message_id text not null references agent_messages(id) on delete restrict,
@@ -353,20 +272,19 @@ create index idx_agent_tool_invocations_recovery
   on agent_tool_invocations(status, updated_at_ms)
   where status in ('pending', 'running', 'unknown', 'waiting_user_input');
 
-create index idx_agent_tool_invocations_step_run
-  on agent_tool_invocations(step_run_id, created_at_ms asc)
-  where step_run_id is not null;
+create index idx_agent_tool_invocations_plan_step
+  on agent_tool_invocations(plan_step_id, created_at_ms asc)
+  where plan_step_id is not null;
 
 create table agent_user_input_requests (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
   job_id text not null references agent_jobs(id) on delete cascade,
   plan_id text references agent_plans(id) on delete set null,
-  step_id text references agent_plan_steps(id) on delete set null,
-  step_run_id text references agent_step_runs(id) on delete set null,
+  plan_step_id text references agent_plan_steps(id) on delete set null,
   tool_invocation_id text references agent_tool_invocations(id) on delete restrict,
 
-  source text not null check (source in ('tool', 'agent', 'planner', 'recovery')),
+  source text not null check (source in ('tool', 'agent', 'recovery')),
   answer_mode text not null check (answer_mode in ('as_tool_result', 'as_user_message')),
   status text not null check (status in ('pending', 'answered', 'cancelled', 'expired')),
 
@@ -410,22 +328,21 @@ create unique index uniq_agent_user_input_client_answer
 create index idx_agent_user_inputs_job_pending
   on agent_user_input_requests(job_id, status, created_at_ms asc);
 
-create index idx_agent_user_inputs_step_run_pending
-  on agent_user_input_requests(step_run_id, status, created_at_ms asc)
-  where step_run_id is not null;
+create index idx_agent_user_inputs_plan_step_pending
+  on agent_user_input_requests(plan_step_id, status, created_at_ms asc)
+  where plan_step_id is not null;
 
 create table agent_context_summaries (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
   job_id text references agent_jobs(id) on delete cascade,
-  step_run_id text references agent_step_runs(id) on delete cascade,
 
   owner_type text not null check (
-    owner_type in ('session', 'job', 'step_run')
+    owner_type in ('session', 'job')
   ),
   owner_id text not null,
   purpose text not null check (
-    purpose in ('conversation', 'job_execution', 'step_execution', 'plan_final', 'code_execution')
+    purpose in ('conversation', 'job_execution')
   ),
   context_rules_version text not null,
   summary_type text not null check (
@@ -460,9 +377,8 @@ create table agent_context_summaries (
 
   check (source_row_id_start <= source_row_id_end),
   check (
-    (owner_type = 'session' and owner_id = session_id and job_id is null and step_run_id is null)
-    or (owner_type = 'job' and owner_id = job_id and job_id is not null and step_run_id is null)
-    or (owner_type = 'step_run' and owner_id = step_run_id and step_run_id is not null)
+    (owner_type = 'session' and owner_id = session_id and job_id is null)
+    or (owner_type = 'job' and owner_id = job_id and job_id is not null)
   )
 );
 
@@ -489,19 +405,13 @@ create table agent_model_calls (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
   job_id text not null references agent_jobs(id) on delete cascade,
-  step_run_id text references agent_step_runs(id) on delete set null,
   attempt_id text not null,
 
   logical_call_key text not null,
   call_attempt_no integer not null check (call_attempt_no > 0),
   call_type text not null check (
     call_type in (
-      'planner.route',
-      'planner.create',
       'job.react',
-      'step.react',
-      'step.output_repair',
-      'plan.finalize',
       'context.compress'
     )
   ),
@@ -511,6 +421,7 @@ create table agent_model_calls (
   model text not null,
   context_rules_version text not null,
   input_manifest jsonb not null,
+  input_messages jsonb not null check (jsonb_typeof(input_messages) = 'array'),
   input_checksum text not null,
   max_context_tokens integer not null check (max_context_tokens > 0),
   reserved_output_tokens integer not null check (reserved_output_tokens >= 0),
@@ -549,10 +460,6 @@ create index idx_agent_model_calls_session
 
 create index idx_agent_model_calls_job
   on agent_model_calls(job_id, created_at_ms asc, id asc);
-
-create index idx_agent_model_calls_step_run
-  on agent_model_calls(step_run_id, created_at_ms asc, id asc)
-  where step_run_id is not null;
 
 create index idx_agent_model_calls_incomplete
   on agent_model_calls(status, created_at_ms asc)

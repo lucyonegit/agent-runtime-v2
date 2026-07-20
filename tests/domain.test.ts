@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   ACTIVE_JOB_STATUSES,
-  ACTIVE_STEP_RUN_STATUSES,
   AGENT_CONTEXT_OWNER_TYPES,
   AGENT_CONTEXT_PURPOSES,
   AGENT_MESSAGE_CHANNELS,
@@ -26,12 +25,6 @@ describe('canonical runtime domain', () => {
 
   it('defines database-active statuses consistently', () => {
     expect(ACTIVE_JOB_STATUSES).toEqual([
-      'created',
-      'running',
-      'waiting_user_input',
-      'resuming',
-    ]);
-    expect(ACTIVE_STEP_RUN_STATUSES).toEqual([
       'created',
       'running',
       'waiting_user_input',
@@ -63,18 +56,15 @@ describe('canonical runtime domain', () => {
   });
 
   it('uses the final context owner and purpose dictionaries', () => {
-    expect(AGENT_CONTEXT_OWNER_TYPES).toEqual(['session', 'job', 'step_run']);
+    expect(AGENT_CONTEXT_OWNER_TYPES).toEqual(['session', 'job']);
     expect(AGENT_CONTEXT_PURPOSES).toEqual([
       'conversation',
       'job_execution',
-      'step_execution',
-      'plan_final',
-      'code_execution',
     ]);
   });
 
   it('uses stable model-call and realtime event dictionaries', () => {
-    expect(AGENT_MODEL_CALL_TYPES).toContain('step.output_repair');
+    expect(AGENT_MODEL_CALL_TYPES).toEqual(['job.react', 'context.compress']);
     expect(AGENT_MODEL_CALL_TYPES).toContain('context.compress');
     expect(AGENT_MODEL_CALL_TYPES).not.toContain('code.react');
     expect(AGENT_REALTIME_ENTITY_EVENT_TYPES).toEqual([
@@ -82,7 +72,6 @@ describe('canonical runtime domain', () => {
       'job.upserted',
       'plan.upserted',
       'plan_step.upserted',
-      'step_run.upserted',
       'tool_invocation.upserted',
       'user_input.upserted',
       'model_usage.updated',
