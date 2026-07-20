@@ -128,7 +128,7 @@ export interface CancelJobInput {
   nowMs: number;
 }
 
-export interface PendingToolInvocationInput {
+interface PendingToolInvocationInput {
   invocationId: string;
   call: AgentToolCall;
   argumentsChecksum: string;
@@ -167,7 +167,7 @@ export interface ClaimToolInvocationResult {
   claimed: boolean;
 }
 
-export type CommittedToolOutcome =
+type CommittedToolOutcome =
   | {
       status: 'completed';
       content: string;
@@ -217,7 +217,7 @@ export interface CompleteJobWithFinalMessageResult {
   message: AgentMessage;
 }
 
-export interface PendingUserInputRequestInput {
+interface PendingUserInputRequestInput {
   requestId: string;
   toolCallId?: string;
   source: AgentUserInputSource;
@@ -264,7 +264,7 @@ export interface AnswerInputAndClaimResumeResult {
   attemptId?: string;
 }
 
-export interface ApplyPlanStepInput {
+interface ApplyPlanStepInput {
   id: string;
   key: string;
   position: number;

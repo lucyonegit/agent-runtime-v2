@@ -6,14 +6,14 @@ import {
   applyAgentRuntimeSchemaV1,
 } from './schema-v1.js';
 
-export type AgentRuntimeSchemaErrorCode =
+type AgentRuntimeSchemaErrorCode =
   | 'AGENT_RUNTIME_SCHEMA_MISSING'
   | 'AGENT_RUNTIME_SCHEMA_OLDER'
   | 'AGENT_RUNTIME_SCHEMA_NEWER'
   | 'AGENT_RUNTIME_SCHEMA_CHECKSUM_MISMATCH'
   | 'AGENT_RUNTIME_SCHEMA_NAME_MISMATCH';
 
-export class AgentRuntimeSchemaError extends Error {
+class AgentRuntimeSchemaError extends Error {
   readonly code: AgentRuntimeSchemaErrorCode;
 
   constructor(code: AgentRuntimeSchemaErrorCode, message: string) {

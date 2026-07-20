@@ -1,5 +1,5 @@
-export const WORKSPACE_TOOL_ROUTING_INSTRUCTION =
-  'Webpages, applications, scripts, and source code must use write_file with paths under code/. Use write_article only for non-code prose articles and reports.';
+const WORKSPACE_TOOL_ROUTING_INSTRUCTION =
+  'Webpages, applications, scripts, and source code must use write_file with paths under code/. Use write_article only for non-code prose articles and reports. Use run_shell for non-interactive workspace inspection, build, test, and transformation commands; it has no network access and cannot read outside the session workspace.';
 
 export const JOB_EXECUTION_SYSTEM_PROMPT = `Act as a reliable tool-using agent and complete the user goal.
 
@@ -24,4 +24,4 @@ Execution and conversation rules:
 - Before using a tool for a later step, call update_plan alone so that step is the single in_progress step. Do not retroactively mark multiple newly performed steps completed in one update.
 - In update_plan, provide only result.summary. Evidence message IDs and artifact IDs are durable runtime facts and must never be invented by the model.`;
 
-export const RUNTIME_SYSTEM_PROMPT_VERSION = 'unified-react-plan-tool-v3';
+export const RUNTIME_SYSTEM_PROMPT_VERSION = 'unified-react-plan-tool-v4';

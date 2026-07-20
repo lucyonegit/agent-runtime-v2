@@ -3,7 +3,7 @@ import type { ToolCall } from '@langchain/core/messages';
 export const AGENT_MESSAGE_CHANNELS = ['normal', 'progress', 'final'] as const;
 export type AgentMessageChannel = typeof AGENT_MESSAGE_CHANNELS[number];
 
-export const AGENT_MESSAGE_TYPES = [
+const AGENT_MESSAGE_TYPES = [
   'user_message',
   'assistant_message',
   'tool_call',

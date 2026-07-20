@@ -1,4 +1,4 @@
-export const AGENT_JOB_STATUSES = [
+const AGENT_JOB_STATUSES = [
   'created',
   'running',
   'waiting_user_input',
@@ -17,7 +17,7 @@ export const ACTIVE_JOB_STATUSES = [
   'resuming',
 ] as const satisfies readonly AgentJobStatus[];
 
-export const TERMINAL_JOB_STATUSES = [
+const TERMINAL_JOB_STATUSES = [
   'completed',
   'failed',
   'cancelled',

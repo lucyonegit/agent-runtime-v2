@@ -10,15 +10,11 @@ import { SessionCompressionService } from '../../runtime/context/session-compres
 import type { JobContextLoader } from '../../runtime/loaders/job-context-loader.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 
-export interface ExecutionContextProviderPort {
-  buildJobContext(job: AgentJob, originalGoal: string): Promise<BuiltContext>;
-}
-
-export interface ContextCompressionModel {
+interface ContextCompressionModel {
   invoke(input: BaseLanguageModelInput): Promise<{ text: string }>;
 }
 
-export interface ContextCompressionModelFactory {
+interface ContextCompressionModelFactory {
   create(input: {
     job: AgentJob;
     context: BuiltContext;
@@ -44,7 +40,7 @@ export interface ExecutionContextProviderOptions {
  * turn. The provider owns rolling-session compression but knows nothing about
  * plans, tools or executor stages.
  */
-export class ExecutionContextProvider implements ExecutionContextProviderPort {
+export class ExecutionContextProvider {
   readonly #contexts: ContextBuildService;
   readonly #sessionCompression: SessionCompressionPort;
 

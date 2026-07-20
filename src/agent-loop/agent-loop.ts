@@ -48,22 +48,22 @@ export interface AgentLoopInput {
   validateFinalAnswer?: FinalAnswerValidator;
 }
 
-export type ToolCallsValidation =
+type ToolCallsValidation =
   | { type: 'accept' }
   | { type: 'retry'; feedback: string };
 
-export type ToolCallsValidator = (candidate: {
+type ToolCallsValidator = (candidate: {
   outputId: string;
   content: string;
   toolCalls: AgentToolCall[];
 }) => Promise<ToolCallsValidation>;
 
-export type FinalAnswerValidation =
+type FinalAnswerValidation =
   | { type: 'accept' }
   | { type: 'retry'; feedback: string }
   | { type: 'fail'; code: 'invalid_plan_state'; message: string; details?: unknown };
 
-export type FinalAnswerValidator = (candidate: {
+type FinalAnswerValidator = (candidate: {
   outputId: string;
   content: string;
 }) => Promise<FinalAnswerValidation>;

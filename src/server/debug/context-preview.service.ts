@@ -27,7 +27,7 @@ export interface ContextPreviewServiceOptions {
 export class ContextPreviewService {
   readonly #inspection: ContextInspectionService;
 
-  constructor(private readonly options: ContextPreviewServiceOptions) {
+  constructor(options: ContextPreviewServiceOptions) {
     this.#inspection = new ContextInspectionService({
       store: options.store,
       tools: options.tools.map(item => item.tool),

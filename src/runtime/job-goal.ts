@@ -1,6 +1,6 @@
 import type { AgentJob, AgentMessage } from '../domain/index.js';
 
-export const JOB_GOAL_MESSAGE_ID_KEY = 'goalMessageId';
+const JOB_GOAL_MESSAGE_ID_KEY = 'goalMessageId';
 
 export function withGoalMessageId(
   metadata: Record<string, unknown> | undefined,

@@ -1,5 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   AIMessageChunk,
   type BaseMessage,

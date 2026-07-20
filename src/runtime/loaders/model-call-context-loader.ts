@@ -12,7 +12,7 @@ import { canonicalJson } from '../transaction-commands.js';
 
 export type ModelCallContextStore = Pick<AgentStore, 'getModelCall'>;
 
-export class ContextSnapshotUnreconstructableError extends Error {
+class ContextSnapshotUnreconstructableError extends Error {
   readonly code = 'context_snapshot_unreconstructable';
 
   constructor(message: string) {

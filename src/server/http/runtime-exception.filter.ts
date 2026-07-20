@@ -4,14 +4,17 @@ import {
   HttpStatus,
   type ExceptionFilter,
 } from '@nestjs/common';
-import type { FastifyReply } from 'fastify';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
 import { AgentStoreError } from '../../storage/agent-store.js';
+
+interface HttpReply {
+  status(code: number): { send(body: unknown): unknown };
+}
 
 @Catch()
 export class RuntimeExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
-    const reply = host.switchToHttp().getResponse<FastifyReply>();
+    const reply = host.switchToHttp().getResponse<HttpReply>();
     const status = httpStatus(exception);
     const error = exception instanceof RuntimeError || exception instanceof AgentStoreError
       ? exception.code

@@ -6,7 +6,7 @@ export interface ExecutionLimits {
   jobHeartbeatMs: number;
 }
 
-export const DEFAULT_EXECUTION_LIMITS: Readonly<ExecutionLimits> = Object.freeze({
+const DEFAULT_EXECUTION_LIMITS: Readonly<ExecutionLimits> = Object.freeze({
   maxIterations: 24,
   maxToolCalls: 48,
   executionDeadlineMs: 15 * 60_000,

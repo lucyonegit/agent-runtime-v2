@@ -11,7 +11,7 @@ import {
   assertNoBlockedGroups,
 } from './session-context-loader.js';
 
-export type JobContextStore = Pick<AgentStore,
+type JobContextStore = Pick<AgentStore,
   | 'listSessionJobs'
   | 'listSessionMessages'
   | 'listSessionToolInvocations'

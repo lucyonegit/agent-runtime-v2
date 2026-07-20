@@ -3,7 +3,7 @@ import type {
   AgentToolInvocation,
 } from '../../domain/index.js';
 
-export interface RuntimeRefs {
+interface RuntimeRefs {
   sessionId: string;
   jobId: string;
   planId?: string;

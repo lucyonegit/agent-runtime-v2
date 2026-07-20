@@ -68,7 +68,7 @@ export class SessionContextLoader {
   }
 }
 
-export function isModelVisibleGroup(group: MessageGroup): boolean {
+function isModelVisibleGroup(group: MessageGroup): boolean {
   const messages = messagesInGroup(group);
   return !messages.some(message => (
     message.visibility === 'internal'

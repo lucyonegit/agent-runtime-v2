@@ -11,7 +11,7 @@ Return exactly one object with schemaVersion=1 and these arrays: userGoals, deci
 planOutcomes entries contain planId, title, summary. artifacts entries may contain path, title, kind.
 Preserve identifiers, user constraints, validated plan outcomes and unresolved issues. Do not add facts.`;
 
-export interface SessionRollingSummaryV1 {
+interface SessionRollingSummaryV1 {
   schemaVersion: 1;
   sourceBundleIds: string[];
   sourceJobIds: string[];
@@ -24,7 +24,7 @@ export interface SessionRollingSummaryV1 {
   unresolved: string[];
 }
 
-export type SessionCompressionStore = Pick<AgentStore, 'replaceContextSummary'>;
+type SessionCompressionStore = Pick<AgentStore, 'replaceContextSummary'>;
 
 export interface SessionCompressionServiceOptions {
   store: SessionCompressionStore;

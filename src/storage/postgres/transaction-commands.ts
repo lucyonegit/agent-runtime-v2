@@ -1,7 +1,6 @@
 import type { PoolClient } from 'pg';
 import type {
   AgentJob,
-  AgentMessage,
   AgentPlanStepResult,
   AgentSession,
 } from '../../domain/index.js';

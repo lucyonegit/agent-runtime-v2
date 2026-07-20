@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentJob, AgentRealtimeEvent } from '../domain/index.js';
+import type { AgentRealtimeEvent } from '../domain/index.js';
 import { JobCoordinator } from './lifecycle/job-coordinator.js';
 import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
 import type { AgentStore } from '../storage/agent-store.js';

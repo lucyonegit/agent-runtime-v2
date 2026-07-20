@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isToolMessage } from '@langchain/core/messages';
@@ -47,12 +47,15 @@ describe('LangChain runtime tools', () => {
       'write_file',
       'grep_files',
       'list_symbols',
+      'run_shell',
       'browse_url',
       'web_search',
     ]);
     expect(new Set(tools.map(item => item.tool.name)).size).toBe(tools.length);
     expect(tools.filter(item => item.requiresFreshContext).map(item => item.tool.name))
-      .toEqual(['write_article', 'write_file']);
+      .toEqual(['write_article', 'write_file', 'run_shell']);
+    expect(tools.filter(item => item.exclusive).map(item => item.tool.name))
+      .toEqual(['run_shell']);
   });
 
   it('runs basic tools through LangChain ToolCall and returns ToolMessage artifacts', async () => {
@@ -160,6 +163,69 @@ describe('LangChain runtime tools', () => {
       join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'app.ts'),
       'utf8'
     )).resolves.toContain('app');
+  });
+
+  it('runs shell commands in the workspace with structured output', async () => {
+    if (process.platform !== 'darwin') return;
+    const result = await invoke('run_shell', {
+      command: "printf 'hello' > code/shell.txt; printf 'stdout'; printf 'stderr' >&2",
+    }) as {
+      cwd: string;
+      exitCode: number | null;
+      timedOut: boolean;
+      stdout: string;
+      stderr: string;
+    };
+    expect(result).toMatchObject({
+      cwd: '.',
+      exitCode: 0,
+      timedOut: false,
+      stdout: 'stdout',
+      stderr: 'stderr',
+    });
+    await expect(readFile(
+      join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'shell.txt'),
+      'utf8'
+    )).resolves.toBe('hello');
+  });
+
+  it('returns non-zero shell exits and enforces timeout without turning them into tool failures', async () => {
+    if (process.platform !== 'darwin') return;
+    await expect(invoke('run_shell', {
+      command: "printf 'bad command' >&2; exit 7",
+    })).resolves.toMatchObject({ exitCode: 7, stderr: 'bad command', timedOut: false });
+    await expect(invoke('run_shell', {
+      command: 'sleep 5',
+      timeoutMs: 100,
+    })).resolves.toMatchObject({ timedOut: true });
+  });
+
+  it('keeps runtime secrets and files outside the workspace unavailable to shell commands', async () => {
+    if (process.platform !== 'darwin') return;
+    const outsideDirectory = await mkdtemp(join(tmpdir(), 'agent-runtime-v2-shell-outside-'));
+    const outsideFile = join(outsideDirectory, 'secret.txt');
+    await writeFile(outsideFile, 'do-not-read', 'utf8');
+    const previous = process.env.AGENT_RUNTIME_SHELL_TEST_SECRET;
+    process.env.AGENT_RUNTIME_SHELL_TEST_SECRET = 'do-not-expose';
+    try {
+      await expect(invoke('run_shell', {
+        command: `test -z "$AGENT_RUNTIME_SHELL_TEST_SECRET"; env_exit=$?; cat '${outsideFile}'; read_exit=$?; exit $((env_exit || read_exit))`,
+      })).resolves.toMatchObject({
+        exitCode: 1,
+        stdout: '',
+        stderr: expect.stringContaining('Operation not permitted'),
+      });
+      await expect(invoke('run_shell', {
+        command: `node -e 'const net=require("node:net"); net.connect(9,"127.0.0.1").on("error",error=>{ console.error(error.code); process.exit(error.code === "EPERM" ? 0 : 1); });'`,
+      })).resolves.toMatchObject({
+        exitCode: 0,
+        stderr: expect.stringContaining('EPERM'),
+      });
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_RUNTIME_SHELL_TEST_SECRET;
+      else process.env.AGENT_RUNTIME_SHELL_TEST_SECRET = previous;
+      await rm(outsideDirectory, { recursive: true, force: true });
+    }
   });
 
   it('removes the complete shared workspace when its session is deleted', async () => {

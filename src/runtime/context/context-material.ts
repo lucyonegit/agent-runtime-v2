@@ -2,17 +2,17 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { MessageGroup } from './message-group-builder.js';
 
-export type ContextSegment =
+type ContextSegment =
   | 'session_history'
   | 'current_job';
 
-export interface ContextFixedMessage {
+interface ContextFixedMessage {
   id: string;
   message: BaseMessage;
   text: string;
 }
 
-export interface ContextGroupMaterial {
+interface ContextGroupMaterial {
   group: MessageGroup;
   segment: ContextSegment;
   mustKeep: boolean;
@@ -49,7 +49,7 @@ export interface CompiledContextAnnotation {
   checksum?: string;
 }
 
-export interface ContextSummaryMaterial {
+interface ContextSummaryMaterial {
   id: string;
   summary: string;
   sourceRowIdEnd?: number;

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative } from 'node:path';
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import type { RuntimeTool, RuntimeToolContext } from '../runtime/tool-executor.js';
+import type { RuntimeTool } from '../runtime/tool-executor.js';
 import { resolveWorkspacePath, workspaceRoot } from './sandbox.js';
 import {
   jsonToolOutput,

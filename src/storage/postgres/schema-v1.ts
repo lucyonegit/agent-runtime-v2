@@ -4,7 +4,7 @@ import type { PoolClient } from 'pg';
 export const AGENT_RUNTIME_SCHEMA_VERSION = 1;
 export const AGENT_RUNTIME_SCHEMA_NAME = 'unified-job-react-canonical';
 
-export const AGENT_RUNTIME_SCHEMA_V1_SQL = String.raw`
+const AGENT_RUNTIME_SCHEMA_V1_SQL = String.raw`
 create table agent_schema_versions (
   version integer primary key,
   name text not null unique,

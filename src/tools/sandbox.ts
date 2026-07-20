@@ -2,7 +2,7 @@ import { lstat, mkdir, realpath, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import type { RuntimeToolContext } from '../runtime/tool-executor.js';
 
-export const SESSION_WORKSPACE_AREAS = [
+const SESSION_WORKSPACE_AREAS = [
   'code',
   'docs',
   'artifacts',
@@ -12,14 +12,14 @@ export const SESSION_WORKSPACE_AREAS = [
 
 export type SessionWorkspaceArea = typeof SESSION_WORKSPACE_AREAS[number];
 
-export function sessionWorkspaceRoot(
+function sessionWorkspaceRoot(
   context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>
 ): string {
   assertSafeId(context.sessionId, 'session');
   return resolve(context.sandboxRoot, 'sessions', context.sessionId, 'workspace');
 }
 
-export function workspaceAreaRoot(
+function workspaceAreaRoot(
   context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>,
   area: SessionWorkspaceArea
 ): string {

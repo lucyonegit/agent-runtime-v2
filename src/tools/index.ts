@@ -4,17 +4,10 @@ import { createBasicTools } from './basic-tools.js';
 import { createBrowserTools } from './browser-tools.js';
 import { createFilesystemTools } from './filesystem-tools.js';
 import { createHitlTools } from './hitl-tools.js';
-
-export { createPlanTools, type CreatePlanToolsOptions } from './plan-tools.js';
+import { createShellTools } from './shell-tool.js';
 
 export {
-  SESSION_WORKSPACE_AREAS,
   removeSessionSandbox,
-  resolveWorkspaceAreaPath,
-  resolveWorkspacePath,
-  sessionWorkspaceRoot,
-  workspaceAreaRoot,
-  workspaceRoot,
 } from './sandbox.js';
 
 export function createRuntimeTools(): RuntimeTool[] {
@@ -23,6 +16,7 @@ export function createRuntimeTools(): RuntimeTool[] {
     ...createBasicTools(),
     ...createArtifactTools(),
     ...createFilesystemTools(),
+    ...createShellTools(),
     ...createBrowserTools(),
   ];
 }
