@@ -49,6 +49,19 @@ export interface RuntimeUserInputArtifact {
   request: ToolUserInputRequest;
 }
 
+/** A recoverable tool failure with a stable code and structured diagnostics. */
+export class RuntimeToolExecutionError extends Error {
+  readonly code: string;
+  readonly details?: unknown;
+
+  constructor(code: string, message: string, details?: unknown) {
+    super(message);
+    this.name = 'RuntimeToolExecutionError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
 export interface ToolExecutorOptions {
   store: AgentStore;
   workerId: string;
@@ -151,8 +164,15 @@ export class ToolExecutor implements ToolExecutorPort {
       if (request.signal?.aborted || isAbortError(error)) throw error;
       return {
         type: 'failed',
-        code: error instanceof ToolInputParsingException ? 'invalid_tool_arguments' : 'tool_failed',
+        code: error instanceof ToolInputParsingException
+          ? 'invalid_tool_arguments'
+          : error instanceof RuntimeToolExecutionError
+            ? error.code
+            : 'tool_failed',
         message: error instanceof Error ? error.message : 'Tool execution failed.',
+        ...(error instanceof RuntimeToolExecutionError && error.details !== undefined
+          ? { details: error.details }
+          : {}),
       };
     }
   }

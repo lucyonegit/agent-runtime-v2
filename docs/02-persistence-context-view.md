@@ -11,6 +11,9 @@ erDiagram
     agent_jobs ||--o{ agent_tool_invocations : executes
     agent_jobs ||--o{ agent_user_input_requests : waits_for
     agent_jobs ||--o{ agent_model_calls : audits
+    agent_jobs ||--o{ agent_loop_checkpoints : checkpoints
+    agent_tool_invocations ||--o{ agent_tool_execution_attempts : attempts
+    agent_tool_invocations ||--o{ agent_artifacts : produces
     agent_sessions ||--o{ agent_context_summaries : compresses
 ```
 
@@ -27,6 +30,9 @@ erDiagram
 | `agent_user_input_requests` | HITL 问题、回答模式、版本和回答状态 |
 | `agent_model_calls` | 每次 provider 调用的精确输入、manifest、usage 与结果 |
 | `agent_context_summaries` | 已压缩历史的结构化摘要及覆盖范围 |
+| `agent_loop_checkpoints` | ReAct 最新稳定阶段、模型迭代数与工具调用计数 |
+| `agent_tool_execution_attempts` | ToolInvocation 每次真实执行的 worker、Job attempt 与终态 |
+| `agent_artifacts` | 文件逻辑路径、不可变 revision、checksum 与 ToolInvocation 来源 |
 
 没有 `agent_step_runs`。PlanStep 是进度事实，不是独立执行/重试边界。
 
@@ -103,13 +109,14 @@ SessionView 是数据库事实的确定性投影，不保存第二份前端专�
 
 ```ts
 interface AgentSessionView {
-  schemaVersion: 2;
+  schemaVersion: 3;
   session: AgentSession;
   jobs: AgentJob[];
   messages: AgentMessage[];
   plans: AgentPlan[];
   planSteps: AgentPlanStep[];
   toolInvocations: AgentToolInvocation[];
+  artifacts: AgentArtifact[];
   userInputRequests: AgentUserInputRequest[];
   modelUsage?: AgentModelUsageStats;
   timeline: { flat: FlatTimelineItem[] };
@@ -131,6 +138,7 @@ SSE 只传事实增量：
 - `tool_invocation.upserted`
 - `user_input.upserted`
 - `model_usage.updated`
+- `artifact.upserted`
 
 前端 reducer 的规则：
 

@@ -10,6 +10,7 @@
 | `POST` | `/sessions/:sessionId/jobs` | 创建并异步执行 Job |
 | `POST` | `/jobs/:jobId/cancel` | 按 Job version 取消 |
 | `POST` | `/jobs/:jobId/retry` | 从失败 Job 创建新 Job |
+| `POST` | `/jobs/:jobId/resume` | 人工恢复 recovery_required Job |
 | `POST` | `/user-input-requests/:id/answer` | 回答 HITL 并恢复 Job |
 | `GET` | `/sessions/:sessionId/view` | 加载权威 SessionView |
 | `GET` | `/sessions/:sessionId/events` | 订阅 SSE |
@@ -36,7 +37,7 @@ PORT=3000
 
 ## 3. Schema
 
-正常启动只执行只读 schema guard，不自动迁移或重置。当前是破坏性 canonical schema v1，名字为 `unified-job-react-canonical`。
+正常启动只执行只读 schema guard，不自动迁移或重置。当前 schema version 为 3，名字为 `explicit-job-recovery`；v1 是 `unified-job-react-canonical`，v2 增加 durable ReAct checkpoint，v3 增加显式 `recovery_required` 状态。
 
 开发环境显式重置：
 
@@ -79,6 +80,8 @@ npm run build
 7. SessionView 的 flat timeline 与 SSE reducer 最终相同。
 8. ModelCall Context 返回 `verification.status = exact` 且消息数量与 `input_messages` 一致。
 9. Session 删除返回 204，且不发送空 JSON body。
+10. 服务中断后过期 Job 只进入 `recovery_required`，不会自动执行；用户调用 Resume 后按 Checkpoint 继续。
+11. read_only/idempotent 工具可从 interrupted 重跑；side_effecting 工具中断后进入 unknown 并阻止盲目重放。
 
 ## 6. 当前边界
 

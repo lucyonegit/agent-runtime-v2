@@ -1,10 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access, lstat, realpath } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
-import { relative } from 'node:path';
+import { lstat, realpath } from 'node:fs/promises';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import type { RuntimeTool, RuntimeToolContext } from '../runtime/tool-executor.js';
-import { resolveWorkspacePath, workspaceRoot } from './sandbox.js';
+import {
+  RuntimeToolExecutionError,
+  type RuntimeTool,
+  type RuntimeToolContext,
+} from '../runtime/tool-executor.js';
+import { workspaceRoot } from './sandbox.js';
 import {
   jsonToolOutput,
   numberArgument,
@@ -13,10 +16,9 @@ import {
 } from './tool-utils.js';
 
 const SHELL_PATH = '/bin/zsh';
-const SANDBOX_EXEC_PATH = '/usr/bin/sandbox-exec';
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 const MIN_TIMEOUT_MS = 100;
-const MAX_TIMEOUT_MS = 120_000;
+const MAX_TIMEOUT_MS = 1_800_000;
 const MAX_OUTPUT_BYTES = 32 * 1024;
 const TERMINATION_GRACE_MS = 1_000;
 
@@ -37,11 +39,11 @@ export function createShellTools(): RuntimeTool[] {
   const runShell = new DynamicStructuredTool({
     name: 'run_shell',
     description: [
-      'Run a non-interactive shell command inside the current session workspace.',
-      'Use it to inspect, build, test, or transform files created for the user.',
-      'The command has no network access, cannot read files outside the workspace and approved system tool directories,',
-      'and does not inherit runtime secrets such as API keys or database credentials.',
-      'Use workspace-relative paths and never place secrets in the command string.',
+      'Run a non-interactive command with the same host permissions, network access, filesystem access, and environment variables as the Runtime process.',
+      'Use it for dependency installation, project scaffolding, builds, tests, scripts, and host filesystem operations.',
+      'Relative cwd values start from the current Session workspace; absolute paths and parent-directory paths are allowed.',
+      'Commands are still subject to the requested timeout, output limits, and Job cancellation.',
+      'Never print or return secrets from the inherited environment.',
     ].join(' '),
     schema: {
       type: 'object',
@@ -55,7 +57,7 @@ export function createShellTools(): RuntimeTool[] {
         cwd: {
           type: 'string',
           default: '.',
-          description: 'Existing workspace-relative directory in which to run the command. Defaults to the workspace root.',
+          description: 'Existing directory in which to run the command. Relative paths start at the Session workspace; absolute paths are allowed.',
         },
         timeoutMs: {
           type: 'integer',
@@ -75,12 +77,13 @@ export function createShellTools(): RuntimeTool[] {
       if (!command.trim()) throw new Error('Shell command is required.');
       const cwd = stringArgument(args, 'cwd', '.').trim() || '.';
       const timeoutMs = normalizeTimeout(numberArgument(args, 'timeoutMs', DEFAULT_TIMEOUT_MS));
-      const result = await executeSandboxedShell({
+      const result = await executeHostShell({
         context: runtimeContext(config),
         command,
         cwd,
         timeoutMs,
       });
+      assertSuccessfulShellResult(result);
       return jsonToolOutput(result);
     },
   });
@@ -93,37 +96,31 @@ export function createShellTools(): RuntimeTool[] {
   }];
 }
 
-export async function executeSandboxedShell(input: {
+export async function executeHostShell(input: {
   context: RuntimeToolContext;
   command: string;
   cwd?: string;
   timeoutMs?: number;
 }): Promise<ShellExecutionResult> {
-  if (process.platform !== 'darwin') {
-    throw new Error(`run_shell is unavailable on ${process.platform}: a supported OS sandbox is required.`);
-  }
-  await access(SANDBOX_EXEC_PATH, fsConstants.X_OK);
-  await access(SHELL_PATH, fsConstants.X_OK);
-
   const root = await realpath(await workspaceRoot(input.context));
   const cwdInput = input.cwd?.trim() || '.';
-  const cwd = await resolveWorkspacePath(input.context, cwdInput, { mustExist: true });
+  const cwd = await realpath(isAbsolute(cwdInput) ? cwdInput : resolve(root, cwdInput));
   if (!(await lstat(cwd)).isDirectory()) {
     throw new Error(`Shell cwd is not a directory: ${cwdInput}`);
   }
-  const logicalCwd = relative(root, cwd) || '.';
+  const relativeCwd = relative(root, cwd);
+  const logicalCwd = relativeCwd === '..' || relativeCwd.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
+    ? cwd
+    : relativeCwd || '.';
   const timeoutMs = normalizeTimeout(input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const startedAt = Date.now();
-  const child = spawn(SANDBOX_EXEC_PATH, [
-    '-p',
-    darwinSandboxProfile(root),
-    SHELL_PATH,
+  const child = spawn(SHELL_PATH, [
     '-f',
     '-c',
-    commandWithResourceLimits(input.command),
+    input.command,
   ], {
     cwd,
-    env: shellEnvironment(root, cwd),
+    env: process.env,
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -145,65 +142,24 @@ export async function executeSandboxedShell(input: {
   };
 }
 
-function commandWithResourceLimits(command: string): string {
-  return [
-    'umask 077',
-    'ulimit -St 120; ulimit -Ht 120',
-    'ulimit -Sf 524288; ulimit -Hf 524288',
-    'ulimit -Sn 256; ulimit -Hn 256',
-    'ulimit -Su 512; ulimit -Hu 512',
-    command,
-  ].join('\n');
+export function assertSuccessfulShellResult(result: ShellExecutionResult): void {
+  if (result.timedOut) {
+    throw new RuntimeToolExecutionError(
+      'shell_timeout',
+      `Shell command exceeded its ${result.durationMs}ms execution window and was terminated.`,
+      result
+    );
+  }
+  if (result.exitCode !== 0) {
+    const diagnostic = (result.stderr.trim() || result.stdout.trim()).slice(0, 1_000);
+    throw new RuntimeToolExecutionError(
+      'shell_command_failed',
+      `Shell command exited with code ${result.exitCode ?? 'unknown'}${diagnostic ? `: ${diagnostic}` : '.'}`,
+      result
+    );
+  }
 }
 
-function darwinSandboxProfile(workspace: string): string {
-  const root = sandboxString(workspace);
-  return `(version 1)
-(deny default)
-(allow process-exec)
-(allow process-fork)
-(allow signal (target self))
-(allow sysctl-read)
-(allow file-read-metadata)
-(allow file-read-data
-  (literal "/")
-  (subpath "/System")
-  (subpath "/usr")
-  (subpath "/bin")
-  (subpath "/sbin")
-  (subpath "/opt/homebrew")
-  (subpath "/Library")
-  (subpath "/dev")
-  (subpath "${root}"))
-(allow file-write* (subpath "${root}"))
-(allow file-write-data (literal "/dev/null"))`;
-}
-
-function sandboxString(value: string): string {
-  return value
-    .replaceAll('\\', '\\\\')
-    .replaceAll('"', '\\"')
-    .replaceAll('\r', '\\r')
-    .replaceAll('\n', '\\n');
-}
-
-function shellEnvironment(workspace: string, cwd: string): NodeJS.ProcessEnv {
-  const temporaryDirectory = `${workspace}/tmp`;
-  return {
-    PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
-    HOME: workspace,
-    TMPDIR: temporaryDirectory,
-    PWD: cwd,
-    SHELL: SHELL_PATH,
-    LANG: 'en_US.UTF-8',
-    LC_ALL: 'en_US.UTF-8',
-    TERM: 'dumb',
-    CI: '1',
-    NO_COLOR: '1',
-    GIT_TERMINAL_PROMPT: '0',
-    NPM_CONFIG_CACHE: `${temporaryDirectory}/npm-cache`,
-  };
-}
 
 function normalizeTimeout(value: number): number {
   return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, Math.round(value)));

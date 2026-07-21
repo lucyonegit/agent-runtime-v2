@@ -1,5 +1,5 @@
 const WORKSPACE_TOOL_ROUTING_INSTRUCTION =
-  'Webpages, applications, scripts, and source code must use write_file with paths under code/. Use write_article only for non-code prose articles and reports. Use run_shell for non-interactive workspace inspection, build, test, and transformation commands; it has no network access and cannot read outside the session workspace.';
+  'Webpages, applications, scripts, and source code must use write_file with paths under code/. Use write_article only for non-code prose articles and reports. Use run_shell for non-interactive dependency installation, builds, tests, scripts, and filesystem operations. run_shell inherits the Runtime process network, filesystem, and environment permissions, so use it deliberately and never expose secrets.';
 
 export const JOB_EXECUTION_SYSTEM_PROMPT = `Act as a reliable tool-using agent and complete the user goal.
 

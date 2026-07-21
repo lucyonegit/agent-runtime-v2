@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isToolMessage } from '@langchain/core/messages';
@@ -166,7 +167,6 @@ describe('LangChain runtime tools', () => {
   });
 
   it('runs shell commands in the workspace with structured output', async () => {
-    if (process.platform !== 'darwin') return;
     const result = await invoke('run_shell', {
       command: "printf 'hello' > code/shell.txt; printf 'stdout'; printf 'stderr' >&2",
     }) as {
@@ -189,19 +189,23 @@ describe('LangChain runtime tools', () => {
     )).resolves.toBe('hello');
   });
 
-  it('returns non-zero shell exits and enforces timeout without turning them into tool failures', async () => {
-    if (process.platform !== 'darwin') return;
+  it('turns non-zero shell exits and timeouts into stable tool failures', async () => {
     await expect(invoke('run_shell', {
       command: "printf 'bad command' >&2; exit 7",
-    })).resolves.toMatchObject({ exitCode: 7, stderr: 'bad command', timedOut: false });
+    })).rejects.toMatchObject({
+      code: 'shell_command_failed',
+      details: expect.objectContaining({ exitCode: 7, stderr: 'bad command', timedOut: false }),
+    });
     await expect(invoke('run_shell', {
       command: 'sleep 5',
       timeoutMs: 100,
-    })).resolves.toMatchObject({ timedOut: true });
+    })).rejects.toMatchObject({
+      code: 'shell_timeout',
+      details: expect.objectContaining({ timedOut: true }),
+    });
   });
 
   it('terminates an in-flight shell process when the Job is cancelled', async () => {
-    if (process.platform !== 'darwin') return;
     const controller = new AbortController();
     context = { ...context, signal: controller.signal };
     const running = invoke('run_shell', { command: 'sleep 20', timeoutMs: 120_000 });
@@ -210,30 +214,38 @@ describe('LangChain runtime tools', () => {
     await expect(running).rejects.toMatchObject({ name: 'AbortError' });
   });
 
-  it('keeps runtime secrets and files outside the workspace unavailable to shell commands', async () => {
-    if (process.platform !== 'darwin') return;
+  it('inherits Runtime environment, host filesystem permissions, and network access', async () => {
     const outsideDirectory = await mkdtemp(join(tmpdir(), 'agent-runtime-v2-shell-outside-'));
-    const outsideFile = join(outsideDirectory, 'secret.txt');
-    await writeFile(outsideFile, 'do-not-read', 'utf8');
+    const outsideFile = join(outsideDirectory, 'host-file.txt');
+    await writeFile(outsideFile, 'before', 'utf8');
+    const server = createServer((_request, response) => response.end('network-ok'));
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test HTTP server has no TCP port.');
     const previous = process.env.AGENT_RUNTIME_SHELL_TEST_SECRET;
-    process.env.AGENT_RUNTIME_SHELL_TEST_SECRET = 'do-not-expose';
+    process.env.AGENT_RUNTIME_SHELL_TEST_SECRET = 'inherited-value';
     try {
       await expect(invoke('run_shell', {
-        command: `test -z "$AGENT_RUNTIME_SHELL_TEST_SECRET"; env_exit=$?; cat '${outsideFile}'; read_exit=$?; exit $((env_exit || read_exit))`,
-      })).resolves.toMatchObject({
-        exitCode: 1,
-        stdout: '',
-        stderr: expect.stringContaining('Operation not permitted'),
-      });
-      await expect(invoke('run_shell', {
-        command: `node -e 'const net=require("node:net"); net.connect(9,"127.0.0.1").on("error",error=>{ console.error(error.code); process.exit(error.code === "EPERM" ? 0 : 1); });'`,
+        command: [
+          `printf 'after' > '${outsideFile}'`,
+          `printf '%s|' "$AGENT_RUNTIME_SHELL_TEST_SECRET"`,
+          `cat '${outsideFile}'`,
+          `printf '|'`,
+          `/usr/bin/curl --fail --silent 'http://127.0.0.1:${address.port}/'`,
+        ].join('; '),
       })).resolves.toMatchObject({
         exitCode: 0,
-        stderr: expect.stringContaining('EPERM'),
+        stdout: 'inherited-value|after|network-ok',
+        stderr: '',
       });
+      await expect(readFile(outsideFile, 'utf8')).resolves.toBe('after');
     } finally {
       if (previous === undefined) delete process.env.AGENT_RUNTIME_SHELL_TEST_SECRET;
       else process.env.AGENT_RUNTIME_SHELL_TEST_SECRET = previous;
+      await new Promise<void>(resolve => server.close(() => resolve()));
       await rm(outsideDirectory, { recursive: true, force: true });
     }
   });
