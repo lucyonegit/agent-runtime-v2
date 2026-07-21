@@ -85,12 +85,12 @@ export class AgentController {
   }
 
   @Post('user-input-requests/:requestId/answer')
-  answerInput(
+  answerUserInputRequest(
     @Param('requestId') requestId: string,
     @Body() body: { expectedVersion: number; clientAnswerId: string; answer: unknown }
   ) {
     assertNonEmpty(body?.clientAnswerId, 'clientAnswerId');
-    return this.runtime.answerInput({ requestId, ...body });
+    return this.runtime.answerUserInputRequest({ requestId, ...body });
   }
 
   @Sse('sessions/:sessionId/events')

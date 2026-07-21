@@ -200,6 +200,16 @@ describe('LangChain runtime tools', () => {
     })).resolves.toMatchObject({ timedOut: true });
   });
 
+  it('terminates an in-flight shell process when the Job is cancelled', async () => {
+    if (process.platform !== 'darwin') return;
+    const controller = new AbortController();
+    context = { ...context, signal: controller.signal };
+    const running = invoke('run_shell', { command: 'sleep 20', timeoutMs: 120_000 });
+    setTimeout(() => controller.abort(), 100).unref();
+
+    await expect(running).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('keeps runtime secrets and files outside the workspace unavailable to shell commands', async () => {
     if (process.platform !== 'darwin') return;
     const outsideDirectory = await mkdtemp(join(tmpdir(), 'agent-runtime-v2-shell-outside-'));

@@ -302,11 +302,19 @@ export class AgentLoop {
 
         const beforeTool = this.#terminalPreflight(input.limits);
         if (beforeTool) return beforeTool;
-        const outcome = await this.#executeTool(
-          input,
-          call,
-          definitions.get(call.name)
-        );
+        let outcome: ToolOutcome;
+        try {
+          outcome = await this.#executeTool(
+            input,
+            call,
+            definitions.get(call.name)
+          );
+        } catch (error) {
+          if (input.limits.signal?.aborted || isAbortError(error)) {
+            return cancelledResult(input.limits.signal);
+          }
+          throw error;
+        }
         if (outcome.type === 'input') {
           inputRequests.push(outcome);
           continue;
@@ -386,6 +394,7 @@ export class AgentLoop {
         signal: input.limits.signal,
       });
     } catch (error) {
+      if (input.limits.signal?.aborted || isAbortError(error)) throw error;
       if (error instanceof FatalToolExecutionError) throw error;
       const message = error instanceof Error ? error.message : 'Tool execution failed.';
       result = {
@@ -442,7 +451,7 @@ export class AgentLoop {
   }
 
   #terminalPreflight(limits: AgentLoopLimits): LoopResult | undefined {
-    if (limits.signal?.aborted) return { type: 'cancelled' };
+    if (limits.signal?.aborted) return cancelledResult(limits.signal);
     if (limits.deadlineMs !== undefined && this.#clock.nowMs() >= limits.deadlineMs) {
       return {
         type: 'failed',
@@ -455,7 +464,7 @@ export class AgentLoop {
 
   #modelFailure(error: unknown, signal: AbortSignal | undefined): LoopResult {
     if (error instanceof LoopTerminatedError) return error.result;
-    if (signal?.aborted || isAbortError(error)) return { type: 'cancelled' };
+    if (signal?.aborted || isAbortError(error)) return cancelledResult(signal);
     return {
       type: 'failed',
       code: isContextOverflowError(error) ? 'context_overflow' : 'model_error',
@@ -469,6 +478,12 @@ function modelRunnableConfig(outputId: string, signal: AbortSignal | undefined) 
     signal,
     configurable: { agentRuntimeOutputId: outputId },
   };
+}
+
+function cancelledResult(signal: AbortSignal | undefined): LoopResult {
+  return signal?.reason === 'runtime_shutdown'
+    ? { type: 'cancelled', reason: 'runtime_shutdown' }
+    : { type: 'cancelled' };
 }
 
 class LoopTerminatedError extends Error {

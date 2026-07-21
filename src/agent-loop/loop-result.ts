@@ -26,4 +26,4 @@ export type LoopResult =
       message: string;
       details?: unknown;
     }
-  | { type: 'cancelled' };
+  | { type: 'cancelled'; reason?: 'runtime_shutdown' };

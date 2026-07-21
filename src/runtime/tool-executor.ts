@@ -80,9 +80,9 @@ export class ToolExecutor implements ToolExecutorPort {
   }
 
   async execute(request: ToolExecutionRequest): Promise<ToolExecutionResult> {
-    let claim;
+    let startResult;
     try {
-      claim = await this.#store.claimToolInvocation({
+      startResult = await this.#store.tryStartToolExecution({
         jobId: request.target.jobId,
         toolCallId: request.call.id,
         workerId: this.#workerId,
@@ -96,8 +96,8 @@ export class ToolExecutor implements ToolExecutorPort {
       });
     }
 
-    if (!claim.claimed) return this.#replayTerminalResult(claim.invocation);
-    const invocation = claim.invocation;
+    if (!startResult.started) return this.#replayTerminalResult(startResult.invocation);
+    const invocation = startResult.invocation;
     const runtimeTool = this.#tools.get(request.call.name);
     if (!runtimeTool) {
       return { type: 'failed', code: 'tool_not_found', message: `Tool not found: ${request.call.name}` };
@@ -109,7 +109,7 @@ export class ToolExecutor implements ToolExecutorPort {
     ) {
       throw new FatalToolExecutionError(
         'storage_error',
-        `Claimed ToolInvocation ${JSON.stringify(invocation.id)} does not match the runtime tool contract.`
+        `Started ToolInvocation ${JSON.stringify(invocation.id)} does not match the runtime tool contract.`
       );
     }
 

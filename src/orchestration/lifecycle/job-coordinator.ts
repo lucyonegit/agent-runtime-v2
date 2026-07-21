@@ -3,7 +3,7 @@ import type { AgentJob, AgentJobError } from '../../domain/index.js';
 import {
   AgentStoreError,
   type AgentStore,
-  type AnswerInputAndClaimResumeResult,
+  type SaveUserInputAnswerResult,
   type CreateJobAndAppendUserMessageResult,
   type CreateRetryJobResult,
 } from '../../storage/agent-store.js';
@@ -51,7 +51,7 @@ export type RetryCoordinatedJobResult =
   | CreateJobAndAppendUserMessageResult
   | CreateRetryJobResult;
 
-export interface AnswerCoordinatedInput {
+export interface AnswerUserInputRequestInput {
   requestId: string;
   expectedVersion: number;
   clientAnswerId: string;
@@ -102,10 +102,10 @@ export class JobCoordinator {
     }
   }
 
-  async claimJob(jobId: string, expectedVersion: number): Promise<AgentJob> {
+  async startJobExecution(jobId: string, expectedVersion: number): Promise<AgentJob> {
     const nowMs = this.#clock.nowMs();
     try {
-      return await this.#store.claimJob({
+      return await this.#store.startJobExecution({
         jobId,
         expectedVersion,
         workerId: this.#workerId,
@@ -118,7 +118,15 @@ export class JobCoordinator {
     }
   }
 
-  async renewJobLease(job: AgentJob): Promise<AgentJob> {
+  async getJob(jobId: string): Promise<AgentJob | undefined> {
+    try {
+      return await this.#store.getJob(jobId);
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
+  async renewJobExecutionLease(job: AgentJob): Promise<AgentJob> {
     if (!job.currentAttemptId || job.leaseOwner !== this.#workerId) {
       throw new RuntimeError(
         'lease_lost',
@@ -128,7 +136,7 @@ export class JobCoordinator {
     }
     const nowMs = this.#clock.nowMs();
     try {
-      return await this.#store.renewJobLease({
+      return await this.#store.renewJobExecutionLease({
         jobId: job.id,
         expectedVersion: job.version,
         workerId: this.#workerId,
@@ -179,10 +187,10 @@ export class JobCoordinator {
         `Retry source Job ${JSON.stringify(input.failedJobId)} was not found.`
       );
     }
-    if (source.status !== 'failed') {
+    if (!['failed', 'cancelled'].includes(source.status)) {
       throw new RuntimeError(
         'invalid_job_state',
-        `Retry source Job ${JSON.stringify(source.id)} must be failed, not ${source.status}.`
+        `Retry source Job ${JSON.stringify(source.id)} must be failed or cancelled, not ${source.status}.`
       );
     }
     const sourceMessages = await this.#store.listSessionMessages(source.sessionId);
@@ -223,10 +231,10 @@ export class JobCoordinator {
     }
   }
 
-  async answerInput(input: AnswerCoordinatedInput): Promise<AnswerInputAndClaimResumeResult> {
+  async answerUserInputRequest(input: AnswerUserInputRequestInput): Promise<SaveUserInputAnswerResult> {
     const nowMs = this.#clock.nowMs();
     try {
-      return await this.#store.answerInputAndClaimResume({
+      return await this.#store.saveUserInputAnswerAndResumeIfReady({
         requestId: input.requestId,
         expectedVersion: input.expectedVersion,
         clientAnswerId: input.clientAnswerId,
@@ -282,4 +290,3 @@ const randomIds: RuntimeIdGenerator = {
   messageId: () => `message_${randomUUID()}`,
   attemptId: () => `attempt_${randomUUID()}`,
 };
-

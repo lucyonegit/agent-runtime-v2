@@ -42,6 +42,7 @@ export class ReactExecutionRuntime {
   async runJob(input: {
     job: AgentJob;
     loadContext(): Promise<BuiltContext>;
+    signal?: AbortSignal;
   }): Promise<JobAgentRunResult> {
     let current = await input.loadContext();
     const toolExecutor = this.#toolExecutor();
@@ -78,7 +79,7 @@ export class ReactExecutionRuntime {
       validateFinalAnswer: () => this.#validateFinalAnswer(input.job.id),
       toolExecutor,
       outputIdFactory: outputId,
-      limits: this.#limits(),
+      limits: this.#limits(input.signal),
     });
   }
 
@@ -156,11 +157,12 @@ export class ReactExecutionRuntime {
     });
   }
 
-  #limits() {
+  #limits(signal?: AbortSignal) {
     return {
       maxIterations: this.options.maxIterations,
       maxToolCalls: this.options.maxToolCalls,
       deadlineMs: Date.now() + this.options.executionDeadlineMs,
+      signal,
     };
   }
 

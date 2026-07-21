@@ -1,19 +1,24 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRealtimeEvent } from '../domain/index.js';
+import type { AgentJob, AgentRealtimeEvent, AgentToolInvocation } from '../domain/index.js';
 import { JobCoordinator } from './lifecycle/job-coordinator.js';
 import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
 import type { AgentStore } from '../storage/agent-store.js';
+import { RuntimeError } from '../runtime/runtime-errors.js';
 import { SessionView } from '../view/session-view.js';
 import { projectSensitiveAnswers } from '../view/session-view.js';
 
 export interface JobExecutionService {
   execute(jobId: string): Promise<void>;
+  cancel?(jobId: string): void;
+  shutdown?(): Promise<void>;
 }
 
 export interface AgentRuntimeOptions {
   store: AgentStore;
   workerId: string;
   jobLeaseMs?: number;
+  recoveryIntervalMs?: number;
+  recoveryBatchSize?: number;
   publisher: RuntimeEventPublisher;
   executor: JobExecutionService;
   removeSessionWorkspace?: (sessionId: string) => Promise<void>;
@@ -35,6 +40,11 @@ export class AgentRuntime {
   readonly #ids: NonNullable<AgentRuntimeOptions['ids']>;
   readonly #coordinator: JobCoordinator;
   readonly #view: SessionView;
+  readonly #recoveryIntervalMs: number;
+  readonly #recoveryBatchSize: number;
+  #recoveryTimer?: ReturnType<typeof setInterval>;
+  #recovering = false;
+  #stopping = false;
 
   constructor(options: AgentRuntimeOptions) {
     this.#store = options.store;
@@ -43,6 +53,14 @@ export class AgentRuntime {
     this.#removeSessionWorkspace = options.removeSessionWorkspace;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
     this.#ids = options.ids ?? randomRuntimeIds;
+    this.#recoveryIntervalMs = options.recoveryIntervalMs ?? 5_000;
+    this.#recoveryBatchSize = options.recoveryBatchSize ?? 32;
+    if (!Number.isSafeInteger(this.#recoveryIntervalMs) || this.#recoveryIntervalMs <= 0) {
+      throw new RangeError('recoveryIntervalMs must be a positive integer.');
+    }
+    if (!Number.isSafeInteger(this.#recoveryBatchSize) || this.#recoveryBatchSize <= 0) {
+      throw new RangeError('recoveryBatchSize must be a positive integer.');
+    }
     this.#coordinator = new JobCoordinator({
       store: options.store,
       workerId: options.workerId,
@@ -76,6 +94,25 @@ export class AgentRuntime {
     return this.#view.load(sessionId);
   }
 
+  async start(): Promise<void> {
+    if (this.#recoveryTimer) return;
+    this.#stopping = false;
+    await this.#processRuntimeRecoveryBatch();
+    this.#recoveryTimer = setInterval(() => {
+      void this.#processRuntimeRecoveryBatch().catch(() => {
+        // The next scan retries transient storage failures.
+      });
+    }, this.#recoveryIntervalMs);
+    this.#recoveryTimer.unref();
+  }
+
+  async stop(): Promise<void> {
+    this.#stopping = true;
+    if (this.#recoveryTimer) clearInterval(this.#recoveryTimer);
+    this.#recoveryTimer = undefined;
+    await this.#executor.shutdown?.();
+  }
+
   async deleteSession(sessionId: string) {
     const deleted = await this.#store.deleteSession(sessionId);
     if (deleted) await this.#removeSessionWorkspace?.(sessionId);
@@ -87,78 +124,87 @@ export class AgentRuntime {
     message: string;
     clientRequestId: string;
   }) {
-    const created = await this.#coordinator.createJob({
+    const creationResult = await this.#coordinator.createJob({
       sessionId: input.sessionId,
       content: input.message,
       clientRequestId: input.clientRequestId,
     });
     await this.#publishMany([
-      { type: 'job.upserted', sessionId: input.sessionId, job: created.job },
-      { type: 'message.upserted', sessionId: input.sessionId, message: created.message },
+      { type: 'job.upserted', sessionId: input.sessionId, job: creationResult.job },
+      { type: 'message.upserted', sessionId: input.sessionId, message: creationResult.message },
     ]);
-    if (created.job.status === 'created') {
-      const claimed = await this.#coordinator.claimJob(created.job.id, created.job.version);
-      await this.#publishMany([{ type: 'job.upserted', sessionId: input.sessionId, job: claimed }]);
-      this.#schedule(claimed.id);
-      return { ...created, job: claimed };
+    if (creationResult.job.status === 'created') {
+      const runningJob = await this.#coordinator.startJobExecution(
+        creationResult.job.id,
+        creationResult.job.version
+      );
+      await this.#publishMany([{ type: 'job.upserted', sessionId: input.sessionId, job: runningJob }]);
+      this.#schedule(runningJob.id);
+      return { ...creationResult, job: runningJob };
     }
-    return created;
+    return creationResult;
   }
 
   async cancelJob(jobId: string, expectedVersion: number) {
-    const job = await this.#coordinator.cancelJob(jobId, expectedVersion);
+    const job = await this.#cancelUsingLatestVersion(jobId, expectedVersion);
+    // Persist the terminal state before aborting I/O so every subsequent write
+    // is rejected by the Job fence, even if a driver ignores AbortSignal.
+    this.#executor.cancel?.(job.id);
     await this.#publishMany([{ type: 'job.upserted', sessionId: job.sessionId, job }]);
     return job;
   }
 
   async retryJob(input: { failedJobId: string; clientRequestId: string; message?: string }) {
-    const created = await this.#coordinator.retryJob({
+    const retryResult = await this.#coordinator.retryJob({
       failedJobId: input.failedJobId,
       clientRequestId: input.clientRequestId,
       content: input.message,
     });
     await this.#publishMany([
-      { type: 'job.upserted', sessionId: created.job.sessionId, job: created.job },
-      ...('message' in created
+      { type: 'job.upserted', sessionId: retryResult.job.sessionId, job: retryResult.job },
+      ...('message' in retryResult
         ? [{
             type: 'message.upserted' as const,
-            sessionId: created.job.sessionId,
-            message: created.message,
+            sessionId: retryResult.job.sessionId,
+            message: retryResult.message,
           }]
         : []),
     ]);
-    const claimed = await this.#coordinator.claimJob(created.job.id, created.job.version);
+    const runningJob = await this.#coordinator.startJobExecution(
+      retryResult.job.id,
+      retryResult.job.version
+    );
     await this.#publishMany([{
-      type: 'job.upserted', sessionId: claimed.sessionId, job: claimed,
+      type: 'job.upserted', sessionId: runningJob.sessionId, job: runningJob,
     }]);
-    this.#schedule(claimed.id);
-    return { ...created, job: claimed };
+    this.#schedule(runningJob.id);
+    return { ...retryResult, job: runningJob };
   }
 
-  async answerInput(input: {
+  async answerUserInputRequest(input: {
     requestId: string;
     expectedVersion: number;
     clientAnswerId: string;
     answer: unknown;
   }) {
-    const result = await this.#coordinator.answerInput(input);
-    const projected = projectSensitiveAnswers(
-      [result.answerMessage],
-      result.invocation ? [result.invocation] : [],
-      [result.request]
+    const answerResult = await this.#coordinator.answerUserInputRequest(input);
+    const publicAnswer = projectSensitiveAnswers(
+      [answerResult.answerMessage],
+      answerResult.invocation ? [answerResult.invocation] : [],
+      [answerResult.request]
     );
     await this.#publishMany([
-      { type: 'message.upserted', sessionId: result.job.sessionId, message: projected.messages[0]! },
-      ...(projected.invocations[0] ? [{
+      { type: 'message.upserted', sessionId: answerResult.job.sessionId, message: publicAnswer.messages[0]! },
+      ...(publicAnswer.invocations[0] ? [{
         type: 'tool_invocation.upserted' as const,
-        sessionId: result.job.sessionId,
-        invocation: projected.invocations[0],
+        sessionId: answerResult.job.sessionId,
+        invocation: publicAnswer.invocations[0],
       }] : []),
-      { type: 'user_input.upserted', sessionId: result.job.sessionId, request: projected.requests[0]! },
-      { type: 'job.upserted', sessionId: result.job.sessionId, job: result.job },
+      { type: 'user_input.upserted', sessionId: answerResult.job.sessionId, request: publicAnswer.requests[0]! },
+      { type: 'job.upserted', sessionId: answerResult.job.sessionId, job: answerResult.job },
     ]);
-    if (result.shouldResume) this.#schedule(result.job.id);
-    return result;
+    if (answerResult.shouldResume) this.#schedule(answerResult.job.id);
+    return answerResult;
   }
 
   async #publishMany(events: AgentRealtimeEvent[]): Promise<void> {
@@ -171,7 +217,90 @@ export class AgentRuntime {
     }
   }
 
+  async #cancelUsingLatestVersion(jobId: string, expectedVersion: number): Promise<AgentJob> {
+    try {
+      return await this.#coordinator.cancelJob(jobId, expectedVersion);
+    } catch (error) {
+      if (!(error instanceof RuntimeError && error.code === 'concurrency_conflict')) throw error;
+      const latest = await this.#coordinator.getJob(jobId);
+      if (!latest) throw error;
+      if (latest.status === 'cancelled') return latest;
+      if (!['created', 'running', 'waiting_user_input', 'resuming'].includes(latest.status)) {
+        throw error;
+      }
+      return this.#coordinator.cancelJob(jobId, latest.version);
+    }
+  }
+
+  async #processRuntimeRecoveryBatch(): Promise<void> {
+    if (this.#recovering || this.#stopping) return;
+    this.#recovering = true;
+    try {
+      const nowMs = this.#clock.nowMs();
+      await this.#store.abandonStartedModelCalls(nowMs);
+      const jobsNeedingRecovery = await this.#store.listJobsNeedingRuntimeRecovery({
+        nowMs,
+        limit: this.#recoveryBatchSize,
+      });
+      for (const jobNeedingRecovery of jobsNeedingRecovery) {
+        if (this.#stopping) break;
+        try {
+          await this.#recoverOneJob(jobNeedingRecovery);
+        } catch (error) {
+          if (!(error instanceof RuntimeError
+            && ['concurrency_conflict', 'invalid_job_state', 'lease_lost'].includes(error.code))) {
+            throw error;
+          }
+        }
+      }
+    } finally {
+      this.#recovering = false;
+    }
+  }
+
+  async #recoverOneJob(jobNeedingRecovery: AgentJob): Promise<void> {
+    const jobToolInvocations = (
+      await this.#store.listSessionToolInvocations(jobNeedingRecovery.sessionId)
+    ).filter(invocation => invocation.jobId === jobNeedingRecovery.id);
+    const unfinishedToolInvocations = jobToolInvocations.filter(isUnfinishedToolInvocation);
+    const recoveredRunningJob = await this.#coordinator.startJobExecution(
+      jobNeedingRecovery.id,
+      jobNeedingRecovery.version
+    );
+    await this.#publishMany([{
+      type: 'job.upserted',
+      sessionId: recoveredRunningJob.sessionId,
+      job: recoveredRunningJob,
+    }]);
+
+    if (unfinishedToolInvocations.length === 0) {
+      this.#schedule(recoveredRunningJob.id);
+      return;
+    }
+
+    // An external side effect may already have happened before the process
+    // died. Replaying that invocation would be unsafe, so close the old Job and
+    // let the user continue through the normal retry path.
+    const failedJob = await this.#coordinator.failJob(recoveredRunningJob, {
+      code: 'execution_interrupted',
+      message: 'Runtime restarted while a tool invocation was in progress. Retry as a new Job to continue safely.',
+      details: unfinishedToolInvocations.map(invocation => ({
+        invocationId: invocation.id,
+        toolCallId: invocation.toolCallId,
+        toolName: invocation.toolName,
+        status: invocation.status,
+        sideEffectLevel: invocation.sideEffectLevel,
+      })),
+    });
+    await this.#publishMany([{
+      type: 'job.upserted',
+      sessionId: failedJob.sessionId,
+      job: failedJob,
+    }]);
+  }
+
   #schedule(jobId: string): void {
+    if (this.#stopping) return;
     void this.#executor.execute(jobId).catch(() => {
       // The executor persists terminal failure when it still owns the lease.
     });
@@ -184,3 +313,7 @@ const randomRuntimeIds = {
   messageId: () => `message_${randomUUID()}`,
   attemptId: () => `attempt_${randomUUID()}`,
 };
+
+function isUnfinishedToolInvocation(invocation: AgentToolInvocation): boolean {
+  return !['completed', 'failed'].includes(invocation.status) || !invocation.resultMessageId;
+}

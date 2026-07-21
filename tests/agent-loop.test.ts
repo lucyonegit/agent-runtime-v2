@@ -394,6 +394,36 @@ describe('AgentLoop with LangChain messages', () => {
     })))).result).toEqual({ type: 'cancelled' });
   });
 
+  it('cancels an in-flight tool without recording an ordinary tool failure', async () => {
+    const controller = new AbortController();
+    let started!: () => void;
+    const toolStarted = new Promise<void>(resolve => { started = resolve; });
+    const execute = vi.fn<ToolExecutorPort['execute']>(({ signal }) => new Promise((_, reject) => {
+      started();
+      signal?.addEventListener('abort', () => {
+        reject(new DOMException('Tool execution was cancelled.', 'AbortError'));
+      }, { once: true });
+    }));
+    const loop = new AgentLoop({
+      streaming: false,
+      model: invokeModel(() => toolChunk([{ id: 'call_abort', name: 'lookup', args: {} }])),
+    });
+
+    const run = consume(loop.run(loopInput({
+      limits: { maxIterations: 2, maxToolCalls: 2, signal: controller.signal },
+      toolExecutor: { execute },
+    })));
+    await toolStarted;
+    controller.abort();
+
+    const cancelled = await run;
+    expect(cancelled.result).toEqual({ type: 'cancelled' });
+    expect(cancelled.events.map(event => event.type)).toEqual([
+      LOOP_EVENT_TYPES.ModelOutputCompleted,
+    ]);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it('classifies model and context overflow failures', async () => {
     const failure = new AgentLoop({
       streaming: false,

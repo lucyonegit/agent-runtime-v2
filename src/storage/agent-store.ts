@@ -102,7 +102,7 @@ export interface CreateRetryJobResult {
   job: AgentJob;
 }
 
-export interface ClaimJobInput {
+export interface StartJobExecutionInput {
   jobId: string;
   expectedVersion: number;
   workerId: string;
@@ -111,7 +111,12 @@ export interface ClaimJobInput {
   leaseUntilMs: number;
 }
 
-export interface RenewJobLeaseInput extends ClaimJobInput {}
+export interface ListJobsNeedingRuntimeRecoveryInput {
+  nowMs: number;
+  limit: number;
+}
+
+export interface RenewJobExecutionLeaseInput extends StartJobExecutionInput {}
 
 export interface FailJobInput {
   jobId: string;
@@ -154,7 +159,7 @@ export interface CommitModelToolCallsResult {
   invocations: AgentToolInvocation[];
 }
 
-export interface ClaimToolInvocationInput {
+export interface TryStartToolExecutionInput {
   jobId: string;
   toolCallId: string;
   workerId: string;
@@ -162,9 +167,9 @@ export interface ClaimToolInvocationInput {
   nowMs: number;
 }
 
-export interface ClaimToolInvocationResult {
+export interface TryStartToolExecutionResult {
   invocation: AgentToolInvocation;
-  claimed: boolean;
+  started: boolean;
 }
 
 type CommittedToolOutcome =
@@ -243,7 +248,7 @@ export interface CreateInputRequestsAndMarkWaitingResult {
   invocations: AgentToolInvocation[];
 }
 
-export interface AnswerInputAndClaimResumeInput {
+export interface SaveUserInputAnswerInput {
   requestId: string;
   expectedVersion: number;
   clientAnswerId: string;
@@ -255,7 +260,7 @@ export interface AnswerInputAndClaimResumeInput {
   leaseUntilMs: number;
 }
 
-export interface AnswerInputAndClaimResumeResult {
+export interface SaveUserInputAnswerResult {
   request: AgentUserInputRequest;
   answerMessage: AgentMessage;
   job: AgentJob;
@@ -402,14 +407,15 @@ export interface AgentStore {
   listSessionToolInvocations(sessionId: string): Promise<AgentToolInvocation[]>;
   listSessionArtifacts(sessionId: string): Promise<AgentArtifact[]>;
   listSessionUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
+  listJobsNeedingRuntimeRecovery(input: ListJobsNeedingRuntimeRecoveryInput): Promise<AgentJob[]>;
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
   ): Promise<CreateJobAndAppendUserMessageResult>;
   createRetryJob(input: CreateRetryJobInput): Promise<CreateRetryJobResult>;
-  claimJob(input: ClaimJobInput): Promise<AgentJob>;
-  renewJobLease(input: RenewJobLeaseInput): Promise<AgentJob>;
+  startJobExecution(input: StartJobExecutionInput): Promise<AgentJob>;
+  renewJobExecutionLease(input: RenewJobExecutionLeaseInput): Promise<AgentJob>;
   commitModelToolCalls(input: CommitModelToolCallsInput): Promise<CommitModelToolCallsResult>;
-  claimToolInvocation(input: ClaimToolInvocationInput): Promise<ClaimToolInvocationResult>;
+  tryStartToolExecution(input: TryStartToolExecutionInput): Promise<TryStartToolExecutionResult>;
   commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult>;
   completeJobWithFinalMessage(
     input: CompleteJobWithFinalMessageInput
@@ -417,9 +423,9 @@ export interface AgentStore {
   createInputRequestsAndMarkWaiting(
     input: CreateInputRequestsAndMarkWaitingInput
   ): Promise<CreateInputRequestsAndMarkWaitingResult>;
-  answerInputAndClaimResume(
-    input: AnswerInputAndClaimResumeInput
-  ): Promise<AnswerInputAndClaimResumeResult>;
+  saveUserInputAnswerAndResumeIfReady(
+    input: SaveUserInputAnswerInput
+  ): Promise<SaveUserInputAnswerResult>;
   applyPlanUpdate(input: ApplyPlanUpdateInput): Promise<ApplyPlanUpdateResult>;
   startModelCall(input: StartModelCallInput): Promise<AgentModelCall>;
   completeModelCall(input: CompleteModelCallInput): Promise<CompleteModelCallResult>;

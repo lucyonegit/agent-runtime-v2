@@ -17,11 +17,11 @@ import type {
 import type {
   AgentStore,
   CancelJobInput,
-  ClaimJobInput,
-  ClaimToolInvocationInput,
-  ClaimToolInvocationResult,
-  AnswerInputAndClaimResumeInput,
-  AnswerInputAndClaimResumeResult,
+  StartJobExecutionInput,
+  TryStartToolExecutionInput,
+  TryStartToolExecutionResult,
+  SaveUserInputAnswerInput,
+  SaveUserInputAnswerResult,
   CommitModelToolCallsInput,
   CommitModelToolCallsResult,
   CommitToolResultInput,
@@ -43,13 +43,14 @@ import type {
   SetModelCallOutputDispositionInput,
   ReplaceContextSummaryInput,
   FailJobInput,
-  RenewJobLeaseInput,
+  ListJobsNeedingRuntimeRecoveryInput,
+  RenewJobExecutionLeaseInput,
 } from '../agent-store.js';
 import {
   cancelJobCommand,
-  claimJobCommand,
-  claimToolInvocationCommand,
-  answerInputAndClaimResumeCommand,
+  startJobExecutionCommand,
+  tryStartToolExecutionCommand,
+  saveUserInputAnswerAndResumeIfReadyCommand,
   commitModelToolCallsCommand,
   commitToolResultCommand,
   completeJobWithFinalMessageCommand,
@@ -64,7 +65,7 @@ import {
   abandonStartedModelCallsCommand,
   replaceContextSummaryCommand,
   failJobCommand,
-  renewJobLeaseCommand,
+  renewJobExecutionLeaseCommand,
 } from './transaction-commands.js';
 import {
   mapAgentJobRow,
@@ -271,6 +272,25 @@ export class PostgresAgentStore implements AgentStore {
     return result.rows.map(mapAgentUserInputRequestRow);
   }
 
+  async listJobsNeedingRuntimeRecovery(input: ListJobsNeedingRuntimeRecoveryInput): Promise<AgentJob[]> {
+    if (!Number.isSafeInteger(input.limit) || input.limit <= 0) {
+      throw new RangeError('Recovery batch limit must be a positive safe integer.');
+    }
+    const result = await this.#pool.query<AgentJobRow>(
+      `select *
+       from agent_jobs
+       where status = 'created'
+          or (
+            status in ('running', 'resuming')
+            and lease_expires_at_ms <= $1
+          )
+       order by coalesce(lease_expires_at_ms, created_at_ms) asc, created_at_ms asc, id asc
+       limit $2`,
+      [input.nowMs, input.limit]
+    );
+    return result.rows.map(mapAgentJobRow);
+  }
+
   async createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
   ): Promise<CreateJobAndAppendUserMessageResult> {
@@ -281,12 +301,12 @@ export class PostgresAgentStore implements AgentStore {
     return this.#withClient(client => createRetryJobCommand(client, input));
   }
 
-  async claimJob(input: ClaimJobInput): Promise<AgentJob> {
-    return this.#withClient(client => claimJobCommand(client, input));
+  async startJobExecution(input: StartJobExecutionInput): Promise<AgentJob> {
+    return this.#withClient(client => startJobExecutionCommand(client, input));
   }
 
-  async renewJobLease(input: RenewJobLeaseInput): Promise<AgentJob> {
-    return this.#withClient(client => renewJobLeaseCommand(client, input));
+  async renewJobExecutionLease(input: RenewJobExecutionLeaseInput): Promise<AgentJob> {
+    return this.#withClient(client => renewJobExecutionLeaseCommand(client, input));
   }
 
   async commitModelToolCalls(
@@ -295,10 +315,10 @@ export class PostgresAgentStore implements AgentStore {
     return this.#withClient(client => commitModelToolCallsCommand(client, input));
   }
 
-  async claimToolInvocation(
-    input: ClaimToolInvocationInput
-  ): Promise<ClaimToolInvocationResult> {
-    return this.#withClient(client => claimToolInvocationCommand(client, input));
+  async tryStartToolExecution(
+    input: TryStartToolExecutionInput
+  ): Promise<TryStartToolExecutionResult> {
+    return this.#withClient(client => tryStartToolExecutionCommand(client, input));
   }
 
   async commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult> {
@@ -317,10 +337,10 @@ export class PostgresAgentStore implements AgentStore {
     return this.#withClient(client => createInputRequestsAndMarkWaitingCommand(client, input));
   }
 
-  async answerInputAndClaimResume(
-    input: AnswerInputAndClaimResumeInput
-  ): Promise<AnswerInputAndClaimResumeResult> {
-    return this.#withClient(client => answerInputAndClaimResumeCommand(client, input));
+  async saveUserInputAnswerAndResumeIfReady(
+    input: SaveUserInputAnswerInput
+  ): Promise<SaveUserInputAnswerResult> {
+    return this.#withClient(client => saveUserInputAnswerAndResumeIfReadyCommand(client, input));
   }
 
   async applyPlanUpdate(input: ApplyPlanUpdateInput): Promise<ApplyPlanUpdateResult> {

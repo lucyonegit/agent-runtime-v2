@@ -7,11 +7,11 @@ import type {
 import {
   AgentStoreError,
   type CancelJobInput,
-  type ClaimJobInput,
-  type ClaimToolInvocationInput,
-  type ClaimToolInvocationResult,
-  type AnswerInputAndClaimResumeInput,
-  type AnswerInputAndClaimResumeResult,
+  type StartJobExecutionInput,
+  type TryStartToolExecutionInput,
+  type TryStartToolExecutionResult,
+  type SaveUserInputAnswerInput,
+  type SaveUserInputAnswerResult,
   type CommitModelToolCallsInput,
   type CommitModelToolCallsResult,
   type CommitToolResultInput,
@@ -33,7 +33,7 @@ import {
   type SetModelCallOutputDispositionInput,
   type ReplaceContextSummaryInput,
   type FailJobInput,
-  type RenewJobLeaseInput,
+  type RenewJobExecutionLeaseInput,
 } from '../agent-store.js';
 import {
   mapAgentJobRow,
@@ -156,9 +156,9 @@ export async function createRetryJobCommand(
   });
 }
 
-export async function claimJobCommand(
+export async function startJobExecutionCommand(
   client: PoolClient,
-  input: ClaimJobInput
+  input: StartJobExecutionInput
 ): Promise<AgentJob> {
   assertFutureLease(input.nowMs, input.leaseUntilMs);
   const result = await client.query<AgentJobRow>(
@@ -192,12 +192,17 @@ export async function claimJobCommand(
   );
   const row = result.rows[0];
   if (row) return mapAgentJobRow(row);
-  return throwJobMutationConflict(client, input.jobId, input.expectedVersion, 'claim');
+  return throwJobMutationConflict(
+    client,
+    input.jobId,
+    input.expectedVersion,
+    'start an execution attempt for'
+  );
 }
 
-export async function renewJobLeaseCommand(
+export async function renewJobExecutionLeaseCommand(
   client: PoolClient,
-  input: RenewJobLeaseInput
+  input: RenewJobExecutionLeaseInput
 ): Promise<AgentJob> {
   assertFutureLease(input.nowMs, input.leaseUntilMs);
   const result = await client.query<AgentJobRow>(
@@ -321,10 +326,10 @@ export async function commitModelToolCallsCommand(
   });
 }
 
-export async function claimToolInvocationCommand(
+export async function tryStartToolExecutionCommand(
   client: PoolClient,
-  input: ClaimToolInvocationInput
-): Promise<ClaimToolInvocationResult> {
+  input: TryStartToolExecutionInput
+): Promise<TryStartToolExecutionResult> {
   const result = await client.query<AgentToolInvocationRow>(
     `update agent_tool_invocations invocation
      set status = 'running',
@@ -348,7 +353,7 @@ export async function claimToolInvocationCommand(
     [input.jobId, input.toolCallId, input.workerId, input.attemptId, input.nowMs]
   );
   if (result.rows[0]) {
-    return { invocation: mapAgentToolInvocationRow(result.rows[0]), claimed: true };
+    return { invocation: mapAgentToolInvocationRow(result.rows[0]), started: true };
   }
 
   const invocation = await selectToolInvocation(client, input.jobId, input.toolCallId);
@@ -363,11 +368,11 @@ export async function claimToolInvocationCommand(
   if (!job) throw jobNotFound(input.jobId);
   assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
   if (['completed', 'failed', 'cancelled'].includes(invocation.status)) {
-    return { invocation: mapAgentToolInvocationRow(invocation), claimed: false };
+    return { invocation: mapAgentToolInvocationRow(invocation), started: false };
   }
   throw new AgentStoreError(
     'INVALID_TOOL_INVOCATION_STATE',
-    `Tool invocation ${JSON.stringify(input.toolCallId)} cannot be claimed from status ${invocation.status}.`,
+    `Tool invocation ${JSON.stringify(input.toolCallId)} cannot start execution from status ${invocation.status}.`,
     { jobId: input.jobId, toolCallId: input.toolCallId, status: invocation.status }
   );
 }
@@ -765,10 +770,10 @@ export async function createInputRequestsAndMarkWaitingCommand(
   });
 }
 
-export async function answerInputAndClaimResumeCommand(
+export async function saveUserInputAnswerAndResumeIfReadyCommand(
   client: PoolClient,
-  input: AnswerInputAndClaimResumeInput
-): Promise<AnswerInputAndClaimResumeResult> {
+  input: SaveUserInputAnswerInput
+): Promise<SaveUserInputAnswerResult> {
   assertFutureLease(input.nowMs, input.leaseUntilMs);
   if (!input.clientAnswerId.trim()) throw new TypeError('clientAnswerId must not be empty.');
   if (input.answer === undefined) throw new TypeError('answer must be defined.');
@@ -937,7 +942,7 @@ export async function answerInputAndClaimResumeCommand(
          returning *`,
         [job.id, input.workerId, input.leaseUntilMs, input.attemptId, input.nowMs]
       );
-      job = requireRow(resumedJob.rows[0], 'claim resumed job');
+      job = requireRow(resumedJob.rows[0], 'resume job');
     }
     await touchSession(client, request.session_id, input.nowMs);
     return {
@@ -1729,10 +1734,10 @@ async function assertValidRetry(
     [retryOfJobId]
   );
   const job = result.rows[0];
-  if (!job || job.session_id !== sessionId || job.status !== 'failed') {
+  if (!job || job.session_id !== sessionId || !['failed', 'cancelled'].includes(job.status)) {
     throw new AgentStoreError(
       'INVALID_JOB_RETRY',
-      `Retry source ${JSON.stringify(retryOfJobId)} must be a failed Job in the same Session.`,
+      `Retry source ${JSON.stringify(retryOfJobId)} must be a failed or cancelled Job in the same Session.`,
       { sessionId, retryOfJobId, sourceStatus: job?.status }
     );
   }

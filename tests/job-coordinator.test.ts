@@ -8,14 +8,14 @@ import {
 } from '../src/storage/agent-store.js';
 
 describe('JobCoordinator', () => {
-  it('generates an attempt and a bounded lease for each claim', async () => {
+  it('generates an attempt and a bounded lease when execution starts', async () => {
     const store = createStore();
-    const claimed = { ...jobFixture, status: 'running', version: 1 } as AgentJob;
-    vi.mocked(store.claimJob).mockResolvedValue(claimed);
+    const startedJob = { ...jobFixture, status: 'running', version: 1 } as AgentJob;
+    vi.mocked(store.startJobExecution).mockResolvedValue(startedJob);
     const coordinator = createCoordinator(store, 1_000);
 
-    await expect(coordinator.claimJob('job_1', 0)).resolves.toBe(claimed);
-    expect(store.claimJob).toHaveBeenCalledWith({
+    await expect(coordinator.startJobExecution('job_1', 0)).resolves.toBe(startedJob);
+    expect(store.startJobExecution).toHaveBeenCalledWith({
       jobId: 'job_1',
       expectedVersion: 0,
       workerId: 'worker_1',
@@ -126,17 +126,17 @@ describe('JobCoordinator', () => {
 
   it('maps stale versions and lease loss into stable runtime errors', async () => {
     const store = createStore();
-    vi.mocked(store.claimJob).mockRejectedValue(new AgentStoreError(
+    vi.mocked(store.startJobExecution).mockRejectedValue(new AgentStoreError(
       'CONCURRENCY_CONFLICT',
       'stale'
     ));
     const coordinator = createCoordinator(store, 1_000);
 
-    await expect(coordinator.claimJob('job_1', 0)).rejects.toMatchObject({
+    await expect(coordinator.startJobExecution('job_1', 0)).rejects.toMatchObject({
       code: 'concurrency_conflict',
       retryable: false,
     });
-    await expect(coordinator.renewJobLease(jobFixture)).rejects.toMatchObject({
+    await expect(coordinator.renewJobExecutionLease(jobFixture)).rejects.toMatchObject({
       code: 'lease_lost',
       retryable: false,
     });
@@ -190,16 +190,17 @@ function createStore(): AgentStore {
     listSessionToolInvocations: vi.fn<AgentStore['listSessionToolInvocations']>(),
     listSessionArtifacts: vi.fn<AgentStore['listSessionArtifacts']>(),
     listSessionUserInputRequests: vi.fn<AgentStore['listSessionUserInputRequests']>(),
+    listJobsNeedingRuntimeRecovery: vi.fn<AgentStore['listJobsNeedingRuntimeRecovery']>(),
     createJobAndAppendUserMessage: vi.fn<AgentStore['createJobAndAppendUserMessage']>(),
     createRetryJob: vi.fn<AgentStore['createRetryJob']>(),
-    claimJob: vi.fn<AgentStore['claimJob']>(),
-    renewJobLease: vi.fn<AgentStore['renewJobLease']>(),
+    startJobExecution: vi.fn<AgentStore['startJobExecution']>(),
+    renewJobExecutionLease: vi.fn<AgentStore['renewJobExecutionLease']>(),
     commitModelToolCalls: vi.fn<AgentStore['commitModelToolCalls']>(),
-    claimToolInvocation: vi.fn<AgentStore['claimToolInvocation']>(),
+    tryStartToolExecution: vi.fn<AgentStore['tryStartToolExecution']>(),
     commitToolResult: vi.fn<AgentStore['commitToolResult']>(),
     completeJobWithFinalMessage: vi.fn<AgentStore['completeJobWithFinalMessage']>(),
     createInputRequestsAndMarkWaiting: vi.fn<AgentStore['createInputRequestsAndMarkWaiting']>(),
-    answerInputAndClaimResume: vi.fn<AgentStore['answerInputAndClaimResume']>(),
+    saveUserInputAnswerAndResumeIfReady: vi.fn<AgentStore['saveUserInputAnswerAndResumeIfReady']>(),
     applyPlanUpdate: vi.fn<AgentStore['applyPlanUpdate']>(),
     startModelCall: vi.fn<AgentStore['startModelCall']>(),
     completeModelCall: vi.fn<AgentStore['completeModelCall']>(),

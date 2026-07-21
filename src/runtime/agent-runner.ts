@@ -54,7 +54,7 @@ export class AgentRunner {
 
   async runJob(input: JobAgentRunInput): Promise<JobAgentRunResult> {
     if (!input.job.currentAttemptId || !input.job.leaseOwner) {
-      throw new RuntimeError('lease_lost', `Job ${JSON.stringify(input.job.id)} is not claimed.`);
+      throw new RuntimeError('lease_lost', `Job ${JSON.stringify(input.job.id)} has no active execution attempt.`);
     }
     const target = {
       sessionId: input.job.sessionId,
@@ -148,7 +148,21 @@ export class AgentRunner {
         };
       }
       if (result.type === 'cancelled') {
-        const cancelled = await this.#coordinator.cancelJob(input.job.id, input.job.version);
+        if (result.reason === 'runtime_shutdown') {
+          throw new RuntimeError('aborted', `Job ${JSON.stringify(input.job.id)} execution was interrupted by Runtime shutdown.`);
+        }
+        const current = await this.#coordinator.getJob(input.job.id);
+        if (!current) {
+          throw new RuntimeError('storage_error', `Job ${JSON.stringify(input.job.id)} disappeared during cancellation.`);
+        }
+        if (current.status === 'cancelled') return { type: 'cancelled', job: current };
+        if (!['created', 'running', 'waiting_user_input', 'resuming'].includes(current.status)) {
+          throw new RuntimeError(
+            'lease_lost',
+            `Job ${JSON.stringify(input.job.id)} became ${current.status} during cancellation.`
+          );
+        }
+        const cancelled = await this.#coordinator.cancelJob(current.id, current.version);
         return { type: 'cancelled', job: cancelled };
       }
       const failed = await this.#coordinator.failJob(input.job, {

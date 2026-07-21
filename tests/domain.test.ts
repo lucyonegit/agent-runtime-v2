@@ -18,7 +18,7 @@ describe('canonical runtime domain', () => {
     expect(canTransitionJob('failed', 'resuming')).toBe(false);
   });
 
-  it('allows waiting jobs to be claimed for resume', () => {
+  it('allows waiting jobs to resume execution', () => {
     expect(canTransitionJob('waiting_user_input', 'resuming')).toBe(true);
     expect(canTransitionJob('resuming', 'running')).toBe(true);
   });

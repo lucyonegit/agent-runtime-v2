@@ -66,7 +66,11 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       });
       return response;
     } catch (error) {
-      await this.#fail(callId, error);
+      if (options?.signal?.aborted || isAbortError(error)) {
+        await this.#cancel(callId, error);
+      } else {
+        await this.#fail(callId, error);
+      }
       throw error;
     }
   }
@@ -92,7 +96,11 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       });
       completed = true;
     } catch (error) {
-      await this.#fail(callId, error);
+      if (options?.signal?.aborted || isAbortError(error)) {
+        await this.#cancel(callId, error, combined?.usage_metadata);
+      } else {
+        await this.#fail(callId, error);
+      }
       completed = true;
       throw error;
     } finally {
@@ -179,6 +187,19 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
     await this.#publishUsage(completed.usage);
   }
 
+  async #cancel(id: string, error: unknown, usage?: UsageMetadata): Promise<void> {
+    const completed = await this.#options.store.completeModelCall({
+      id,
+      status: 'cancelled',
+      usageSource: usage ? 'provider' : 'unavailable',
+      ...usageFields(usage),
+      errorCode: 'aborted',
+      errorMessage: error instanceof Error ? error.message : 'Model call was cancelled.',
+      nowMs: this.#clock.nowMs(),
+    });
+    await this.#publishUsage(completed.usage);
+  }
+
   async #publishUsage(stats: Awaited<ReturnType<AgentStore['completeModelCall']>>['usage']): Promise<void> {
     try {
       await this.#options.publisher?.publish({
@@ -248,4 +269,9 @@ function sha256(value: string): string {
 function isContextOverflow(error: unknown): boolean {
   return Boolean(error && typeof error === 'object'
     && (error as { code?: unknown }).code === 'context_overflow');
+}
+
+function isAbortError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object'
+    && (error as { name?: unknown }).name === 'AbortError');
 }

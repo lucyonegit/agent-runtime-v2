@@ -32,13 +32,13 @@ try {
 }
 
 const store = new PostgresAgentStore(pool);
-await store.abandonStartedModelCalls(Date.now());
 const events = new RuntimeEventBus();
 const modelConfig = resolveModelRuntimeConfig(process.env);
 const model = createLangChainChatModel(modelConfig);
 const sandboxRoot = process.env.AGENT_SANDBOX_ROOT ?? '.agent-sandbox';
-const jobLeaseMs = numberEnv('JOB_LEASE_MS', 20 * 60_000);
+const jobLeaseMs = numberEnv('JOB_LEASE_MS', 30_000);
 const jobHeartbeatMs = numberEnv('JOB_HEARTBEAT_MS', Math.max(1_000, Math.floor(jobLeaseMs / 3)));
+const jobRecoveryScanMs = numberEnv('JOB_RECOVERY_SCAN_MS', 5_000);
 const maxContextTokens = numberEnv('MODEL_MAX_CONTEXT_TOKENS', 128_000);
 const reservedOutputTokens = numberEnv('MODEL_RESERVED_OUTPUT_TOKENS', 4_096);
 if (jobHeartbeatMs >= jobLeaseMs) throw new Error('JOB_HEARTBEAT_MS must be shorter than JOB_LEASE_MS.');
@@ -73,8 +73,10 @@ const runtime = new AgentRuntime({
   publisher: events,
   executor,
   jobLeaseMs,
+  recoveryIntervalMs: jobRecoveryScanMs,
   removeSessionWorkspace: sessionId => removeSessionSandbox({ sandboxRoot, sessionId }),
 });
+await runtime.start();
 const app = await NestFactory.create<NestFastifyApplication>(
   AgentHttpModule.forRoot(runtime, events, contextPreview),
   new FastifyAdapter(),
@@ -86,10 +88,12 @@ app.enableShutdownHooks();
 const port = numberEnv('PORT', 3000);
 await app.listen(port, process.env.HOST ?? '127.0.0.1');
 
-const shutdown = async () => {
+let shutdownPromise: Promise<void> | undefined;
+const shutdown = () => shutdownPromise ??= (async () => {
+  await runtime.stop();
   await app.close();
   await pool.end();
-};
+})();
 process.once('SIGINT', () => { void shutdown(); });
 process.once('SIGTERM', () => { void shutdown(); });
 

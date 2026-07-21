@@ -38,7 +38,10 @@ export interface JobExecutionOrchestratorOptions {
  * it is a durable tool used from inside that one loop.
  */
 export class JobExecutionOrchestrator implements JobExecutionService {
-  readonly #running = new Set<string>();
+  readonly #running = new Map<string, {
+    controller: AbortController;
+    completion: Promise<void>;
+  }>();
   readonly #options: Required<Omit<JobExecutionOrchestratorOptions,
     'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName' | 'sandboxRoot'>>
     & JobExecutionOrchestratorOptions;
@@ -52,8 +55,8 @@ export class JobExecutionOrchestrator implements JobExecutionService {
       maxIterations: 24,
       maxToolCalls: 48,
       executionDeadlineMs: 15 * 60_000,
-      jobLeaseMs: 20 * 60_000,
-      jobHeartbeatMs: 60_000,
+      jobLeaseMs: 30_000,
+      jobHeartbeatMs: 10_000,
       compressionMessageThreshold: 50,
       ...options,
     };
@@ -105,44 +108,66 @@ export class JobExecutionOrchestrator implements JobExecutionService {
   }
 
   async execute(jobId: string): Promise<void> {
-    if (this.#running.has(jobId)) return;
-    this.#running.add(jobId);
-    const stopHeartbeat = this.#startHeartbeat(jobId);
+    const existingExecution = this.#running.get(jobId);
+    if (existingExecution) return existingExecution.completion;
+    const execution = {
+      controller: new AbortController(),
+      completion: Promise.resolve(),
+    };
+    this.#running.set(jobId, execution);
+    execution.completion = this.#runJobWithLease(jobId, execution.controller.signal).finally(() => {
+      if (this.#running.get(jobId) === execution) this.#running.delete(jobId);
+    });
+    return execution.completion;
+  }
+
+  cancel(jobId: string): void {
+    this.#running.get(jobId)?.controller.abort();
+  }
+
+  async shutdown(): Promise<void> {
+    const activeExecutions = [...this.#running.values()];
+    for (const execution of activeExecutions) execution.controller.abort('runtime_shutdown');
+    await Promise.allSettled(activeExecutions.map(execution => execution.completion));
+  }
+
+  async #runJobWithLease(jobId: string, signal: AbortSignal): Promise<void> {
+    const stopLeaseHeartbeat = this.#startLeaseHeartbeat(jobId);
     try {
-      await this.#executeOwnedJob(jobId);
+      await this.#executeJob(jobId, signal);
     } catch (error) {
-      if (!(error instanceof RuntimeError && error.code === 'lease_lost')) {
-        await this.#failIfOwned(jobId, error);
+      if (!(error instanceof RuntimeError && ['lease_lost', 'aborted'].includes(error.code))) {
+        await this.#failJobIfStillOwned(jobId, error);
       }
     } finally {
-      stopHeartbeat();
-      this.#running.delete(jobId);
+      stopLeaseHeartbeat();
     }
   }
 
-  async #executeOwnedJob(jobId: string): Promise<void> {
-    const job = await this.#requireOwnedJob(jobId);
+  async #executeJob(jobId: string, signal: AbortSignal): Promise<void> {
+    const job = await this.#loadRunnableOwnedJob(jobId);
     const messages = await this.#options.store.listSessionMessages(job.sessionId);
     const originalGoal = resolveJobGoalMessage(job, messages)?.content;
     if (!originalGoal) throw new Error(`Job ${job.id} has no original user goal.`);
     await this.#react.runJob({
       job,
       loadContext: () => this.#contexts.buildJobContext(job, originalGoal),
+      signal,
     });
   }
 
-  #startHeartbeat(jobId: string): () => void {
-    let renewing = false;
+  #startLeaseHeartbeat(jobId: string): () => void {
+    let leaseRenewalInProgress = false;
     const timer = setInterval(() => {
-      if (renewing) return;
-      renewing = true;
-      void this.#renewLease(jobId).finally(() => { renewing = false; });
+      if (leaseRenewalInProgress) return;
+      leaseRenewalInProgress = true;
+      void this.#renewExecutionLease(jobId).finally(() => { leaseRenewalInProgress = false; });
     }, this.#options.jobHeartbeatMs);
     timer.unref();
     return () => clearInterval(timer);
   }
 
-  async #renewLease(jobId: string): Promise<void> {
+  async #renewExecutionLease(jobId: string): Promise<void> {
     const job = await this.#options.store.getJob(jobId);
     if (!job || !['running', 'resuming'].includes(job.status)
       || job.leaseOwner !== this.#options.workerId || !job.currentAttemptId) return;
@@ -155,14 +180,18 @@ export class JobExecutionOrchestrator implements JobExecutionService {
           jobHeartbeatMs: this.#options.jobHeartbeatMs,
         },
       });
-      const renewed = await coordinator.renewJobLease(job);
-      await this.#safePublish({ type: 'job.upserted', sessionId: renewed.sessionId, job: renewed });
+      const renewedJob = await coordinator.renewJobExecutionLease(job);
+      await this.#publishWithoutFailingExecution({
+        type: 'job.upserted',
+        sessionId: renewedJob.sessionId,
+        job: renewedJob,
+      });
     } catch {
       // The next fenced write observes the lost lease.
     }
   }
 
-  async #requireOwnedJob(jobId: string): Promise<AgentJob> {
+  async #loadRunnableOwnedJob(jobId: string): Promise<AgentJob> {
     const job = await this.#options.store.getJob(jobId);
     if (!job) throw new Error(`Job ${jobId} was not found.`);
     if (!['running', 'resuming'].includes(job.status)
@@ -175,7 +204,7 @@ export class JobExecutionOrchestrator implements JobExecutionService {
     return job;
   }
 
-  async #failIfOwned(jobId: string, error: unknown): Promise<void> {
+  async #failJobIfStillOwned(jobId: string, error: unknown): Promise<void> {
     const job = await this.#options.store.getJob(jobId);
     if (!job || !job.currentAttemptId || job.leaseOwner !== this.#options.workerId
       || !['running', 'resuming'].includes(job.status)) return;
@@ -184,17 +213,23 @@ export class JobExecutionOrchestrator implements JobExecutionService {
       workerId: this.#options.workerId,
     });
     try {
-      const failed = await coordinator.failJob(job, {
+      const failedJob = await coordinator.failJob(job, {
         code: error instanceof RuntimeError ? error.code : 'runtime_error',
         message: error instanceof Error ? error.message : 'Runtime execution failed.',
       });
-      await this.#safePublish({ type: 'job.upserted', sessionId: failed.sessionId, job: failed });
+      await this.#publishWithoutFailingExecution({
+        type: 'job.upserted',
+        sessionId: failedJob.sessionId,
+        job: failedJob,
+      });
     } catch {
       // A newer owner or terminal transaction won the race.
     }
   }
 
-  async #safePublish(event: Parameters<RuntimeEventPublisher['publish']>[0]): Promise<void> {
+  async #publishWithoutFailingExecution(
+    event: Parameters<RuntimeEventPublisher['publish']>[0]
+  ): Promise<void> {
     try {
       await this.#options.publisher.publish(event);
     } catch {
