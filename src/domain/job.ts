@@ -3,6 +3,7 @@ const AGENT_JOB_STATUSES = [
   'running',
   'waiting_user_input',
   'resuming',
+  'recovery_required',
   'completed',
   'failed',
   'cancelled',
@@ -15,6 +16,7 @@ export const ACTIVE_JOB_STATUSES = [
   'running',
   'waiting_user_input',
   'resuming',
+  'recovery_required',
 ] as const satisfies readonly AgentJobStatus[];
 
 const TERMINAL_JOB_STATUSES = [
@@ -50,9 +52,10 @@ export interface AgentJob {
 
 const JOB_TRANSITIONS: Record<AgentJobStatus, readonly AgentJobStatus[]> = {
   created: ['running', 'cancelled'],
-  running: ['waiting_user_input', 'completed', 'failed', 'cancelled'],
+  running: ['waiting_user_input', 'recovery_required', 'completed', 'failed', 'cancelled'],
   waiting_user_input: ['resuming', 'cancelled'],
-  resuming: ['running', 'failed', 'cancelled'],
+  resuming: ['running', 'recovery_required', 'failed', 'cancelled'],
+  recovery_required: ['running', 'cancelled'],
   completed: [],
   failed: [],
   cancelled: [],

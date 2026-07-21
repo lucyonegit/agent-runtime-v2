@@ -46,6 +46,10 @@ export interface AgentLoopInput {
   exclusiveToolNames?: ReadonlySet<string>;
   validateToolCalls?: ToolCallsValidator;
   validateFinalAnswer?: FinalAnswerValidator;
+  /** Durable counters and pending calls restored from the latest checkpoint. */
+  initialIterationNo?: number;
+  initialExecutedToolCalls?: number;
+  resumeToolCalls?: AgentToolCall[];
 }
 
 type ToolCallsValidation =
@@ -141,9 +145,42 @@ export class AgentLoop {
     let messages = [...input.messages];
     let correctionMessages: BaseMessage[] = [];
     const definitions = new Map(input.tools.map(tool => [tool.name, tool]));
-    let executedToolCalls = 0;
+    let executedToolCalls = input.initialExecutedToolCalls ?? 0;
 
-    for (let iteration = 0; iteration < input.limits.maxIterations; iteration += 1) {
+    if (input.resumeToolCalls?.length) {
+      const inputRequests: Extract<ToolOutcome, { type: 'input' }>[] = [];
+      for (const call of input.resumeToolCalls) {
+        const preflight = this.#terminalPreflight(input.limits);
+        if (preflight) return preflight;
+        let outcome: ToolOutcome;
+        try {
+          outcome = await this.#executeTool(input, call, definitions.get(call.name));
+        } catch (error) {
+          if (input.limits.signal?.aborted || isAbortError(error)) {
+            return cancelledResult(input.limits.signal);
+          }
+          throw error;
+        }
+        if (outcome.type === 'input') {
+          inputRequests.push(outcome);
+          continue;
+        }
+        yield outcome.event;
+      }
+      for (const outcome of inputRequests) yield outcome.event;
+      if (inputRequests.length > 0) {
+        return {
+          type: 'waiting_user_input',
+          toolCallIds: inputRequests.map(outcome => outcome.call.id),
+        };
+      }
+    }
+
+    for (
+      let iteration = input.initialIterationNo ?? 0;
+      iteration < input.limits.maxIterations;
+      iteration += 1
+    ) {
       const preflight = this.#terminalPreflight(input.limits);
       if (preflight) return preflight;
 

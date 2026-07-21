@@ -1,10 +1,21 @@
 import { Pool, type PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  AGENT_RUNTIME_SCHEMA_VERSION,
   AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
   applyAgentRuntimeSchemaV1,
 } from '../src/storage/postgres/schema-v1.js';
+import {
+  AGENT_RUNTIME_SCHEMA_NAME as AGENT_RUNTIME_SCHEMA_V2_NAME,
+  AGENT_RUNTIME_SCHEMA_V2_CHECKSUM,
+  AGENT_RUNTIME_SCHEMA_VERSION as AGENT_RUNTIME_SCHEMA_V2_VERSION,
+  applyAgentRuntimeSchemaV2,
+} from '../src/storage/postgres/schema-v2.js';
+import {
+  AGENT_RUNTIME_SCHEMA_NAME,
+  AGENT_RUNTIME_SCHEMA_V3_CHECKSUM,
+  AGENT_RUNTIME_SCHEMA_VERSION,
+  applyAgentRuntimeSchemaV3,
+} from '../src/storage/postgres/schema-v3.js';
 import {
   assertAgentRuntimeSchemaVersion,
   migrateAgentRuntimeSchema,
@@ -18,6 +29,7 @@ const EXPECTED_TABLES = [
   'agent_artifacts',
   'agent_context_summaries',
   'agent_jobs',
+  'agent_loop_checkpoints',
   'agent_messages',
   'agent_model_calls',
   'agent_model_usage_stats',
@@ -25,11 +37,12 @@ const EXPECTED_TABLES = [
   'agent_plans',
   'agent_schema_versions',
   'agent_sessions',
+  'agent_tool_execution_attempts',
   'agent_tool_invocations',
   'agent_user_input_requests',
 ];
 
-describe('canonical PostgreSQL schema v1', () => {
+describe('canonical PostgreSQL schema v3', () => {
   let adminPool: Pool | undefined;
   let pool: Pool | undefined;
   let client: PoolClient | undefined;
@@ -44,6 +57,8 @@ describe('canonical PostgreSQL schema v1', () => {
     pool = new Pool({ connectionString: databaseUrl, options: `-c search_path=${schema}` });
     client = await pool.connect();
     await applyAgentRuntimeSchemaV1(client, 1_000);
+    await applyAgentRuntimeSchemaV2(client, 1_001);
+    await applyAgentRuntimeSchemaV3(client, 1_002);
   });
 
   afterEach(async () => {
@@ -72,18 +87,39 @@ describe('canonical PostgreSQL schema v1', () => {
     const versions = await client!.query(
       'select version, name, checksum, applied_at_ms from agent_schema_versions'
     );
-    expect(versions.rows).toEqual([{
-      version: AGENT_RUNTIME_SCHEMA_VERSION,
-      name: 'unified-job-react-canonical',
-      checksum: AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
-      applied_at_ms: '1000',
-    }]);
+    expect(versions.rows).toEqual([
+      {
+        version: 1,
+        name: 'unified-job-react-canonical',
+        checksum: AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
+        applied_at_ms: '1000',
+      },
+      {
+        version: AGENT_RUNTIME_SCHEMA_V2_VERSION,
+        name: AGENT_RUNTIME_SCHEMA_V2_NAME,
+        checksum: AGENT_RUNTIME_SCHEMA_V2_CHECKSUM,
+        applied_at_ms: '1001',
+      },
+      {
+        version: AGENT_RUNTIME_SCHEMA_VERSION,
+        name: AGENT_RUNTIME_SCHEMA_NAME,
+        checksum: AGENT_RUNTIME_SCHEMA_V3_CHECKSUM,
+        applied_at_ms: '1002',
+      },
+    ]);
   });
 
   it('allows only one active Job per Session', async () => {
     await insertSession(client!, 'session_jobs');
     await insertJob(client!, 'job_1', 'session_jobs');
 
+    await expect(insertJob(client!, 'job_2', 'session_jobs')).rejects.toMatchObject({ code: '23505' });
+
+    await client!.query(
+      `update agent_jobs
+       set status = 'recovery_required', updated_at_ms = 15
+       where id = 'job_1'`
+    );
     await expect(insertJob(client!, 'job_2', 'session_jobs')).rejects.toMatchObject({ code: '23505' });
 
     await client!.query(
@@ -147,9 +183,9 @@ describe('canonical PostgreSQL schema v1', () => {
   it('validates the exact schema version, name, and checksum', async () => {
     await expect(assertAgentRuntimeSchemaVersion(client!)).resolves.toEqual({
       version: AGENT_RUNTIME_SCHEMA_VERSION,
-      name: 'unified-job-react-canonical',
-      checksum: AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
-      appliedAtMs: 1_000,
+      name: AGENT_RUNTIME_SCHEMA_NAME,
+      checksum: AGENT_RUNTIME_SCHEMA_V3_CHECKSUM,
+      appliedAtMs: 1_002,
     });
   });
 
@@ -174,7 +210,8 @@ describe('canonical PostgreSQL schema v1', () => {
     await client!.query('delete from agent_schema_versions');
     await client!.query(
       `insert into agent_schema_versions(version, name, checksum, applied_at_ms)
-       values (2, 'future', 'future', 1)`
+       values ($1, 'future', 'future', 1)`,
+      [AGENT_RUNTIME_SCHEMA_VERSION + 1]
     );
     await expect(assertAgentRuntimeSchemaVersion(client!)).rejects.toMatchObject({
       code: 'AGENT_RUNTIME_SCHEMA_NEWER',
@@ -206,7 +243,7 @@ describe('canonical PostgreSQL schema v1', () => {
 
     await expect(migrateAgentRuntimeSchema(client!, 2_000)).resolves.toMatchObject({
       version: AGENT_RUNTIME_SCHEMA_VERSION,
-      checksum: AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
+      checksum: AGENT_RUNTIME_SCHEMA_V3_CHECKSUM,
       appliedAtMs: 2_000,
     });
   });

@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import type {
   AgentJob,
+  AgentLoopCheckpointPhase,
   AgentPlanStepResult,
   AgentSession,
 } from '../../domain/index.js';
@@ -8,8 +9,11 @@ import {
   AgentStoreError,
   type CancelJobInput,
   type StartJobExecutionInput,
+  type MarkJobRecoveryRequiredInput,
   type TryStartToolExecutionInput,
   type TryStartToolExecutionResult,
+  type PrepareToolInvocationsForRecoveryInput,
+  type PrepareToolInvocationsForRecoveryResult,
   type SaveUserInputAnswerInput,
   type SaveUserInputAnswerResult,
   type CommitModelToolCallsInput,
@@ -46,6 +50,7 @@ import {
   mapAgentModelUsageStatsRow,
   mapAgentContextSummaryRow,
   mapAgentToolInvocationRow,
+  mapAgentLoopCheckpointRow,
   mapAgentUserInputRequestRow,
   type AgentJobRow,
   type AgentArtifactRow,
@@ -57,6 +62,7 @@ import {
   type AgentModelUsageStatsRow,
   type AgentContextSummaryRow,
   type AgentToolInvocationRow,
+  type AgentLoopCheckpointRow,
   type AgentUserInputRequestRow,
 } from './row-mappers.js';
 import { lockAgentSession, withPostgresTransaction } from './sql.js';
@@ -161,34 +167,80 @@ export async function startJobExecutionCommand(
   input: StartJobExecutionInput
 ): Promise<AgentJob> {
   assertFutureLease(input.nowMs, input.leaseUntilMs);
+  return withPostgresTransaction(client, async () => {
+    const result = await client.query<AgentJobRow>(
+      `update agent_jobs
+       set status = 'running',
+           lease_owner = $3,
+           lease_expires_at_ms = $4,
+           current_attempt_id = $5,
+           attempt_no = attempt_no + 1,
+           version = version + 1,
+           started_at_ms = coalesce(started_at_ms, $6),
+           updated_at_ms = $6
+       where id = $1
+         and version = $2
+         and status in ('created', 'recovery_required')
+       returning *`,
+      [
+        input.jobId,
+        input.expectedVersion,
+        input.workerId,
+        input.leaseUntilMs,
+        input.attemptId,
+        input.nowMs,
+      ]
+    );
+    const row = result.rows[0];
+    if (row) {
+      const checkpoint = await selectLatestLoopCheckpoint(client, input.jobId);
+      await appendLoopCheckpoint(client, {
+        sessionId: row.session_id,
+        jobId: row.id,
+        attemptId: input.attemptId,
+        phase: checkpoint?.phase ?? 'ready_for_model',
+        callMessageId: checkpoint?.call_message_id ?? undefined,
+        iterationNo: checkpoint?.iteration_no ?? 0,
+        executedToolCalls: checkpoint?.executed_tool_calls ?? 0,
+        metadata: checkpoint
+          ? { resumedFromCheckpointId: checkpoint.id, resumedFromAttemptId: checkpoint.attempt_id }
+          : { initial: true },
+        nowMs: input.nowMs,
+      });
+      return mapAgentJobRow(row);
+    }
+    return throwJobMutationConflict(
+      client,
+      input.jobId,
+      input.expectedVersion,
+      'start an execution attempt for'
+    );
+  });
+}
+
+export async function markJobRecoveryRequiredCommand(
+  client: PoolClient,
+  input: MarkJobRecoveryRequiredInput
+): Promise<AgentJob> {
   const result = await client.query<AgentJobRow>(
     `update agent_jobs
-     set status = 'running',
-         lease_owner = $3,
-         lease_expires_at_ms = $4,
-         current_attempt_id = $5,
-         attempt_no = attempt_no + 1,
+     set status = 'recovery_required',
+         current_attempt_id = null,
+         lease_owner = null,
+         lease_expires_at_ms = null,
          version = version + 1,
-         started_at_ms = coalesce(started_at_ms, $6),
-         updated_at_ms = $6
+         updated_at_ms = $3
      where id = $1
        and version = $2
        and (
          status = 'created'
          or (
            status in ('running', 'resuming')
-           and lease_expires_at_ms <= $6
+           and lease_expires_at_ms <= $3
          )
        )
      returning *`,
-    [
-      input.jobId,
-      input.expectedVersion,
-      input.workerId,
-      input.leaseUntilMs,
-      input.attemptId,
-      input.nowMs,
-    ]
+    [input.jobId, input.expectedVersion, input.nowMs]
   );
   const row = result.rows[0];
   if (row) return mapAgentJobRow(row);
@@ -196,7 +248,8 @@ export async function startJobExecutionCommand(
     client,
     input.jobId,
     input.expectedVersion,
-    'start an execution attempt for'
+    'mark recovery required',
+    false
   );
 }
 
@@ -318,6 +371,18 @@ export async function commitModelToolCallsCommand(
       );
       invocationRows.push(requireRow(result.rows[0], 'create tool invocation'));
     }
+    const previousCheckpoint = await selectLatestLoopCheckpoint(client, input.jobId);
+    await appendLoopCheckpoint(client, {
+      sessionId: input.sessionId,
+      jobId: input.jobId,
+      attemptId: input.attemptId,
+      phase: 'tool_batch',
+      callMessageId: input.messageId,
+      iterationNo: (previousCheckpoint?.iteration_no ?? 0) + 1,
+      executedToolCalls: (previousCheckpoint?.executed_tool_calls ?? 0) + input.invocations.length,
+      metadata: { outputId: input.outputId },
+      nowMs: input.nowMs,
+    });
     await touchSession(client, input.sessionId, input.nowMs);
     return {
       message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'create tool-call message')),
@@ -330,51 +395,201 @@ export async function tryStartToolExecutionCommand(
   client: PoolClient,
   input: TryStartToolExecutionInput
 ): Promise<TryStartToolExecutionResult> {
-  const result = await client.query<AgentToolInvocationRow>(
-    `update agent_tool_invocations invocation
-     set status = 'running',
-         attempt_id = $4,
-         version = invocation.version + 1,
-         started_at_ms = coalesce(invocation.started_at_ms, $5),
-         updated_at_ms = $5
-     where invocation.job_id = $1
-       and invocation.tool_call_id = $2
-       and invocation.status = 'pending'
-       and exists (
-         select 1
-         from agent_jobs job
-         where job.id = invocation.job_id
-           and job.status in ('running', 'resuming')
-           and job.lease_owner = $3
-           and job.current_attempt_id = $4
-           and job.lease_expires_at_ms > $5
-       )
-     returning invocation.*`,
-    [input.jobId, input.toolCallId, input.workerId, input.attemptId, input.nowMs]
-  );
-  if (result.rows[0]) {
-    return { invocation: mapAgentToolInvocationRow(result.rows[0]), started: true };
-  }
-
-  const invocation = await selectToolInvocation(client, input.jobId, input.toolCallId);
-  if (!invocation) {
-    throw new AgentStoreError(
-      'TOOL_INVOCATION_NOT_FOUND',
-      `Tool invocation ${JSON.stringify(input.toolCallId)} was not found in Job ${JSON.stringify(input.jobId)}.`,
-      { jobId: input.jobId, toolCallId: input.toolCallId }
+  return withPostgresTransaction(client, async () => {
+    const result = await client.query<AgentToolInvocationRow>(
+      `update agent_tool_invocations invocation
+       set status = 'running',
+           attempt_id = $4,
+           execution_attempt_no = invocation.execution_attempt_no + 1,
+           version = invocation.version + 1,
+           started_at_ms = $5,
+           completed_at_ms = null,
+           error_code = null,
+           error_message = null,
+           error_details = null,
+           updated_at_ms = $5
+       where invocation.job_id = $1
+         and invocation.tool_call_id = $2
+         and invocation.status = 'pending'
+         and exists (
+           select 1
+           from agent_jobs job
+           where job.id = invocation.job_id
+             and job.status in ('running', 'resuming')
+             and job.lease_owner = $3
+             and job.current_attempt_id = $4
+             and job.lease_expires_at_ms > $5
+         )
+       returning invocation.*`,
+      [input.jobId, input.toolCallId, input.workerId, input.attemptId, input.nowMs]
     );
-  }
-  const job = await selectJob(client, input.jobId);
-  if (!job) throw jobNotFound(input.jobId);
-  assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
-  if (['completed', 'failed', 'cancelled'].includes(invocation.status)) {
-    return { invocation: mapAgentToolInvocationRow(invocation), started: false };
-  }
-  throw new AgentStoreError(
-    'INVALID_TOOL_INVOCATION_STATE',
-    `Tool invocation ${JSON.stringify(input.toolCallId)} cannot start execution from status ${invocation.status}.`,
-    { jobId: input.jobId, toolCallId: input.toolCallId, status: invocation.status }
-  );
+    if (result.rows[0]) {
+      const invocation = result.rows[0];
+      await client.query(
+        `insert into agent_tool_execution_attempts(
+           id, invocation_id, job_id, job_attempt_id, attempt_no,
+           worker_id, status, started_at_ms
+         ) values ($1, $2, $3, $4, $5, $6, 'running', $7)`,
+        [
+          `${invocation.id}:execution:${invocation.execution_attempt_no}`,
+          invocation.id,
+          input.jobId,
+          input.attemptId,
+          invocation.execution_attempt_no,
+          input.workerId,
+          input.nowMs,
+        ]
+      );
+      return { invocation: mapAgentToolInvocationRow(invocation), started: true };
+    }
+
+    const invocation = await selectToolInvocation(client, input.jobId, input.toolCallId);
+    if (!invocation) {
+      throw new AgentStoreError(
+        'TOOL_INVOCATION_NOT_FOUND',
+        `Tool invocation ${JSON.stringify(input.toolCallId)} was not found in Job ${JSON.stringify(input.jobId)}.`,
+        { jobId: input.jobId, toolCallId: input.toolCallId }
+      );
+    }
+    const job = await selectJob(client, input.jobId);
+    if (!job) throw jobNotFound(input.jobId);
+    assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+    if (['completed', 'failed', 'cancelled'].includes(invocation.status)) {
+      return { invocation: mapAgentToolInvocationRow(invocation), started: false };
+    }
+    throw new AgentStoreError(
+      'INVALID_TOOL_INVOCATION_STATE',
+      `Tool invocation ${JSON.stringify(input.toolCallId)} cannot start execution from status ${invocation.status}.`,
+      { jobId: input.jobId, toolCallId: input.toolCallId, status: invocation.status }
+    );
+  });
+}
+
+export async function prepareToolInvocationsForRecoveryCommand(
+  client: PoolClient,
+  input: PrepareToolInvocationsForRecoveryInput
+): Promise<PrepareToolInvocationsForRecoveryResult> {
+  return withPostgresTransaction(client, async () => {
+    const jobResult = await client.query<AgentJobRow>(
+      `select * from agent_jobs where id = $1 for update`,
+      [input.jobId]
+    );
+    const job = requireRow(jobResult.rows[0], 'lock job for tool recovery');
+    assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
+    let checkpoint = await selectLatestLoopCheckpoint(client, input.jobId);
+    let callMessageId = checkpoint?.phase === 'tool_batch'
+      ? checkpoint.call_message_id
+      : undefined;
+
+    // Existing V1 Jobs have no checkpoint. Adopt their latest incomplete tool
+    // batch once during migration instead of discarding durable work.
+    if (!callMessageId) {
+      const legacyBatch = await client.query<{ call_message_id: string }>(
+        `select call_message_id
+         from agent_tool_invocations
+         where job_id = $1
+           and status not in ('completed', 'failed', 'cancelled')
+         order by created_at_ms desc, id desc
+         limit 1`,
+        [input.jobId]
+      );
+      callMessageId = legacyBatch.rows[0]?.call_message_id;
+      if (callMessageId) {
+        checkpoint = await appendLoopCheckpoint(client, {
+          sessionId: job.session_id,
+          jobId: job.id,
+          attemptId: input.attemptId,
+          phase: 'tool_batch',
+          callMessageId,
+          iterationNo: checkpoint?.iteration_no ?? 0,
+          executedToolCalls: checkpoint?.executed_tool_calls ?? 0,
+          metadata: { adoptedLegacyBatch: true },
+          nowMs: input.nowMs,
+        });
+      }
+    }
+
+    if (!callMessageId) {
+      return {
+        checkpoint: checkpoint ? mapAgentLoopCheckpointRow(checkpoint) : undefined,
+        invocations: [],
+        blockedInvocations: [],
+      };
+    }
+
+    const result = await client.query<AgentToolInvocationRow>(
+      `select *
+       from agent_tool_invocations
+       where job_id = $1 and call_message_id = $2
+       order by created_at_ms asc, id asc
+       for update`,
+      [input.jobId, callMessageId]
+    );
+    const recoveredRows: AgentToolInvocationRow[] = [];
+    const blockedRows: AgentToolInvocationRow[] = [];
+    for (const invocation of result.rows) {
+      if (['completed', 'failed'].includes(invocation.status)) {
+        recoveredRows.push(invocation);
+        continue;
+      }
+      if (invocation.status === 'running') {
+        const unsafe = invocation.side_effect_level === 'side_effecting';
+        await client.query(
+          `update agent_tool_execution_attempts
+           set status = $3,
+               error_code = $4,
+               error_message = $5,
+               completed_at_ms = $6
+           where invocation_id = $1 and attempt_no = $2 and status = 'running'`,
+          [
+            invocation.id,
+            invocation.execution_attempt_no,
+            unsafe ? 'unknown' : 'interrupted',
+            unsafe ? 'side_effect_status_unknown' : 'execution_interrupted',
+            unsafe
+              ? 'The process exited before the side effect outcome was committed.'
+              : 'The tool execution owner exited before committing a result.',
+            input.nowMs,
+          ]
+        );
+        if (unsafe) {
+          const unknown = await client.query<AgentToolInvocationRow>(
+            `update agent_tool_invocations
+             set status = 'unknown',
+                 error_code = 'side_effect_status_unknown',
+                 error_message = 'The process exited before the side effect outcome was committed.',
+                 version = version + 1,
+                 updated_at_ms = $2
+             where id = $1
+             returning *`,
+            [invocation.id, input.nowMs]
+          );
+          blockedRows.push(requireRow(unknown.rows[0], 'mark unsafe invocation unknown'));
+          continue;
+        }
+      }
+      if (invocation.status === 'pending' || invocation.status === 'running') {
+        const pending = await client.query<AgentToolInvocationRow>(
+          `update agent_tool_invocations
+           set status = 'pending',
+               attempt_id = $2,
+               version = version + 1,
+               updated_at_ms = $3
+           where id = $1
+           returning *`,
+          [invocation.id, input.attemptId, input.nowMs]
+        );
+        recoveredRows.push(requireRow(pending.rows[0], 'prepare invocation retry'));
+        continue;
+      }
+      blockedRows.push(invocation);
+    }
+    return {
+      checkpoint: checkpoint ? mapAgentLoopCheckpointRow(checkpoint) : undefined,
+      invocations: recoveredRows.map(mapAgentToolInvocationRow),
+      blockedInvocations: blockedRows.map(mapAgentToolInvocationRow),
+    };
+  });
 }
 
 export async function commitToolResultCommand(
@@ -489,6 +704,24 @@ export async function commitToolResultCommand(
         input.nowMs,
       ]
     );
+    await client.query(
+      `update agent_tool_execution_attempts
+       set status = $3,
+           error_code = $4,
+           error_message = $5,
+           error_details = $6,
+           completed_at_ms = $7
+       where invocation_id = $1 and attempt_no = $2 and status = 'running'`,
+      [
+        invocation.id,
+        invocation.execution_attempt_no,
+        input.outcome.status,
+        input.outcome.status === 'failed' ? input.outcome.code : null,
+        input.outcome.status === 'failed' ? input.outcome.message : null,
+        input.outcome.status === 'failed' ? input.outcome.details ?? null : null,
+        input.nowMs,
+      ]
+    );
     const artifactRows: AgentArtifactRow[] = [];
     if (input.outcome.status === 'completed') {
       for (const artifact of input.outcome.artifacts ?? []) {
@@ -564,6 +797,26 @@ export async function commitToolResultCommand(
         );
       }
     }
+    const remainingInBatch = await client.query<{ count: string }>(
+      `select count(*)::text as count
+       from agent_tool_invocations
+       where call_message_id = $1
+         and status not in ('completed', 'failed')`,
+      [invocation.call_message_id]
+    );
+    if (remainingInBatch.rows[0]?.count === '0') {
+      const previousCheckpoint = await selectLatestLoopCheckpoint(client, input.jobId);
+      await appendLoopCheckpoint(client, {
+        sessionId: input.sessionId,
+        jobId: input.jobId,
+        attemptId: input.attemptId,
+        phase: 'ready_for_model',
+        iterationNo: previousCheckpoint?.iteration_no ?? 0,
+        executedToolCalls: previousCheckpoint?.executed_tool_calls ?? 0,
+        metadata: { completedCallMessageId: invocation.call_message_id },
+        nowMs: input.nowMs,
+      });
+    }
     await touchSession(client, input.sessionId, input.nowMs);
     return {
       message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'create tool-result message')),
@@ -632,6 +885,17 @@ export async function completeJobWithFinalMessageCommand(
        returning *`,
       [input.jobId, input.nowMs]
     );
+    const previousCheckpoint = await selectLatestLoopCheckpoint(client, input.jobId);
+    await appendLoopCheckpoint(client, {
+      sessionId: input.sessionId,
+      jobId: input.jobId,
+      attemptId: input.attemptId,
+      phase: 'completed',
+      iterationNo: (previousCheckpoint?.iteration_no ?? 0) + 1,
+      executedToolCalls: previousCheckpoint?.executed_tool_calls ?? 0,
+      metadata: { outputId: input.outputId, messageId: input.messageId },
+      nowMs: input.nowMs,
+    });
     await touchSession(client, input.sessionId, input.nowMs);
     return {
       job: mapAgentJobRow(requireRow(completedJob.rows[0], 'complete job')),
@@ -761,6 +1025,26 @@ export async function createInputRequestsAndMarkWaitingCommand(
        returning *`,
       [input.jobId, input.nowMs]
     );
+    const previousCheckpoint = await selectLatestLoopCheckpoint(client, input.jobId);
+    const callMessageId = invocationRows[0]?.call_message_id
+      ?? previousCheckpoint?.call_message_id;
+    if (!callMessageId) {
+      throw new AgentStoreError(
+        'INVALID_TOOL_INVOCATION_STATE',
+        'Waiting for tool input requires a durable tool batch checkpoint.'
+      );
+    }
+    await appendLoopCheckpoint(client, {
+      sessionId: input.sessionId,
+      jobId: input.jobId,
+      attemptId: input.attemptId,
+      phase: 'waiting_user_input',
+      callMessageId,
+      iterationNo: previousCheckpoint?.iteration_no ?? 0,
+      executedToolCalls: previousCheckpoint?.executed_tool_calls ?? 0,
+      metadata: { requestIds: requestRows.map(row => row.id) },
+      nowMs: input.nowMs,
+    });
     await touchSession(client, input.sessionId, input.nowMs);
     return {
       job: mapAgentJobRow(requireRow(waitingJob.rows[0], 'mark job waiting')),
@@ -943,6 +1227,31 @@ export async function saveUserInputAnswerAndResumeIfReadyCommand(
         [job.id, input.workerId, input.leaseUntilMs, input.attemptId, input.nowMs]
       );
       job = requireRow(resumedJob.rows[0], 'resume job');
+      const previousCheckpoint = await selectLatestLoopCheckpoint(client, job.id);
+      const callMessageId = invocation?.call_message_id ?? previousCheckpoint?.call_message_id;
+      const unfinished = callMessageId
+        ? await client.query<{ count: string }>(
+            `select count(*)::text as count
+             from agent_tool_invocations
+             where call_message_id = $1
+               and status not in ('completed', 'failed')`,
+            [callMessageId]
+          )
+        : undefined;
+      const phase = unfinished?.rows[0]?.count === '0' || !callMessageId
+        ? 'ready_for_model' as const
+        : 'tool_batch' as const;
+      await appendLoopCheckpoint(client, {
+        sessionId: request.session_id,
+        jobId: job.id,
+        attemptId: input.attemptId,
+        phase,
+        ...(phase === 'tool_batch' && callMessageId ? { callMessageId } : {}),
+        iterationNo: previousCheckpoint?.iteration_no ?? 0,
+        executedToolCalls: previousCheckpoint?.executed_tool_calls ?? 0,
+        metadata: { resumedFromUserInputRequestId: request.id },
+        nowMs: input.nowMs,
+      });
     }
     await touchSession(client, request.session_id, input.nowMs);
     return {
@@ -1327,18 +1636,39 @@ export async function setModelCallOutputDispositionCommand(
   client: PoolClient,
   input: SetModelCallOutputDispositionInput
 ) {
-  const result = await client.query<AgentModelCallRow>(
-    `update agent_model_calls
-     set output_disposition = $3,
-         output_disposition_reason = $4
-     where job_id = $1 and output_id = $2
-     returning *`,
-    [input.jobId, input.outputId, input.disposition, input.reason ?? null]
-  );
-  return mapAgentModelCallRow(requireRow(
-    result.rows[0],
-    `set disposition for ModelCall output ${JSON.stringify(input.outputId)}`
-  ));
+  return withPostgresTransaction(client, async () => {
+    const jobResult = await client.query<AgentJobRow>(
+      `select * from agent_jobs where id = $1 for update`,
+      [input.jobId]
+    );
+    const job = requireRow(jobResult.rows[0], 'lock job for model output disposition');
+    const result = await client.query<AgentModelCallRow>(
+      `update agent_model_calls
+       set output_disposition = $3,
+           output_disposition_reason = $4
+       where job_id = $1 and output_id = $2
+       returning *`,
+      [input.jobId, input.outputId, input.disposition, input.reason ?? null]
+    );
+    const call = requireRow(
+      result.rows[0],
+      `set disposition for ModelCall output ${JSON.stringify(input.outputId)}`
+    );
+    if (input.disposition === 'rejected' && job.current_attempt_id === call.attempt_id) {
+      const previousCheckpoint = await selectLatestLoopCheckpoint(client, input.jobId);
+      await appendLoopCheckpoint(client, {
+        sessionId: job.session_id,
+        jobId: job.id,
+        attemptId: call.attempt_id,
+        phase: 'ready_for_model',
+        iterationNo: (previousCheckpoint?.iteration_no ?? 0) + 1,
+        executedToolCalls: previousCheckpoint?.executed_tool_calls ?? 0,
+        metadata: { rejectedOutputId: input.outputId, reason: input.reason },
+        nowMs: Number(call.completed_at_ms ?? job.updated_at_ms),
+      });
+    }
+    return mapAgentModelCallRow(call);
+  });
 }
 
 export async function completeModelCallCommand(
@@ -1582,7 +1912,7 @@ async function terminateJobCommand(
     const job = jobResult.rows[0];
     if (!job) throw jobNotFound(input.jobId);
     assertExpectedVersion(job, input.expectedVersion);
-    if (!['created', 'running', 'waiting_user_input', 'resuming'].includes(job.status)) {
+    if (!['created', 'running', 'waiting_user_input', 'resuming', 'recovery_required'].includes(job.status)) {
       throw new AgentStoreError(
         'INVALID_JOB_STATE',
         `Cannot ${input.terminalStatus === 'failed' ? 'fail' : 'cancel'} Job ${JSON.stringify(input.jobId)} from status ${job.status}.`,
@@ -1618,6 +1948,20 @@ async function terminateJobCommand(
         input.nowMs,
       ]
     );
+    const previousCheckpoint = await selectLatestLoopCheckpoint(client, input.jobId);
+    const attemptId = input.attemptId ?? job.current_attempt_id ?? previousCheckpoint?.attempt_id;
+    if (attemptId) {
+      await appendLoopCheckpoint(client, {
+        sessionId: job.session_id,
+        jobId: input.jobId,
+        attemptId,
+        phase: input.terminalStatus,
+        iterationNo: previousCheckpoint?.iteration_no ?? 0,
+        executedToolCalls: previousCheckpoint?.executed_tool_calls ?? 0,
+        metadata: input.error ? { error: input.error } : undefined,
+        nowMs: input.nowMs,
+      });
+    }
     return mapAgentJobRow(requireRow(updated.rows[0], 'terminate job'));
   });
 }
@@ -1674,6 +2018,36 @@ async function terminateJobDescendants(
       terminalStepStatus,
       input.error?.code ?? null,
       input.error?.message ?? null,
+      input.error?.details ?? null,
+      input.nowMs,
+    ]
+  );
+  await client.query(
+    `update agent_tool_execution_attempts execution
+     set status = case
+           when invocation.side_effect_level = 'side_effecting' then 'unknown'
+           else 'interrupted'
+         end,
+         error_code = case
+           when invocation.side_effect_level = 'side_effecting'
+             then 'side_effect_status_unknown'
+           else $2
+         end,
+         error_message = case
+           when invocation.side_effect_level = 'side_effecting'
+             then 'Side-effecting tool execution lost its owner before the outcome was committed.'
+           else $3
+         end,
+         error_details = $4,
+         completed_at_ms = $5
+     from agent_tool_invocations invocation
+     where execution.invocation_id = invocation.id
+       and invocation.job_id = $1
+       and execution.status = 'running'`,
+    [
+      input.jobId,
+      input.error?.code ?? (terminalStatus === 'failed' ? 'job_failed' : 'job_cancelled'),
+      input.error?.message ?? `Job was ${terminalStatus}.`,
       input.error?.details ?? null,
       input.nowMs,
     ]
@@ -1912,6 +2286,63 @@ async function selectToolInvocation(
     [jobId, toolCallId]
   );
   return result.rows[0];
+}
+
+interface AppendLoopCheckpointInput {
+  sessionId: string;
+  jobId: string;
+  attemptId: string;
+  phase: AgentLoopCheckpointPhase;
+  callMessageId?: string;
+  iterationNo: number;
+  executedToolCalls: number;
+  metadata?: Record<string, unknown>;
+  nowMs: number;
+}
+
+async function selectLatestLoopCheckpoint(
+  client: PoolClient,
+  jobId: string
+): Promise<AgentLoopCheckpointRow | undefined> {
+  const result = await client.query<AgentLoopCheckpointRow>(
+    `select *
+     from agent_loop_checkpoints
+     where job_id = $1
+     order by sequence_no desc
+     limit 1`,
+    [jobId]
+  );
+  return result.rows[0];
+}
+
+async function appendLoopCheckpoint(
+  client: PoolClient,
+  input: AppendLoopCheckpointInput
+): Promise<AgentLoopCheckpointRow> {
+  const latest = await selectLatestLoopCheckpoint(client, input.jobId);
+  const sequenceNo = (latest?.sequence_no ?? 0) + 1;
+  const id = `${input.jobId}:checkpoint:${sequenceNo}`;
+  const result = await client.query<AgentLoopCheckpointRow>(
+    `insert into agent_loop_checkpoints(
+       id, session_id, job_id, attempt_id, sequence_no, phase,
+       call_message_id, iteration_no, executed_tool_calls, metadata, created_at_ms
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     returning *`,
+    [
+      id,
+      input.sessionId,
+      input.jobId,
+      input.attemptId,
+      sequenceNo,
+      input.phase,
+      input.callMessageId ?? null,
+      input.iterationNo,
+      input.executedToolCalls,
+      input.metadata ?? null,
+      input.nowMs,
+    ]
+  );
+  return requireRow(result.rows[0], 'append loop checkpoint');
 }
 
 async function resolveActivePlanScope(

@@ -203,6 +203,7 @@ function planInvocation(call: AgentMessage, result: AgentMessage): AgentToolInvo
     callMessageId: call.id, resultMessageId: result.id, toolCallId: 'call_plan',
     toolName: 'update_plan', arguments: { title: 'Build report' }, argumentsChecksum: 'checksum',
     sideEffectLevel: 'idempotent', idempotencyKey: 'job_1:call_plan', status: 'completed',
+    executionAttemptNo: 1,
     resultPayload: result.toolResult?.result, version: 1, createdAtMs: 2,
     startedAtMs: 2, completedAtMs: 3, updatedAtMs: 3,
   };

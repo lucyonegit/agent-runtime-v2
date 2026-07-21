@@ -24,6 +24,9 @@ export interface JobAgentRunInput {
   exclusiveToolNames?: ReadonlySet<string>;
   validateToolCalls?: Parameters<AgentLoop['run']>[0]['validateToolCalls'];
   validateFinalAnswer?: Parameters<AgentLoop['run']>[0]['validateFinalAnswer'];
+  initialIterationNo?: number;
+  initialExecutedToolCalls?: number;
+  resumeToolCalls?: Parameters<AgentLoop['run']>[0]['resumeToolCalls'];
   toolExecutor: ToolExecutorPort;
   outputIdFactory: () => string;
   limits: AgentLoopLimits;
@@ -78,6 +81,9 @@ export class AgentRunner {
       exclusiveToolNames: input.exclusiveToolNames,
       validateToolCalls: input.validateToolCalls,
       validateFinalAnswer: input.validateFinalAnswer,
+      initialIterationNo: input.initialIterationNo,
+      initialExecutedToolCalls: input.initialExecutedToolCalls,
+      resumeToolCalls: input.resumeToolCalls,
     });
 
     while (true) {

@@ -540,6 +540,7 @@ function invocation(
     sideEffectLevel: 'read_only',
     idempotencyKey: id,
     status,
+    executionAttemptNo: 1,
     version: 0,
     createdAtMs: 1,
     updatedAtMs: 1,

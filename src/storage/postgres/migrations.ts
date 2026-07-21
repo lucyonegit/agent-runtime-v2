@@ -1,10 +1,20 @@
 import type { PoolClient } from 'pg';
 import {
-  AGENT_RUNTIME_SCHEMA_NAME,
   AGENT_RUNTIME_SCHEMA_V1_CHECKSUM,
-  AGENT_RUNTIME_SCHEMA_VERSION,
   applyAgentRuntimeSchemaV1,
 } from './schema-v1.js';
+import {
+  AGENT_RUNTIME_SCHEMA_NAME as AGENT_RUNTIME_SCHEMA_V2_NAME,
+  AGENT_RUNTIME_SCHEMA_V2_CHECKSUM,
+  AGENT_RUNTIME_SCHEMA_VERSION as AGENT_RUNTIME_SCHEMA_V2_VERSION,
+  applyAgentRuntimeSchemaV2,
+} from './schema-v2.js';
+import {
+  AGENT_RUNTIME_SCHEMA_NAME,
+  AGENT_RUNTIME_SCHEMA_V3_CHECKSUM,
+  AGENT_RUNTIME_SCHEMA_VERSION,
+  applyAgentRuntimeSchemaV3,
+} from './schema-v3.js';
 
 type AgentRuntimeSchemaErrorCode =
   | 'AGENT_RUNTIME_SCHEMA_MISSING'
@@ -83,7 +93,7 @@ export async function assertAgentRuntimeSchemaVersion(
       `Agent Runtime schema version ${row.version} has unexpected name ${JSON.stringify(row.name)}.`
     );
   }
-  if (row.checksum !== AGENT_RUNTIME_SCHEMA_V1_CHECKSUM) {
+  if (row.checksum !== AGENT_RUNTIME_SCHEMA_V3_CHECKSUM) {
     throw new AgentRuntimeSchemaError(
       'AGENT_RUNTIME_SCHEMA_CHECKSUM_MISMATCH',
       `Agent Runtime schema version ${row.version} checksum does not match the immutable migration.`
@@ -108,6 +118,29 @@ export async function migrateAgentRuntimeSchema(
 ): Promise<AgentRuntimeSchemaVersionRecord> {
   if (!await hasSchemaVersionTable(client)) {
     await applyAgentRuntimeSchemaV1(client, appliedAtMs);
+  }
+  let current = await readLatestSchemaVersion(client);
+  if (current?.version === 1) {
+    if (current.checksum !== AGENT_RUNTIME_SCHEMA_V1_CHECKSUM) {
+      throw new AgentRuntimeSchemaError(
+        'AGENT_RUNTIME_SCHEMA_CHECKSUM_MISMATCH',
+        'Agent Runtime schema version 1 checksum does not match the immutable migration.'
+      );
+    }
+    await applyAgentRuntimeSchemaV2(client, appliedAtMs);
+    current = await readLatestSchemaVersion(client);
+  }
+  if (current?.version === AGENT_RUNTIME_SCHEMA_V2_VERSION) {
+    if (
+      current.name !== AGENT_RUNTIME_SCHEMA_V2_NAME
+      || current.checksum !== AGENT_RUNTIME_SCHEMA_V2_CHECKSUM
+    ) {
+      throw new AgentRuntimeSchemaError(
+        'AGENT_RUNTIME_SCHEMA_CHECKSUM_MISMATCH',
+        'Agent Runtime schema version 2 does not match the immutable migration.'
+      );
+    }
+    await applyAgentRuntimeSchemaV3(client, appliedAtMs);
   }
   return assertAgentRuntimeSchemaVersion(client);
 }
@@ -144,6 +177,16 @@ async function hasSchemaVersionTable(client: PoolClient): Promise<boolean> {
     `select to_regclass('agent_schema_versions')::text as relation_name`
   );
   return result.rows[0]?.relation_name !== null;
+}
+
+async function readLatestSchemaVersion(client: PoolClient): Promise<SchemaVersionRow | undefined> {
+  const result = await client.query<SchemaVersionRow>(
+    `select version, name, checksum, applied_at_ms
+     from agent_schema_versions
+     order by version desc
+     limit 1`
+  );
+  return result.rows[0];
 }
 
 function quoteIdentifier(identifier: string): string {

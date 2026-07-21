@@ -29,6 +29,7 @@ export interface AgentToolInvocation {
   sideEffectLevel: AgentToolSideEffectLevel;
   idempotencyKey: string;
   status: AgentToolInvocationStatus;
+  executionAttemptNo: number;
   resultPayload?: unknown;
   error?: AgentJobError;
   version: number;

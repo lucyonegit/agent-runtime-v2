@@ -84,6 +84,14 @@ export class AgentController {
     return this.runtime.retryJob({ failedJobId: jobId, ...body });
   }
 
+  @Post('jobs/:jobId/resume')
+  resumeJob(
+    @Param('jobId') jobId: string,
+    @Body() body: { expectedVersion: number }
+  ) {
+    return this.runtime.resumeJob(jobId, body.expectedVersion);
+  }
+
   @Post('user-input-requests/:requestId/answer')
   answerUserInputRequest(
     @Param('requestId') requestId: string,

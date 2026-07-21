@@ -4,6 +4,8 @@ import type {
   AgentArtifactKind,
   AgentJob,
   AgentJobStatus,
+  AgentLoopCheckpoint,
+  AgentLoopCheckpointPhase,
   AgentContextSummary,
   AgentContextOwnerType,
   AgentContextPurpose,
@@ -130,6 +132,7 @@ export interface AgentToolInvocationRow {
   side_effect_level: string;
   idempotency_key: string;
   status: string;
+  execution_attempt_no: number;
   result_payload: unknown;
   error_code: string | null;
   error_message: string | null;
@@ -140,6 +143,20 @@ export interface AgentToolInvocationRow {
   started_at_ms: string | number | null;
   completed_at_ms: string | number | null;
   updated_at_ms: string | number;
+}
+
+export interface AgentLoopCheckpointRow {
+  id: string;
+  session_id: string;
+  job_id: string;
+  attempt_id: string;
+  sequence_no: number;
+  phase: AgentLoopCheckpointPhase;
+  call_message_id: string | null;
+  iteration_no: number;
+  executed_tool_calls: number;
+  metadata: unknown;
+  created_at_ms: string | number;
 }
 
 export interface AgentUserInputRequestRow {
@@ -395,6 +412,7 @@ export function mapAgentToolInvocationRow(
     sideEffectLevel: row.side_effect_level as AgentToolSideEffectLevel,
     idempotencyKey: row.idempotency_key,
     status: row.status as AgentToolInvocationStatus,
+    executionAttemptNo: row.execution_attempt_no,
     ...(row.result_payload === null ? {} : { resultPayload: row.result_payload }),
     ...(row.error_code === null || row.error_message === null
       ? {}
@@ -417,6 +435,26 @@ export function mapAgentToolInvocationRow(
       ? {}
       : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_tool_invocations.completed_at_ms') }),
     updatedAtMs: mapBigint(row.updated_at_ms, 'agent_tool_invocations.updated_at_ms'),
+  };
+}
+
+export function mapAgentLoopCheckpointRow(
+  row: AgentLoopCheckpointRow
+): AgentLoopCheckpoint {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    jobId: row.job_id,
+    attemptId: row.attempt_id,
+    sequenceNo: row.sequence_no,
+    phase: row.phase as AgentLoopCheckpointPhase,
+    ...(row.call_message_id === null ? {} : { callMessageId: row.call_message_id }),
+    iterationNo: row.iteration_no,
+    executedToolCalls: row.executed_tool_calls,
+    ...(row.metadata === null
+      ? {}
+      : { metadata: mapRecord(row.metadata, 'agent_loop_checkpoints.metadata') }),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_loop_checkpoints.created_at_ms'),
   };
 }
 

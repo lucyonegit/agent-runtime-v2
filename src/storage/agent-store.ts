@@ -2,6 +2,7 @@ import type {
   AgentArtifact,
   AgentArtifactDraft,
   AgentJob,
+  AgentLoopCheckpoint,
   AgentContextInputManifest,
   AgentContextOwnerType,
   AgentContextPurpose,
@@ -113,7 +114,14 @@ export interface StartJobExecutionInput {
 
 export interface ListJobsNeedingRuntimeRecoveryInput {
   nowMs: number;
+  createdBeforeMs: number;
   limit: number;
+}
+
+export interface MarkJobRecoveryRequiredInput {
+  jobId: string;
+  expectedVersion: number;
+  nowMs: number;
 }
 
 export interface RenewJobExecutionLeaseInput extends StartJobExecutionInput {}
@@ -170,6 +178,19 @@ export interface TryStartToolExecutionInput {
 export interface TryStartToolExecutionResult {
   invocation: AgentToolInvocation;
   started: boolean;
+}
+
+export interface PrepareToolInvocationsForRecoveryInput {
+  jobId: string;
+  workerId: string;
+  attemptId: string;
+  nowMs: number;
+}
+
+export interface PrepareToolInvocationsForRecoveryResult {
+  checkpoint?: AgentLoopCheckpoint;
+  invocations: AgentToolInvocation[];
+  blockedInvocations: AgentToolInvocation[];
 }
 
 type CommittedToolOutcome =
@@ -389,6 +410,7 @@ export interface AgentStore {
     clientRequestId: string
   ): Promise<AgentJob | undefined>;
   getToolInvocation(jobId: string, toolCallId: string): Promise<AgentToolInvocation | undefined>;
+  getLatestLoopCheckpoint(jobId: string): Promise<AgentLoopCheckpoint | undefined>;
   getPlanByJobId(jobId: string): Promise<AgentPlan | undefined>;
   listPlanSteps(planId: string): Promise<AgentPlanStep[]>;
   getModelCall(modelCallId: string): Promise<AgentModelCall | undefined>;
@@ -408,6 +430,7 @@ export interface AgentStore {
   listSessionArtifacts(sessionId: string): Promise<AgentArtifact[]>;
   listSessionUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
   listJobsNeedingRuntimeRecovery(input: ListJobsNeedingRuntimeRecoveryInput): Promise<AgentJob[]>;
+  markJobRecoveryRequired(input: MarkJobRecoveryRequiredInput): Promise<AgentJob>;
   createJobAndAppendUserMessage(
     input: CreateJobAndAppendUserMessageInput
   ): Promise<CreateJobAndAppendUserMessageResult>;
@@ -416,6 +439,9 @@ export interface AgentStore {
   renewJobExecutionLease(input: RenewJobExecutionLeaseInput): Promise<AgentJob>;
   commitModelToolCalls(input: CommitModelToolCallsInput): Promise<CommitModelToolCallsResult>;
   tryStartToolExecution(input: TryStartToolExecutionInput): Promise<TryStartToolExecutionResult>;
+  prepareToolInvocationsForRecovery(
+    input: PrepareToolInvocationsForRecoveryInput
+  ): Promise<PrepareToolInvocationsForRecoveryResult>;
   commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult>;
   completeJobWithFinalMessage(
     input: CompleteJobWithFinalMessageInput

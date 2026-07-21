@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentJob, AgentRealtimeEvent, AgentToolInvocation } from '../domain/index.js';
+import type { AgentJob, AgentRealtimeEvent } from '../domain/index.js';
 import { JobCoordinator } from './lifecycle/job-coordinator.js';
 import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
 import type { AgentStore } from '../storage/agent-store.js';
@@ -181,6 +181,51 @@ export class AgentRuntime {
     return { ...retryResult, job: runningJob };
   }
 
+  async resumeJob(jobId: string, expectedVersion: number): Promise<AgentJob> {
+    const recoveredRunningJob = await this.#coordinator.resumeJobExecution(jobId, expectedVersion);
+    await this.#publishMany([{
+      type: 'job.upserted',
+      sessionId: recoveredRunningJob.sessionId,
+      job: recoveredRunningJob,
+    }]);
+
+    const prepared = await this.#store.prepareToolInvocationsForRecovery({
+      jobId: recoveredRunningJob.id,
+      workerId: recoveredRunningJob.leaseOwner!,
+      attemptId: recoveredRunningJob.currentAttemptId!,
+      nowMs: this.#clock.nowMs(),
+    });
+    await this.#publishMany([
+      ...prepared.invocations,
+      ...prepared.blockedInvocations,
+    ].map(invocation => ({
+      type: 'tool_invocation.upserted' as const,
+      sessionId: recoveredRunningJob.sessionId,
+      invocation,
+    })));
+    if (prepared.blockedInvocations.length > 0) {
+      const failedJob = await this.#coordinator.failJob(recoveredRunningJob, {
+        code: 'unsafe_tool_recovery',
+        message: 'A side-effecting tool was interrupted after it started. Its outcome must be reconciled before retrying.',
+        details: prepared.blockedInvocations.map(invocation => ({
+          invocationId: invocation.id,
+          toolCallId: invocation.toolCallId,
+          toolName: invocation.toolName,
+          status: invocation.status,
+          sideEffectLevel: invocation.sideEffectLevel,
+        })),
+      });
+      await this.#publishMany([{
+        type: 'job.upserted',
+        sessionId: failedJob.sessionId,
+        job: failedJob,
+      }]);
+      return failedJob;
+    }
+    this.#schedule(recoveredRunningJob.id);
+    return recoveredRunningJob;
+  }
+
   async answerUserInputRequest(input: {
     requestId: string;
     expectedVersion: number;
@@ -225,7 +270,7 @@ export class AgentRuntime {
       const latest = await this.#coordinator.getJob(jobId);
       if (!latest) throw error;
       if (latest.status === 'cancelled') return latest;
-      if (!['created', 'running', 'waiting_user_input', 'resuming'].includes(latest.status)) {
+      if (!['created', 'running', 'waiting_user_input', 'resuming', 'recovery_required'].includes(latest.status)) {
         throw error;
       }
       return this.#coordinator.cancelJob(jobId, latest.version);
@@ -240,12 +285,21 @@ export class AgentRuntime {
       await this.#store.abandonStartedModelCalls(nowMs);
       const jobsNeedingRecovery = await this.#store.listJobsNeedingRuntimeRecovery({
         nowMs,
+        createdBeforeMs: nowMs - this.#recoveryIntervalMs,
         limit: this.#recoveryBatchSize,
       });
       for (const jobNeedingRecovery of jobsNeedingRecovery) {
         if (this.#stopping) break;
         try {
-          await this.#recoverOneJob(jobNeedingRecovery);
+          const recoveryRequiredJob = await this.#coordinator.markJobRecoveryRequired(
+            jobNeedingRecovery.id,
+            jobNeedingRecovery.version
+          );
+          await this.#publishMany([{
+            type: 'job.upserted',
+            sessionId: recoveryRequiredJob.sessionId,
+            job: recoveryRequiredJob,
+          }]);
         } catch (error) {
           if (!(error instanceof RuntimeError
             && ['concurrency_conflict', 'invalid_job_state', 'lease_lost'].includes(error.code))) {
@@ -256,47 +310,6 @@ export class AgentRuntime {
     } finally {
       this.#recovering = false;
     }
-  }
-
-  async #recoverOneJob(jobNeedingRecovery: AgentJob): Promise<void> {
-    const jobToolInvocations = (
-      await this.#store.listSessionToolInvocations(jobNeedingRecovery.sessionId)
-    ).filter(invocation => invocation.jobId === jobNeedingRecovery.id);
-    const unfinishedToolInvocations = jobToolInvocations.filter(isUnfinishedToolInvocation);
-    const recoveredRunningJob = await this.#coordinator.startJobExecution(
-      jobNeedingRecovery.id,
-      jobNeedingRecovery.version
-    );
-    await this.#publishMany([{
-      type: 'job.upserted',
-      sessionId: recoveredRunningJob.sessionId,
-      job: recoveredRunningJob,
-    }]);
-
-    if (unfinishedToolInvocations.length === 0) {
-      this.#schedule(recoveredRunningJob.id);
-      return;
-    }
-
-    // An external side effect may already have happened before the process
-    // died. Replaying that invocation would be unsafe, so close the old Job and
-    // let the user continue through the normal retry path.
-    const failedJob = await this.#coordinator.failJob(recoveredRunningJob, {
-      code: 'execution_interrupted',
-      message: 'Runtime restarted while a tool invocation was in progress. Retry as a new Job to continue safely.',
-      details: unfinishedToolInvocations.map(invocation => ({
-        invocationId: invocation.id,
-        toolCallId: invocation.toolCallId,
-        toolName: invocation.toolName,
-        status: invocation.status,
-        sideEffectLevel: invocation.sideEffectLevel,
-      })),
-    });
-    await this.#publishMany([{
-      type: 'job.upserted',
-      sessionId: failedJob.sessionId,
-      job: failedJob,
-    }]);
   }
 
   #schedule(jobId: string): void {
@@ -313,7 +326,3 @@ const randomRuntimeIds = {
   messageId: () => `message_${randomUUID()}`,
   attemptId: () => `attempt_${randomUUID()}`,
 };
-
-function isUnfinishedToolInvocation(invocation: AgentToolInvocation): boolean {
-  return !['completed', 'failed'].includes(invocation.status) || !invocation.resultMessageId;
-}

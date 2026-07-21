@@ -23,12 +23,19 @@ describe('canonical runtime domain', () => {
     expect(canTransitionJob('resuming', 'running')).toBe(true);
   });
 
+  it('requires an explicit resume after an interrupted execution is paused', () => {
+    expect(canTransitionJob('running', 'recovery_required')).toBe(true);
+    expect(canTransitionJob('recovery_required', 'running')).toBe(true);
+    expect(isTerminalJobStatus('recovery_required')).toBe(false);
+  });
+
   it('defines database-active statuses consistently', () => {
     expect(ACTIVE_JOB_STATUSES).toEqual([
       'created',
       'running',
       'waiting_user_input',
       'resuming',
+      'recovery_required',
     ]);
   });
 

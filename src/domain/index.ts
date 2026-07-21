@@ -1,6 +1,7 @@
 export * from './artifact.js';
 export * from './context-summary.js';
 export * from './job.js';
+export * from './loop-checkpoint.js';
 export * from './message.js';
 export * from './model-call.js';
 export * from './plan.js';

@@ -30,7 +30,7 @@ export interface ContextSnapshot {
 }
 
 const ACTIVE_JOB_STATUSES = new Set<AgentJob['status']>([
-  'created', 'running', 'waiting_user_input', 'resuming',
+  'created', 'running', 'waiting_user_input', 'resuming', 'recovery_required',
 ]);
 
 export type ContextInspectionStore = Pick<AgentStore,

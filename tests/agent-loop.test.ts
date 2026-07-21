@@ -215,6 +215,39 @@ describe('AgentLoop with LangChain messages', () => {
     expect(executed).toEqual(['call_1', 'call_2']);
   });
 
+  it('resumes pending checkpoint tools before making the next model call', async () => {
+    const order: string[] = [];
+    const loop = new AgentLoop({
+      streaming: false,
+      model: invokeModel(() => {
+        order.push('model');
+        return chunk('continued from checkpoint');
+      }),
+    });
+    const run = await consume(loop.run(loopInput({
+      initialIterationNo: 3,
+      initialExecutedToolCalls: 4,
+      resumeToolCalls: [{ id: 'call_resume_5', name: 'lookup', args: { q: 'checkpoint' } }],
+      prepareMessages: async iteration => {
+        order.push(`context:${iteration}`);
+        return [];
+      },
+      toolExecutor: {
+        execute: async ({ call }) => {
+          order.push(`tool:${call.id}`);
+          return { type: 'completed', content: 'recovered result' };
+        },
+      },
+    })));
+
+    expect(order).toEqual(['tool:call_resume_5', 'context:3', 'model']);
+    expect(run.events.map(event => event.type)).toEqual([
+      LOOP_EVENT_TYPES.ToolResultCompleted,
+      LOOP_EVENT_TYPES.ModelOutputCompleted,
+    ]);
+    expect(run.result).toMatchObject({ type: 'completed', content: 'continued from checkpoint' });
+  });
+
   it('uses AIMessageChunk.concat to assemble streamed tool calls', async () => {
     let calls = 0;
     const observedMessageCounts: number[] = [];

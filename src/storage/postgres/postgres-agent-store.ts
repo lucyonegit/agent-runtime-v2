@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 import type {
   AgentArtifact,
   AgentJob,
+  AgentLoopCheckpoint,
   AgentContextOwnerType,
   AgentContextPurpose,
   AgentContextSummary,
@@ -44,7 +45,10 @@ import type {
   ReplaceContextSummaryInput,
   FailJobInput,
   ListJobsNeedingRuntimeRecoveryInput,
+  MarkJobRecoveryRequiredInput,
   RenewJobExecutionLeaseInput,
+  PrepareToolInvocationsForRecoveryInput,
+  PrepareToolInvocationsForRecoveryResult,
 } from '../agent-store.js';
 import {
   cancelJobCommand,
@@ -66,6 +70,8 @@ import {
   replaceContextSummaryCommand,
   failJobCommand,
   renewJobExecutionLeaseCommand,
+  prepareToolInvocationsForRecoveryCommand,
+  markJobRecoveryRequiredCommand,
 } from './transaction-commands.js';
 import {
   mapAgentJobRow,
@@ -79,6 +85,7 @@ import {
   mapAgentContextSummaryRow,
   mapAgentUserInputRequestRow,
   mapAgentToolInvocationRow,
+  mapAgentLoopCheckpointRow,
   type AgentJobRow,
   type AgentArtifactRow,
   type AgentMessageRow,
@@ -90,6 +97,7 @@ import {
   type AgentContextSummaryRow,
   type AgentUserInputRequestRow,
   type AgentToolInvocationRow,
+  type AgentLoopCheckpointRow,
 } from './row-mappers.js';
 
 export class PostgresAgentStore implements AgentStore {
@@ -155,6 +163,17 @@ export class PostgresAgentStore implements AgentStore {
       [jobId, toolCallId]
     );
     return result.rows[0] ? mapAgentToolInvocationRow(result.rows[0]) : undefined;
+  }
+
+  async getLatestLoopCheckpoint(jobId: string): Promise<AgentLoopCheckpoint | undefined> {
+    const result = await this.#pool.query<AgentLoopCheckpointRow>(
+      `select * from agent_loop_checkpoints
+       where job_id = $1
+       order by sequence_no desc
+       limit 1`,
+      [jobId]
+    );
+    return result.rows[0] ? mapAgentLoopCheckpointRow(result.rows[0]) : undefined;
   }
 
   async getPlanByJobId(jobId: string): Promise<AgentPlan | undefined> {
@@ -279,16 +298,20 @@ export class PostgresAgentStore implements AgentStore {
     const result = await this.#pool.query<AgentJobRow>(
       `select *
        from agent_jobs
-       where status = 'created'
+       where (status = 'created' and created_at_ms <= $3)
           or (
             status in ('running', 'resuming')
             and lease_expires_at_ms <= $1
           )
        order by coalesce(lease_expires_at_ms, created_at_ms) asc, created_at_ms asc, id asc
        limit $2`,
-      [input.nowMs, input.limit]
+      [input.nowMs, input.limit, input.createdBeforeMs]
     );
     return result.rows.map(mapAgentJobRow);
+  }
+
+  async markJobRecoveryRequired(input: MarkJobRecoveryRequiredInput): Promise<AgentJob> {
+    return this.#withClient(client => markJobRecoveryRequiredCommand(client, input));
   }
 
   async createJobAndAppendUserMessage(
@@ -319,6 +342,12 @@ export class PostgresAgentStore implements AgentStore {
     input: TryStartToolExecutionInput
   ): Promise<TryStartToolExecutionResult> {
     return this.#withClient(client => tryStartToolExecutionCommand(client, input));
+  }
+
+  async prepareToolInvocationsForRecovery(
+    input: PrepareToolInvocationsForRecoveryInput
+  ): Promise<PrepareToolInvocationsForRecoveryResult> {
+    return this.#withClient(client => prepareToolInvocationsForRecoveryCommand(client, input));
   }
 
   async commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult> {

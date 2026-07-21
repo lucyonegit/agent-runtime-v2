@@ -118,6 +118,30 @@ export class JobCoordinator {
     }
   }
 
+  async resumeJobExecution(jobId: string, expectedVersion: number): Promise<AgentJob> {
+    const job = await this.getJob(jobId);
+    if (!job || job.status !== 'recovery_required') {
+      throw new RuntimeError(
+        'invalid_job_state',
+        `Job ${JSON.stringify(jobId)} must require recovery before it can be resumed.`,
+        { details: { jobId, status: job?.status } }
+      );
+    }
+    return this.startJobExecution(jobId, expectedVersion);
+  }
+
+  async markJobRecoveryRequired(jobId: string, expectedVersion: number): Promise<AgentJob> {
+    try {
+      return await this.#store.markJobRecoveryRequired({
+        jobId,
+        expectedVersion,
+        nowMs: this.#clock.nowMs(),
+      });
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
   async getJob(jobId: string): Promise<AgentJob | undefined> {
     try {
       return await this.#store.getJob(jobId);

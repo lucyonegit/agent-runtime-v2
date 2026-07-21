@@ -44,14 +44,21 @@ export class ReactExecutionRuntime {
     loadContext(): Promise<BuiltContext>;
     signal?: AbortSignal;
   }): Promise<JobAgentRunResult> {
-    let current = await input.loadContext();
+    const checkpoint = await this.options.store.getLatestLoopCheckpoint(input.job.id);
+    const resumeToolCalls = await this.#loadPendingToolCalls(input.job, checkpoint?.callMessageId);
+    let current = checkpoint?.phase === 'tool_batch'
+      ? undefined
+      : await input.loadContext();
     const toolExecutor = this.#toolExecutor();
     const tools = toolExecutor.tools();
     const runner = new AgentRunner({
       loop: new AgentLoop({
         model: this.#auditedModel(
           input.job,
-          () => current.inputManifest,
+          () => {
+            if (!current) throw new Error('Model context is unavailable before tool recovery completes.');
+            return current.inputManifest;
+          },
           'job.react',
           'job.react',
           tools
@@ -66,7 +73,7 @@ export class ReactExecutionRuntime {
     });
     return runner.runJob({
       job: input.job,
-      messages: current.messages,
+      messages: current?.messages ?? [],
       prepareMessages: async () => {
         current = await input.loadContext();
         return current.messages;
@@ -79,7 +86,10 @@ export class ReactExecutionRuntime {
       validateFinalAnswer: () => this.#validateFinalAnswer(input.job.id),
       toolExecutor,
       outputIdFactory: outputId,
-      limits: this.#limits(input.signal),
+      limits: this.#limits(input.job, input.signal),
+      initialIterationNo: checkpoint?.iterationNo ?? 0,
+      initialExecutedToolCalls: checkpoint?.executedToolCalls ?? 0,
+      resumeToolCalls,
     });
   }
 
@@ -157,13 +167,43 @@ export class ReactExecutionRuntime {
     });
   }
 
-  #limits(signal?: AbortSignal) {
+  #limits(job: AgentJob, signal?: AbortSignal) {
     return {
       maxIterations: this.options.maxIterations,
       maxToolCalls: this.options.maxToolCalls,
-      deadlineMs: Date.now() + this.options.executionDeadlineMs,
+      deadlineMs: (job.startedAtMs ?? Date.now()) + this.options.executionDeadlineMs,
       signal,
     };
+  }
+
+  async #loadPendingToolCalls(job: AgentJob, callMessageId?: string) {
+    if (!callMessageId) return [];
+    const [messages, invocations] = await Promise.all([
+      this.options.store.listSessionMessages(job.sessionId),
+      this.options.store.listSessionToolInvocations(job.sessionId),
+    ]);
+    const callMessage = messages.find(message => message.id === callMessageId);
+    if (!callMessage?.toolCalls?.length) {
+      throw new Error(`Checkpoint tool batch ${JSON.stringify(callMessageId)} has no call message.`);
+    }
+    const byCallId = new Map(
+      invocations
+        .filter(invocation => invocation.jobId === job.id && invocation.callMessageId === callMessageId)
+        .map(invocation => [invocation.toolCallId, invocation])
+    );
+    return callMessage.toolCalls.flatMap(call => {
+      const invocation = byCallId.get(call.id);
+      if (!invocation) {
+        throw new Error(`Checkpoint tool call ${JSON.stringify(call.id)} has no invocation.`);
+      }
+      if (['completed', 'failed'].includes(invocation.status)) return [];
+      if (invocation.status !== 'pending') {
+        throw new Error(
+          `Checkpoint tool call ${JSON.stringify(call.id)} cannot resume from ${invocation.status}.`
+        );
+      }
+      return [{ ...call, args: invocation.arguments }];
+    });
   }
 
   async #validateToolCalls(toolCalls: Array<{ name: string }>) {

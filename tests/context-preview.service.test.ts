@@ -207,5 +207,6 @@ const toolInvocation: AgentToolInvocation = {
   callMessageId: 'call_1', resultMessageId: 'result_1', toolCallId: 'call_search',
   toolName: 'web_search', arguments: { query: 'runtime' }, argumentsChecksum: 'checksum',
   sideEffectLevel: 'read_only', idempotencyKey: 'invocation_1', status: 'completed',
+  executionAttemptNo: 1,
   resultPayload: { ok: true }, version: 1, createdAtMs: 2, updatedAtMs: 3,
 };

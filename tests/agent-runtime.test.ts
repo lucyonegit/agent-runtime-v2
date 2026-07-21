@@ -25,16 +25,23 @@ describe('AgentRuntime cancellation and recovery', () => {
     expect(executor.cancel).toHaveBeenCalledWith(running.id);
   });
 
-  it('reclaims an expired Job at a safe ReAct boundary', async () => {
+  it('marks an expired Job as recovery-required without executing it', async () => {
     const candidate = jobFixture({ leaseExpiresAtMs: 999 });
-    const startedJob = jobFixture({
+    const pausedJob = jobFixture({
+      status: 'recovery_required',
       version: 2,
+      currentAttemptId: undefined,
+      leaseOwner: undefined,
+      leaseExpiresAtMs: undefined,
+    });
+    const startedJob = jobFixture({
+      version: 3,
       attemptNo: 2,
       currentAttemptId: 'attempt_recovered',
       leaseOwner: 'worker_test',
       leaseExpiresAtMs: 31_000,
     });
-    const store = recoveryStore(candidate, [], startedJob);
+    const store = recoveryStore(candidate, pausedJob, [], startedJob);
     const executor: JobExecutionService = {
       execute: vi.fn(async () => undefined),
       shutdown: vi.fn(async () => undefined),
@@ -45,27 +52,35 @@ describe('AgentRuntime cancellation and recovery', () => {
     await runtime.stop();
 
     expect(store.abandonStartedModelCalls).toHaveBeenCalledWith(1_000);
-    expect(store.listJobsNeedingRuntimeRecovery).toHaveBeenCalledWith({ nowMs: 1_000, limit: 32 });
-    expect(store.startJobExecution).toHaveBeenCalledWith(expect.objectContaining({
+    expect(store.listJobsNeedingRuntimeRecovery).toHaveBeenCalledWith({
+      nowMs: 1_000,
+      createdBeforeMs: -59_000,
+      limit: 32,
+    });
+    expect(store.markJobRecoveryRequired).toHaveBeenCalledWith({
       jobId: candidate.id,
       expectedVersion: candidate.version,
-      workerId: 'worker_test',
-    }));
-    expect(executor.execute).toHaveBeenCalledWith(candidate.id);
+      nowMs: 1_000,
+    });
+    expect(store.startJobExecution).not.toHaveBeenCalled();
+    expect(executor.execute).not.toHaveBeenCalled();
     expect(store.failJob).not.toHaveBeenCalled();
   });
 
-  it('fails an interrupted tool boundary instead of replaying a possible side effect', async () => {
+  it('resumes a recovery-required Job only after an explicit request', async () => {
     const candidate = jobFixture({ leaseExpiresAtMs: 999 });
+    const pausedJob = jobFixture({
+      status: 'recovery_required', version: 2,
+      currentAttemptId: undefined, leaseOwner: undefined, leaseExpiresAtMs: undefined,
+    });
     const startedJob = jobFixture({
-      version: 2,
+      version: 3,
       attemptNo: 2,
       currentAttemptId: 'attempt_recovered',
       leaseOwner: 'worker_test',
       leaseExpiresAtMs: 31_000,
     });
-    const invocation = invocationFixture();
-    const store = recoveryStore(candidate, [invocation], startedJob);
+    const store = recoveryStore(candidate, pausedJob, [], startedJob);
     const executor: JobExecutionService = {
       execute: vi.fn(async () => undefined),
       shutdown: vi.fn(async () => undefined),
@@ -73,13 +88,49 @@ describe('AgentRuntime cancellation and recovery', () => {
     const runtime = createRuntime(store, executor);
 
     await runtime.start();
+    expect(executor.execute).not.toHaveBeenCalled();
+
+    await expect(runtime.resumeJob(pausedJob.id, pausedJob.version)).resolves.toEqual(startedJob);
+    expect(store.startJobExecution).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: pausedJob.id,
+      expectedVersion: pausedJob.version,
+      workerId: 'worker_test',
+    }));
+    expect(store.prepareToolInvocationsForRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: startedJob.id,
+      attemptId: startedJob.currentAttemptId,
+    }));
+    expect(executor.execute).toHaveBeenCalledWith(candidate.id);
+    await runtime.stop();
+  });
+
+  it('blocks an interrupted side-effecting tool when the user resumes', async () => {
+    const candidate = jobFixture({ leaseExpiresAtMs: 999 });
+    const pausedJob = jobFixture({
+      status: 'recovery_required', version: 2,
+      currentAttemptId: undefined, leaseOwner: undefined, leaseExpiresAtMs: undefined,
+    });
+    const startedJob = jobFixture({
+      version: 3, attemptNo: 2, currentAttemptId: 'attempt_recovered',
+      leaseOwner: 'worker_test', leaseExpiresAtMs: 31_000,
+    });
+    const invocation = invocationFixture();
+    const store = recoveryStore(candidate, pausedJob, [invocation], startedJob);
+    const executor: JobExecutionService = {
+      execute: vi.fn(async () => undefined),
+      shutdown: vi.fn(async () => undefined),
+    };
+    const runtime = createRuntime(store, executor);
+
+    await runtime.start();
+    await runtime.resumeJob(pausedJob.id, pausedJob.version);
     await runtime.stop();
 
     expect(store.failJob).toHaveBeenCalledWith(expect.objectContaining({
       jobId: candidate.id,
       workerId: 'worker_test',
       attemptId: startedJob.currentAttemptId,
-      error: expect.objectContaining({ code: 'execution_interrupted' }),
+      error: expect.objectContaining({ code: 'unsafe_tool_recovery' }),
     }));
     expect(executor.execute).not.toHaveBeenCalled();
   });
@@ -104,6 +155,7 @@ function createRuntime(store: AgentStore, executor: JobExecutionService): AgentR
 
 function recoveryStore(
   candidate: AgentJob,
+  pausedJob: AgentJob,
   invocations: AgentToolInvocation[],
   startedJob: AgentJob
 ) {
@@ -116,12 +168,21 @@ function recoveryStore(
   return {
     abandonStartedModelCalls: vi.fn(async () => []),
     listJobsNeedingRuntimeRecovery: vi.fn(async () => [candidate]),
+    markJobRecoveryRequired: vi.fn(async () => pausedJob),
+    getJob: vi.fn(async () => pausedJob),
     listSessionToolInvocations: vi.fn(async () => invocations),
     startJobExecution: vi.fn(async () => startedJob),
+    prepareToolInvocationsForRecovery: vi.fn(async () => ({
+      invocations: invocations.filter(invocation => invocation.sideEffectLevel !== 'side_effecting'),
+      blockedInvocations: invocations.filter(invocation => (
+        invocation.status === 'running' && invocation.sideEffectLevel === 'side_effecting'
+      )),
+    })),
     failJob: vi.fn(async () => failed),
   } as unknown as AgentStore & {
     abandonStartedModelCalls: ReturnType<typeof vi.fn>;
     listJobsNeedingRuntimeRecovery: ReturnType<typeof vi.fn>;
+    markJobRecoveryRequired: ReturnType<typeof vi.fn>;
     startJobExecution: ReturnType<typeof vi.fn>;
     failJob: ReturnType<typeof vi.fn>;
   };
@@ -158,6 +219,7 @@ function invocationFixture(): AgentToolInvocation {
     sideEffectLevel: 'side_effecting',
     idempotencyKey: 'job_1:call_1',
     status: 'running',
+    executionAttemptNo: 1,
     version: 1,
     createdAtMs: 200,
     startedAtMs: 210,

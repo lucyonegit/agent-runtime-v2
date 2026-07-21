@@ -19,6 +19,8 @@ import { checksumToolArguments } from '../src/runtime/transaction-commands.js';
 import { SessionView } from '../src/view/session-view.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
+import { applyAgentRuntimeSchemaV2 } from '../src/storage/postgres/schema-v2.js';
+import { applyAgentRuntimeSchemaV3 } from '../src/storage/postgres/schema-v3.js';
 import type {
   RuntimeTool,
   RuntimeToolContext,
@@ -44,6 +46,8 @@ describe('PostgresAgentStore Job transactions', () => {
     const client = await pool.connect();
     try {
       await applyAgentRuntimeSchemaV1(client, 1_000);
+      await applyAgentRuntimeSchemaV2(client, 1_001);
+      await applyAgentRuntimeSchemaV3(client, 1_002);
     } finally {
       client.release();
     }
@@ -177,16 +181,26 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     expect(renewed).toMatchObject({ version: 2, leaseExpiresAtMs: 120, attemptNo: 1 });
 
+    const paused = await store.markJobRecoveryRequired({
+      jobId: renewed.id, expectedVersion: renewed.version, nowMs: 121,
+    });
+    expect(paused).toMatchObject({
+      status: 'recovery_required', version: 3,
+    });
+    expect(paused).not.toHaveProperty('currentAttemptId');
+    expect(paused).not.toHaveProperty('leaseOwner');
+    expect(paused).not.toHaveProperty('leaseExpiresAtMs');
+
     const recovered = await store.startJobExecution({
-      jobId: renewed.id,
-      expectedVersion: renewed.version,
+      jobId: paused.id,
+      expectedVersion: paused.version,
       workerId: 'worker_recovery',
       attemptId: 'attempt_recovery',
       nowMs: 121,
       leaseUntilMs: 200,
     });
     expect(recovered).toMatchObject({
-      version: 3,
+      version: 4,
       attemptNo: 2,
       leaseOwner: 'worker_recovery',
       currentAttemptId: 'attempt_recovery',
@@ -1273,15 +1287,174 @@ describe('PostgresAgentStore Job transactions', () => {
       attemptId: 'attempt_live', nowMs: 31, leaseUntilMs: 101,
     });
 
-    await expect(store.listJobsNeedingRuntimeRecovery({ nowMs: 100, limit: 10 })).resolves.toEqual(
+    await expect(store.listJobsNeedingRuntimeRecovery({
+      nowMs: 100, createdBeforeMs: 100, limit: 10,
+    })).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: 'job_recover_created', status: 'created' }),
         expect.objectContaining({ id: 'job_recover_expired', status: 'running' }),
       ])
     );
-    const recoverableIds = (await store.listJobsNeedingRuntimeRecovery({ nowMs: 100, limit: 10 }))
+    const recoverableIds = (await store.listJobsNeedingRuntimeRecovery({
+      nowMs: 100, createdBeforeMs: 100, limit: 10,
+    }))
       .map(job => job.id);
     expect(recoverableIds).not.toContain('job_recover_live');
+  });
+
+  it('resumes a checkpointed tool batch and retries only safe interrupted invocations', async () => {
+    await store.createSession({ id: 'session_checkpoint_resume', nowMs: 10 });
+    await createJob(
+      store,
+      'session_checkpoint_resume',
+      'job_checkpoint_resume',
+      'message_checkpoint_resume',
+      20
+    );
+    const firstAttempt = await store.startJobExecution({
+      jobId: 'job_checkpoint_resume', expectedVersion: 0, workerId: 'worker_dead',
+      attemptId: 'attempt_checkpoint_1', nowMs: 30, leaseUntilMs: 100,
+    });
+    await store.commitModelToolCalls({
+      sessionId: firstAttempt.sessionId,
+      jobId: firstAttempt.id,
+      workerId: 'worker_dead',
+      attemptId: 'attempt_checkpoint_1',
+      outputId: 'output_checkpoint_tools',
+      messageId: 'message_checkpoint_tools',
+      content: '',
+      nowMs: 40,
+      invocations: [
+        {
+          invocationId: 'invocation_checkpoint_1',
+          call: { id: 'call_checkpoint_1', name: 'get_current_time', args: {} },
+          argumentsChecksum: checksumToolArguments({}),
+          sideEffectLevel: 'read_only',
+          idempotencyKey: 'job_checkpoint_resume:call_checkpoint_1',
+        },
+        {
+          invocationId: 'invocation_checkpoint_2',
+          call: { id: 'call_checkpoint_2', name: 'read_file', args: { path: 'docs/a.md' } },
+          argumentsChecksum: checksumToolArguments({ path: 'docs/a.md' }),
+          sideEffectLevel: 'read_only',
+          idempotencyKey: 'job_checkpoint_resume:call_checkpoint_2',
+        },
+      ],
+    });
+    await store.tryStartToolExecution({
+      jobId: firstAttempt.id,
+      toolCallId: 'call_checkpoint_1',
+      workerId: 'worker_dead',
+      attemptId: 'attempt_checkpoint_1',
+      nowMs: 50,
+    });
+
+    const expired = (await store.getJob(firstAttempt.id))!;
+    const paused = await store.markJobRecoveryRequired({
+      jobId: expired.id, expectedVersion: expired.version, nowMs: 101,
+    });
+    const resumed = await store.startJobExecution({
+      jobId: paused.id,
+      expectedVersion: paused.version,
+      workerId: 'worker_recovery',
+      attemptId: 'attempt_checkpoint_2',
+      nowMs: 101,
+      leaseUntilMs: 200,
+    });
+    const prepared = await store.prepareToolInvocationsForRecovery({
+      jobId: resumed.id,
+      workerId: 'worker_recovery',
+      attemptId: 'attempt_checkpoint_2',
+      nowMs: 102,
+    });
+
+    expect(prepared.blockedInvocations).toEqual([]);
+    expect(prepared.checkpoint).toMatchObject({
+      phase: 'tool_batch',
+      callMessageId: 'message_checkpoint_tools',
+      iterationNo: 1,
+      executedToolCalls: 2,
+    });
+    expect(prepared.invocations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        toolCallId: 'call_checkpoint_1', status: 'pending', attemptId: 'attempt_checkpoint_2',
+        executionAttemptNo: 1,
+      }),
+      expect.objectContaining({
+        toolCallId: 'call_checkpoint_2', status: 'pending', attemptId: 'attempt_checkpoint_2',
+        executionAttemptNo: 0,
+      }),
+    ]));
+    await expect(pool!.query(
+      `select status from agent_tool_execution_attempts
+       where invocation_id = 'invocation_checkpoint_1' and attempt_no = 1`
+    )).resolves.toMatchObject({ rows: [{ status: 'interrupted' }] });
+  });
+
+  it('marks an interrupted side-effecting tool unknown instead of replaying it', async () => {
+    await store.createSession({ id: 'session_checkpoint_unknown', nowMs: 10 });
+    await createJob(
+      store,
+      'session_checkpoint_unknown',
+      'job_checkpoint_unknown',
+      'message_checkpoint_unknown',
+      20
+    );
+    const firstAttempt = await store.startJobExecution({
+      jobId: 'job_checkpoint_unknown', expectedVersion: 0, workerId: 'worker_dead',
+      attemptId: 'attempt_unknown_1', nowMs: 30, leaseUntilMs: 100,
+    });
+    const args = { command: 'deploy' };
+    await store.commitModelToolCalls({
+      sessionId: firstAttempt.sessionId,
+      jobId: firstAttempt.id,
+      workerId: 'worker_dead',
+      attemptId: 'attempt_unknown_1',
+      outputId: 'output_unknown',
+      messageId: 'message_unknown',
+      content: '',
+      nowMs: 40,
+      invocations: [{
+        invocationId: 'invocation_unknown',
+        call: { id: 'call_unknown', name: 'run_shell', args },
+        argumentsChecksum: checksumToolArguments(args),
+        sideEffectLevel: 'side_effecting',
+        idempotencyKey: 'job_checkpoint_unknown:call_unknown',
+      }],
+    });
+    await store.tryStartToolExecution({
+      jobId: firstAttempt.id,
+      toolCallId: 'call_unknown',
+      workerId: 'worker_dead',
+      attemptId: 'attempt_unknown_1',
+      nowMs: 50,
+    });
+    const expired = (await store.getJob(firstAttempt.id))!;
+    const paused = await store.markJobRecoveryRequired({
+      jobId: expired.id, expectedVersion: expired.version, nowMs: 101,
+    });
+    const resumed = await store.startJobExecution({
+      jobId: paused.id,
+      expectedVersion: paused.version,
+      workerId: 'worker_recovery',
+      attemptId: 'attempt_unknown_2',
+      nowMs: 101,
+      leaseUntilMs: 200,
+    });
+    const prepared = await store.prepareToolInvocationsForRecovery({
+      jobId: resumed.id,
+      workerId: 'worker_recovery',
+      attemptId: 'attempt_unknown_2',
+      nowMs: 102,
+    });
+
+    expect(prepared.blockedInvocations).toEqual([
+      expect.objectContaining({ toolCallId: 'call_unknown', status: 'unknown' }),
+    ]);
+    expect(await store.getToolInvocation(resumed.id, 'call_unknown')).toMatchObject({
+      status: 'unknown',
+      error: { code: 'side_effect_status_unknown' },
+    });
   });
 
   it('allows a cancelled Job to be continued as a new retry Job', async () => {
