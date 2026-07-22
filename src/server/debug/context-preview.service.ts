@@ -20,7 +20,6 @@ export interface ContextPreviewServiceOptions {
   modelName: string;
   maxContextTokens: number;
   reservedOutputTokens: number;
-  compressionMessageThreshold?: number;
   clock?: { nowMs(): number };
 }
 
@@ -39,7 +38,6 @@ export class ContextPreviewService {
       },
       systemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
       systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
-      compressionMessageThreshold: options.compressionMessageThreshold ?? 50,
       clock: options.clock,
     });
   }
@@ -71,6 +69,9 @@ export class ContextPreviewService {
       contextRulesVersion: snapshot.built.contextRulesVersion,
       systemPromptVersion: snapshot.systemPromptVersion,
       estimatedInputTokens: snapshot.built.estimatedInputTokens,
+      predictedInputTokens: snapshot.built.predictedInputTokens,
+      predictedCandidateTokens: snapshot.built.predictedCandidateTokens,
+      pressureLevel: snapshot.built.pressureLevel,
       compressionRecommended: snapshot.built.compressionRecommended,
       limits: {
         maxContextTokens: snapshot.maxContextTokens,
@@ -80,6 +81,8 @@ export class ContextPreviewService {
       selection: {
         selectedBundleIds: snapshot.built.inputManifest.selectedBundleIds ?? [],
         summarizedBundleIds: snapshot.built.inputManifest.summarizedBundleIds ?? [],
+        summarizedMessageGroupIds:
+          snapshot.built.inputManifest.summarizedMessageGroupIds ?? [],
         truncatedToolResultMessageIds:
           snapshot.built.inputManifest.truncatedToolResultMessageIds ?? [],
       },

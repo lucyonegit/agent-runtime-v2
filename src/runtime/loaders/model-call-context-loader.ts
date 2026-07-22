@@ -79,8 +79,6 @@ export class ModelCallContextLoader {
       },
       compression: {
         disabled: true,
-        newCompressibleMessageCount: 0,
-        messageThreshold: Number.MAX_SAFE_INTEGER,
       },
     });
     this.verifyManifest(call, reconstructed);
@@ -91,11 +89,19 @@ export class ModelCallContextLoader {
       );
     }
     const messages = mapStoredMessagesToChatMessages(call.inputMessages);
+    const recordedPrediction = call.inputManifest.tokenPrediction;
     return {
       ...reconstructed,
       messages,
       inputManifest: call.inputManifest,
       estimatedInputTokens: call.estimatedInputTokens,
+      predictedInputTokens: recordedPrediction?.predictedInputTokens
+        ?? call.estimatedInputTokens,
+      predictedCandidateTokens: recordedPrediction?.predictedCandidateTokens
+        ?? call.estimatedInputTokens,
+      hardInputLimit: recordedPrediction?.hardInputLimit
+        ?? call.maxContextTokens - call.reservedOutputTokens,
+      pressureLevel: recordedPrediction?.pressureLevel ?? 'normal',
       annotations: messages.map((_, index) => (
         reconstructed.annotations[index] ?? { groupId: `model_call:${call.id}:input:${index}` }
       )),

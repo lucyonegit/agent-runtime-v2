@@ -1,8 +1,12 @@
 import type {
+  AgentArtifact,
   AgentContextSummary,
   AgentJob,
   AgentMessage,
+  AgentPlan,
+  AgentPlanStep,
   AgentToolInvocation,
+  AgentUserInputRequest,
 } from '../../domain/index.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { CONTEXT_RULES_VERSION } from '../context/context-compiler.js';
@@ -20,13 +24,22 @@ export type SessionContextStore = Pick<AgentStore,
   | 'listSessionMessages'
   | 'listSessionToolInvocations'
   | 'listActiveContextSummaries'
->;
+> & Partial<Pick<AgentStore,
+  | 'listSessionPlans'
+  | 'listSessionPlanSteps'
+  | 'listSessionArtifacts'
+  | 'listSessionUserInputRequests'
+>>;
 
 export interface SessionContextFacts {
   jobs: AgentJob[];
   messages: AgentMessage[];
   invocations: AgentToolInvocation[];
   summaries: AgentContextSummary[];
+  plans: AgentPlan[];
+  planSteps: AgentPlanStep[];
+  artifacts: AgentArtifact[];
+  userInputRequests: AgentUserInputRequest[];
   groups: MessageGroup[];
   bundles: TurnBundle[];
   blocked: BlockedMessageGroup[];
@@ -45,13 +58,19 @@ export class SessionContextLoader {
   constructor(private readonly store: SessionContextStore) {}
 
   async load(sessionId: string): Promise<SessionContextFacts> {
-    const [jobs, messages, invocations, summaries] = await Promise.all([
+    const [
+      jobs, messages, invocations, summaries, plans, planSteps, artifacts, userInputRequests,
+    ] = await Promise.all([
       this.store.listSessionJobs(sessionId),
       this.store.listSessionMessages(sessionId),
       this.store.listSessionToolInvocations(sessionId),
       this.store.listActiveContextSummaries(
         'session', sessionId, 'conversation', CONTEXT_RULES_VERSION
       ),
+      this.store.listSessionPlans?.(sessionId) ?? Promise.resolve([]),
+      this.store.listSessionPlanSteps?.(sessionId) ?? Promise.resolve([]),
+      this.store.listSessionArtifacts?.(sessionId) ?? Promise.resolve([]),
+      this.store.listSessionUserInputRequests?.(sessionId) ?? Promise.resolve([]),
     ]);
     const builder = new MessageGroupBuilder();
     const built = builder.build(messages, invocations);
@@ -61,6 +80,10 @@ export class SessionContextLoader {
       messages,
       invocations,
       summaries,
+      plans,
+      planSteps,
+      artifacts,
+      userInputRequests,
       groups,
       bundles: new TurnBundleBuilder().build({ sessionId, jobs, groups }),
       blocked: built.blocked,

@@ -3,6 +3,7 @@ import { mapChatMessagesToStoredMessages } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 import type {
   AgentJob,
+  AgentContextSummary,
   AgentMessage,
   AgentModelCall,
   AgentSession,
@@ -45,6 +46,34 @@ describe('ContextInspectionService', () => {
       .rejects.toMatchObject({ code: 'context_snapshot_unreconstructable' });
   });
 
+  it('reconstructs a ModelCall with a superseded historical Context Memory', async () => {
+    const messages = [message({ id: 'goal_1', rowId: 1, content: 'hello' })];
+    const jobs = [job({ metadata: { goalMessageId: 'goal_1' } })];
+    const summary = contextSummary();
+    let activeSummaries = [summary];
+    let modelCall: AgentModelCall | undefined;
+    const service = inspection(store({
+      messages,
+      jobs,
+      getModelCall: () => modelCall,
+      activeSummaries: () => activeSummaries,
+      historicalSummaries: ids => ids.includes(summary.id) ? [summary] : [],
+    }));
+    const snapshot = await service.inspect({ kind: 'job', jobId: 'job_1' });
+    const inputMessages = mapChatMessagesToStoredMessages(snapshot.built.messages);
+    modelCall = modelCallFixture({
+      inputManifest: snapshot.built.inputManifest,
+      inputMessages,
+      inputChecksum: createHash('sha256').update(canonicalJson(inputMessages)).digest('hex'),
+    });
+    activeSummaries = [];
+
+    const exact = await service.inspect({ kind: 'model_call', modelCallId: modelCall.id });
+
+    expect(exact.built.inputManifest.summaryIds).toEqual([summary.id]);
+    expect(exact.built.messages.map(item => item.content)).toContain('Context summary:\ncompressed');
+  });
+
 });
 
 function inspection(store_: ContextInspectionStore): ContextInspectionService {
@@ -56,7 +85,6 @@ function inspection(store_: ContextInspectionStore): ContextInspectionService {
     },
     systemPrompt: 'system',
     systemPromptVersion: 'system-v1',
-    compressionMessageThreshold: 50,
     clock: { nowMs: () => 100 },
   });
 }
@@ -65,6 +93,8 @@ function store(input: {
   messages: AgentMessage[];
   jobs: AgentJob[];
   getModelCall?: () => AgentModelCall | undefined;
+  activeSummaries?: () => AgentContextSummary[];
+  historicalSummaries?: (ids: string[]) => AgentContextSummary[];
 }): ContextInspectionStore {
   return {
     getSession: async () => session(),
@@ -73,7 +103,36 @@ function store(input: {
     listSessionJobs: async () => input.jobs,
     listSessionMessages: async () => input.messages,
     listSessionToolInvocations: async () => [],
-    listActiveContextSummaries: async () => [],
+    listSessionPlans: async () => [],
+    listSessionPlanSteps: async () => [],
+    listSessionArtifacts: async () => [],
+    listSessionUserInputRequests: async () => [],
+    listActiveContextSummaries: async () => input.activeSummaries?.() ?? [],
+    listRecentSessionModelCalls: async () => [],
+    getContextSummariesByIds: async ids => input.historicalSummaries?.(ids) ?? [],
+  };
+}
+
+function contextSummary(): AgentContextSummary {
+  return {
+    id: 'summary_1',
+    sessionId: 'session_1',
+    ownerType: 'session',
+    ownerId: 'session_1',
+    purpose: 'conversation',
+    contextRulesVersion: CONTEXT_RULES_VERSION,
+    summaryType: 'rolling',
+    status: 'active',
+    sourceRowIdStart: 1,
+    sourceRowIdEnd: 1,
+    summary: 'compressed',
+    summaryFormat: 'json',
+    sourceMessageCount: 0,
+    compressionPromptVersion: 'legacy-test',
+    checksum: 'checksum',
+    version: 1,
+    createdAtMs: 1,
+    updatedAtMs: 1,
   };
 }
 

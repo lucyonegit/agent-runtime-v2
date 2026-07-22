@@ -415,6 +415,7 @@ export interface AgentStore {
   listPlanSteps(planId: string): Promise<AgentPlanStep[]>;
   getModelCall(modelCallId: string): Promise<AgentModelCall | undefined>;
   listModelCalls(jobId: string): Promise<AgentModelCall[]>;
+  listRecentSessionModelCalls(sessionId: string, limit: number): Promise<AgentModelCall[]>;
   getModelUsageStats(sessionId: string): Promise<AgentModelUsageStats | undefined>;
   listActiveContextSummaries(
     ownerType: AgentContextOwnerType,
@@ -422,6 +423,7 @@ export interface AgentStore {
     purpose: AgentContextPurpose,
     contextRulesVersion: string
   ): Promise<AgentContextSummary[]>;
+  getContextSummariesByIds(ids: string[]): Promise<AgentContextSummary[]>;
   listSessionMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
   listSessionJobs(sessionId: string): Promise<AgentJob[]>;
   listSessionPlans(sessionId: string): Promise<AgentPlan[]>;

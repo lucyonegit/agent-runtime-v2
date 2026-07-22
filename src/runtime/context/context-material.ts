@@ -1,5 +1,6 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
+import type { AgentContextSummaryType } from '../../domain/index.js';
 import type { MessageGroup } from './message-group-builder.js';
 
 type ContextSegment =
@@ -51,9 +52,15 @@ export interface CompiledContextAnnotation {
 
 interface ContextSummaryMaterial {
   id: string;
+  summaryType?: AgentContextSummaryType;
+  compressionPromptVersion?: string;
   summary: string;
+  sourceRowIdStart?: number;
   sourceRowIdEnd?: number;
+  sourceGroupIds?: string[];
   sourceBundleIds?: string[];
+  sourceMessageCount?: number;
+  sourceTokenCount?: number;
 }
 
 export interface ContextModelBudget {
@@ -61,6 +68,11 @@ export interface ContextModelBudget {
   name: string;
   maxContextTokens: number;
   reservedOutputTokens: number;
+  /** P95(actual / estimated) learned from completed calls for this model. */
+  tokenCalibrationFactor?: number;
+  /** Fixed framing/tool-schema error observed in historical calls. */
+  tokenErrorReserve?: number;
+  tokenCalibrationSampleCount?: number;
 }
 
 export interface ContextMaterial {
@@ -84,8 +96,13 @@ export interface ContextMaterial {
   }>;
   compression: {
     disabled: boolean;
-    newCompressibleMessageCount: number;
-    messageThreshold: number;
+    /** Raw tail retained verbatim even when older groups are compressed. */
+    recentRawTokenBudget?: number;
+    minimumRecentGroups?: number;
+    /** Goal and other protocol-critical messages which must remain raw. */
+    protectedMessageIds?: string[];
+    /** Start compacting before the selection reaches the hard model limit. */
+    compactAtRatio?: number;
     candidateMessageIds?: string[];
   };
 }

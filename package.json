@@ -9,7 +9,7 @@
     "serve": "node dist/src/server/main.js",
     "dev:server": "npm run build && node dist/src/server/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --exclude 'dist/**' --exclude 'tests/postgres*.test.ts'",
+    "test": "vitest run --exclude 'dist/**' --exclude '.agent-sandbox/**' --exclude 'tests/postgres*.test.ts'",
     "test:postgres": "bash scripts/test-postgres.sh",
     "test:all": "npm test && npm run test:postgres",
     "schema:migrate": "npm run build && node dist/scripts/migrate-agent-runtime-schema.js",

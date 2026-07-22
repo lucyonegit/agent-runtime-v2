@@ -12,9 +12,18 @@ export interface TokenBudgetSelection<T> {
   selected: TokenBudgetItem<T>[];
   dropped: TokenBudgetItem<T>[];
   estimatedInputTokens: number;
+  predictedInputTokens: number;
   hardInputLimit: number;
   safeInputLimit: number;
   candidateTokens: number;
+  predictedCandidateTokens: number;
+}
+
+interface CalibratedModelBudget {
+  maxContextTokens: number;
+  reservedOutputTokens: number;
+  tokenCalibrationFactor?: number;
+  tokenErrorReserve?: number;
 }
 
 export class ContextOverflowError extends Error {
@@ -29,7 +38,7 @@ export class ContextOverflowError extends Error {
 export class TokenBudget {
   select<T>(
     items: TokenBudgetItem<T>[],
-    model: { maxContextTokens: number; reservedOutputTokens: number }
+    model: CalibratedModelBudget
   ): TokenBudgetSelection<T> {
     const hardInputLimit = model.maxContextTokens - model.reservedOutputTokens;
     if (hardInputLimit <= 0) {
@@ -37,7 +46,9 @@ export class TokenBudget {
     }
     const safeInputLimit = Math.floor(hardInputLimit * 0.9);
     const mustKeepItems = items.filter(item => item.mustKeep);
-    const mustKeepTokens = sumTokens(mustKeepItems);
+    const calibrationFactor = validFactor(model.tokenCalibrationFactor);
+    const errorReserve = validReserve(model.tokenErrorReserve);
+    const mustKeepTokens = sumPredictedTokens(mustKeepItems, calibrationFactor) + errorReserve;
     if (mustKeepTokens > hardInputLimit) {
       throw new ContextOverflowError(
         `Must-keep context requires ${mustKeepTokens} tokens, above hard limit ${hardInputLimit}.`
@@ -45,7 +56,7 @@ export class TokenBudget {
     }
 
     const selected = [...mustKeepItems];
-    let selectedTokens = mustKeepTokens;
+    let selectedPredictedTokens = mustKeepTokens;
     const optional = items
       .filter(item => !item.mustKeep)
       .sort((left, right) => (
@@ -54,24 +65,27 @@ export class TokenBudget {
         || left.originalOrder - right.originalOrder
       ));
     for (const item of optional) {
-      if (selectedTokens + item.estimatedTokens > safeInputLimit) continue;
+      const predicted = predictTokens(item.estimatedTokens, calibrationFactor);
+      if (selectedPredictedTokens + predicted > safeInputLimit) continue;
       selected.push(item);
-      selectedTokens += item.estimatedTokens;
+      selectedPredictedTokens += predicted;
     }
     const selectedIds = new Set(selected.map(item => item.id));
     return {
       selected: selected.sort((left, right) => left.originalOrder - right.originalOrder),
       dropped: items.filter(item => !selectedIds.has(item.id)),
-      estimatedInputTokens: selectedTokens,
+      estimatedInputTokens: sumTokens(selected),
+      predictedInputTokens: selectedPredictedTokens,
       hardInputLimit,
       safeInputLimit,
       candidateTokens: sumTokens(items),
+      predictedCandidateTokens: sumPredictedTokens(items, calibrationFactor) + errorReserve,
     };
   }
 
   selectWithContiguousTail<T>(
     items: TokenBudgetItem<T>[],
-    model: { maxContextTokens: number; reservedOutputTokens: number },
+    model: CalibratedModelBudget,
     tailItemIds: ReadonlySet<string>
   ): TokenBudgetSelection<T> {
     const hardInputLimit = model.maxContextTokens - model.reservedOutputTokens;
@@ -80,7 +94,9 @@ export class TokenBudget {
     }
     const safeInputLimit = Math.floor(hardInputLimit * 0.9);
     const mustKeepItems = items.filter(item => item.mustKeep);
-    const mustKeepTokens = sumTokens(mustKeepItems);
+    const calibrationFactor = validFactor(model.tokenCalibrationFactor);
+    const errorReserve = validReserve(model.tokenErrorReserve);
+    const mustKeepTokens = sumPredictedTokens(mustKeepItems, calibrationFactor) + errorReserve;
     if (mustKeepTokens > hardInputLimit) {
       throw new ContextOverflowError(
         `Must-keep context requires ${mustKeepTokens} tokens, above hard limit ${hardInputLimit}.`
@@ -88,7 +104,7 @@ export class TokenBudget {
     }
 
     const selected = [...mustKeepItems];
-    let selectedTokens = mustKeepTokens;
+    let selectedPredictedTokens = mustKeepTokens;
     const optionalNonTail = items
       .filter(item => !item.mustKeep && !tailItemIds.has(item.id))
       .sort((left, right) => (
@@ -97,27 +113,31 @@ export class TokenBudget {
         || left.originalOrder - right.originalOrder
       ));
     for (const item of optionalNonTail) {
-      if (selectedTokens + item.estimatedTokens > safeInputLimit) continue;
+      const predicted = predictTokens(item.estimatedTokens, calibrationFactor);
+      if (selectedPredictedTokens + predicted > safeInputLimit) continue;
       selected.push(item);
-      selectedTokens += item.estimatedTokens;
+      selectedPredictedTokens += predicted;
     }
 
     const optionalTail = items
       .filter(item => !item.mustKeep && tailItemIds.has(item.id))
       .sort((left, right) => right.originalOrder - left.originalOrder);
     for (const item of optionalTail) {
-      if (selectedTokens + item.estimatedTokens > safeInputLimit) break;
+      const predicted = predictTokens(item.estimatedTokens, calibrationFactor);
+      if (selectedPredictedTokens + predicted > safeInputLimit) break;
       selected.push(item);
-      selectedTokens += item.estimatedTokens;
+      selectedPredictedTokens += predicted;
     }
     const selectedIds = new Set(selected.map(item => item.id));
     return {
       selected: selected.sort((left, right) => left.originalOrder - right.originalOrder),
       dropped: items.filter(item => !selectedIds.has(item.id)),
-      estimatedInputTokens: selectedTokens,
+      estimatedInputTokens: sumTokens(selected),
+      predictedInputTokens: selectedPredictedTokens,
       hardInputLimit,
       safeInputLimit,
       candidateTokens: sumTokens(items),
+      predictedCandidateTokens: sumPredictedTokens(items, calibrationFactor) + errorReserve,
     };
   }
 }
@@ -151,4 +171,28 @@ function isCjkCodePoint(codePoint: number): boolean {
 
 function sumTokens(items: Array<{ estimatedTokens: number }>): number {
   return items.reduce((total, item) => total + item.estimatedTokens, 0);
+}
+
+function sumPredictedTokens(
+  items: Array<{ estimatedTokens: number }>,
+  calibrationFactor: number
+): number {
+  return items.reduce(
+    (total, item) => total + predictTokens(item.estimatedTokens, calibrationFactor),
+    0
+  );
+}
+
+function predictTokens(estimatedTokens: number, calibrationFactor: number): number {
+  return Math.max(1, Math.ceil(estimatedTokens * calibrationFactor));
+}
+
+function validFactor(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+function validReserve(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.ceil(value)
+    : 0;
 }

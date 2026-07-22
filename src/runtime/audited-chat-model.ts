@@ -236,6 +236,7 @@ function modelResult(response: AIMessageChunk) {
 }
 
 function manifestInputTokens(manifest: AgentContextInputManifest): number {
+  if (manifest.tokenPrediction) return manifest.tokenPrediction.predictedInputTokens;
   const breakdown = manifest.estimatedBreakdown;
   return breakdown.system + breakdown.tools + breakdown.summaries + breakdown.messages;
 }

@@ -6,8 +6,8 @@ import {
 } from '../../runtime/context/context-build.service.js';
 import type { BuiltContext } from '../../runtime/context/context-compiler.js';
 import type { ContextMaterial } from '../../runtime/context/context-material.js';
-import { SessionCompressionService } from '../../runtime/context/session-compression.service.js';
-import type { JobContextLoader } from '../../runtime/loaders/job-context-loader.js';
+import { ContextCompressionService } from '../../runtime/context/context-compression.service.js';
+import type { ExecutionContextLoader } from '../../runtime/loaders/execution-context-loader.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 
 interface ContextCompressionModel {
@@ -22,31 +22,31 @@ interface ContextCompressionModelFactory {
   }): ContextCompressionModel;
 }
 
-interface SessionCompressionPort {
-  compress(input: Parameters<SessionCompressionService['compress']>[0]): Promise<void>;
+interface ContextCompressionPort {
+  compress(input: Parameters<ContextCompressionService['compress']>[0]): Promise<boolean>;
 }
 
 export interface ExecutionContextProviderOptions {
   store: AgentStore;
   modelName: string;
-  jobContext: Pick<JobContextLoader, 'load'>;
+  executionContext: Pick<ExecutionContextLoader, 'load'>;
   compressionModels: ContextCompressionModelFactory;
   contextBuildService?: ContextBuildService;
-  sessionCompression?: SessionCompressionPort;
+  contextCompression?: ContextCompressionPort;
 }
 
 /**
  * One public context operation exists for live execution: build the next Job
- * turn. The provider owns rolling-session compression but knows nothing about
+ * turn. The provider owns unified Context Memory compression but knows nothing about
  * plans, tools or executor stages.
  */
 export class ExecutionContextProvider {
   readonly #contexts: ContextBuildService;
-  readonly #sessionCompression: SessionCompressionPort;
+  readonly #contextCompression: ContextCompressionPort;
 
   constructor(private readonly options: ExecutionContextProviderOptions) {
     this.#contexts = options.contextBuildService ?? new ContextBuildService();
-    this.#sessionCompression = options.sessionCompression ?? new SessionCompressionService({
+    this.#contextCompression = options.contextCompression ?? new ContextCompressionService({
       store: options.store,
       modelName: options.modelName,
     });
@@ -54,9 +54,9 @@ export class ExecutionContextProvider {
 
   buildJobContext(job: AgentJob, originalGoal: string): Promise<BuiltContext> {
     const source: ContextMaterialSource = {
-      load: () => this.options.jobContext.load(job, originalGoal),
-      compress: async (material: ContextMaterial, built: BuiltContext) => {
-        await this.#sessionCompression.compress({
+      load: () => this.options.executionContext.load(job, originalGoal),
+      compress: async (material: ContextMaterial, built?: BuiltContext) => {
+        return this.#contextCompression.compress({
           job,
           material,
           built,

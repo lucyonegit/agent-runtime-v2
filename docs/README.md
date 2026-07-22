@@ -8,8 +8,9 @@
 1. [统一 ReAct Runtime](./01-unified-react-runtime.md)：职责边界、执行流程、Plan 协议、HITL 与失败语义。
 2. [持久化、Context 与 View](./02-persistence-context-view.md)：表模型、上下文编译、ModelCall 审计、SSE 和刷新一致性。
 3. [HTTP、运行与验收](./03-http-operations.md)：接口、环境、schema 管理和验收清单。
+4. [统一 Context 拼接、压缩与 Token 用量策略](./04-context-compression-token-strategy.md)：基于稳定 MessageGroup 的精确覆盖、统一 Context Memory、provider usage 校准与每轮 ReAct 预算。
 
-后面三份是专题说明；当它们与“当前实现全链路”冲突时，以全链路文档和代码为准。
+后面四份是专题说明；当它们与“当前实现全链路”冲突时，以全链路文档和代码为准。
 
 ## 已删除的旧概念
 

@@ -87,6 +87,7 @@ describe('ContextPreviewService', () => {
     expect(preview.selection).toEqual({
       selectedBundleIds: ['turn:job_1'],
       summarizedBundleIds: [],
+      summarizedMessageGroupIds: [],
       truncatedToolResultMessageIds: [],
     });
     expect(preview.blockedDiagnostics).toEqual([]);
@@ -159,7 +160,13 @@ function storeFixture(overrides: {
     listSessionJobs: async () => jobs,
     listSessionMessages: async () => messages,
     listSessionToolInvocations: async () => [toolInvocation],
+    listSessionPlans: async () => [],
+    listSessionPlanSteps: async () => [],
+    listSessionArtifacts: async () => [],
+    listSessionUserInputRequests: async () => [],
     listActiveContextSummaries: async () => [],
+    listRecentSessionModelCalls: async () => [],
+    getContextSummariesByIds: async () => [],
   };
 }
 

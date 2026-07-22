@@ -208,6 +208,16 @@ export class PostgresAgentStore implements AgentStore {
     return result.rows.map(mapAgentModelCallRow);
   }
 
+  async listRecentSessionModelCalls(sessionId: string, limit: number): Promise<AgentModelCall[]> {
+    const result = await this.#pool.query<AgentModelCallRow>(
+      `select * from agent_model_calls where session_id = $1
+       order by created_at_ms desc, call_attempt_no desc, logical_call_key desc, id desc
+       limit $2`,
+      [sessionId, limit]
+    );
+    return result.rows.map(mapAgentModelCallRow).reverse();
+  }
+
   async getModelUsageStats(sessionId: string): Promise<AgentModelUsageStats | undefined> {
     const result = await this.#pool.query<AgentModelUsageStatsRow>(
       `select * from agent_model_usage_stats where session_id = $1`, [sessionId]
@@ -229,6 +239,22 @@ export class PostgresAgentStore implements AgentStore {
       [ownerType, ownerId, purpose, contextRulesVersion]
     );
     return result.rows.map(mapAgentContextSummaryRow);
+  }
+
+  async getContextSummariesByIds(ids: string[]): Promise<AgentContextSummary[]> {
+    if (ids.length === 0) return [];
+    const result = await this.#pool.query<AgentContextSummaryRow>(
+      `select * from agent_context_summaries where id = any($1::text[])`,
+      [ids]
+    );
+    const byId = new Map(result.rows.map(row => {
+      const summary = mapAgentContextSummaryRow(row);
+      return [summary.id, summary] as const;
+    }));
+    return ids.flatMap(id => {
+      const summary = byId.get(id);
+      return summary ? [summary] : [];
+    });
   }
 
   async listSessionMessages(sessionId: string, afterRowId = 0): Promise<AgentMessage[]> {

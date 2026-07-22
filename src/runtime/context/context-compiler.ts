@@ -14,12 +14,19 @@ import {
   type TokenBudgetItem,
 } from './token-budget.js';
 
-export const CONTEXT_RULES_VERSION = 'unified-job-react-context-v1';
+export const CONTEXT_RULES_VERSION = 'unified-react-context-v2';
+export const TOKEN_ESTIMATOR_VERSION = 'cjk-aware-v2';
+
+export type ContextPressureLevel = 'normal' | 'watch' | 'compact' | 'mandatory' | 'critical';
 
 export interface CompiledContext {
   messages: BaseMessage[];
   inputManifest: AgentContextInputManifest;
   estimatedInputTokens: number;
+  predictedInputTokens: number;
+  predictedCandidateTokens: number;
+  hardInputLimit: number;
+  pressureLevel: ContextPressureLevel;
   contextRulesVersion: string;
   summaryIds: string[];
   mustKeepMessageIds: string[];
@@ -91,22 +98,32 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     });
   }
 
-  const maxCoveredRowId = Math.max(
-    0,
-    ...material.summaries.map(summary => summary.sourceRowIdEnd ?? 0)
+  // A row range is useful for audit but is not an ownership boundary. Exact
+  // stable group IDs prevent a summary from hiding unrelated messages that
+  // happen to have a smaller row_id (especially inside a long-running Job).
+  const coveredGroupIds = new Set(
+    material.summaries.flatMap(summary => summary.sourceGroupIds ?? [])
+  );
+  const mustKeepGroupIds = new Set(
+    material.groups.filter(item => item.mustKeep).map(item => item.group.id)
   );
   for (const summary of material.summaries) {
+    const summaryText = summary.compressionPromptVersion === 'context-memory-v1'
+      ? `Context memory (durable, compressed):\n${summary.summary}`
+      : `Context summary:\n${summary.summary}`;
     items.push({
       id: `summary:${summary.id}`,
       value: {
         kind: 'summary',
         id: summary.id,
-        message: new SystemMessage(`Context summary:\n${summary.summary}`),
+        message: new SystemMessage(summaryText),
         category: 'summaries',
       },
-      estimatedTokens: estimateTextTokens(summary.summary),
-      mustKeep: false,
-      priority: 60,
+      estimatedTokens: estimateTextTokens(summaryText),
+      // Covered raw groups are no longer present. Dropping their replacement
+      // would silently erase history, so active Context Memory is mandatory.
+      mustKeep: true,
+      priority: 900,
       recency: order,
       originalOrder: order++,
     });
@@ -114,16 +131,18 @@ export function compileContext(material: ContextMaterial): CompiledContext {
 
   if (material.bundles) {
     for (const bundleMaterial of material.bundles) {
-      if (!bundleMaterial.mustKeep && maxCoveredRowId >= bundleMaterial.bundle.sourceRowIdEnd) {
-        continue;
-      }
-      const formatted = bundleMaterial.bundle.groups.map(group => {
+      const visibleGroups = bundleMaterial.bundle.groups.filter(group => (
+        !coveredGroupIds.has(group.id) || mustKeepGroupIds.has(group.id)
+      ));
+      if (visibleGroups.length === 0) continue;
+      const visibleBundle = { ...bundleMaterial.bundle, groups: visibleGroups };
+      const formatted = visibleGroups.map(group => {
         const result = formatter.formatGroupWithMetadata(group);
         return { group, ...result };
       });
       items.push({
         id: bundleMaterial.bundle.id,
-        value: { kind: 'bundle', bundle: bundleMaterial.bundle, formatted, category: 'messages' },
+        value: { kind: 'bundle', bundle: visibleBundle, formatted, category: 'messages' },
         estimatedTokens: estimateTextTokens(canonicalJson(
           formatted.flatMap(item => item.messages.map(message => message.toDict()))
         )),
@@ -136,11 +155,7 @@ export function compileContext(material: ContextMaterial): CompiledContext {
   } else {
     for (const groupMaterial of material.groups) {
       const messages = messagesInGroup(groupMaterial.group);
-      if (
-        !groupMaterial.mustKeep
-        && maxCoveredRowId > 0
-        && messages.every(message => message.rowId <= maxCoveredRowId)
-      ) continue;
+      if (coveredGroupIds.has(groupMaterial.group.id) && !groupMaterial.mustKeep) continue;
       const formatted = formatter.formatGroupWithMetadata(groupMaterial.group);
       items.push({
         id: groupMaterial.group.id,
@@ -290,6 +305,9 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     ...(material.bundles ? {
       summarizedBundleIds: material.summaries.flatMap(summary => summary.sourceBundleIds ?? []),
     } : {}),
+    ...(coveredGroupIds.size > 0
+      ? { summarizedMessageGroupIds: [...coveredGroupIds] }
+      : {}),
     ...(truncatedToolResultMessageIds.length > 0
       ? { truncatedToolResultMessageIds: [...new Set(truncatedToolResultMessageIds)] }
       : {}),
@@ -302,23 +320,55 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     ...(toolSchemaChecksum ? { toolSchemaChecksum } : {}),
     fixedPrefixChecksum,
     estimatedBreakdown: breakdown,
+    tokenPrediction: {
+      estimatorVersion: TOKEN_ESTIMATOR_VERSION,
+      calibrationSampleCount: material.model.tokenCalibrationSampleCount ?? 0,
+      calibrationFactor: material.model.tokenCalibrationFactor ?? 1,
+      errorReserve: material.model.tokenErrorReserve ?? 0,
+      rawEstimatedInputTokens: selection.estimatedInputTokens,
+      predictedInputTokens: selection.predictedInputTokens,
+      predictedCandidateTokens: selection.predictedCandidateTokens,
+      hardInputLimit: selection.hardInputLimit,
+      pressureLevel: pressureLevel(
+        selection.predictedCandidateTokens,
+        selection.hardInputLimit,
+        material.compression.compactAtRatio
+      ),
+    },
   };
+
+  const currentPressure = inputManifest.tokenPrediction!.pressureLevel;
 
   return {
     messages: formattedMessages,
     inputManifest,
     estimatedInputTokens: selection.estimatedInputTokens,
+    predictedInputTokens: selection.predictedInputTokens,
+    predictedCandidateTokens: selection.predictedCandidateTokens,
+    hardInputLimit: selection.hardInputLimit,
+    pressureLevel: currentPressure,
     contextRulesVersion: material.audit.contextRulesVersion,
     summaryIds,
     mustKeepMessageIds,
     compressibleMessageIds,
-    compressionRecommended: !material.compression.disabled && (
-      selection.candidateTokens > selection.safeInputLimit * 0.7
-      || material.compression.newCompressibleMessageCount >= material.compression.messageThreshold
-    ),
+    compressionRecommended: !material.compression.disabled
+      && ['compact', 'mandatory', 'critical'].includes(currentPressure),
     annotations,
     blockedDiagnostics: material.blockedDiagnostics ?? [],
   };
+}
+
+function pressureLevel(
+  predictedTokens: number,
+  hardInputLimit: number,
+  compactAtRatio = 0.55
+): ContextPressureLevel {
+  const ratio = hardInputLimit > 0 ? predictedTokens / hardInputLimit : 1;
+  if (ratio >= 0.9) return 'critical';
+  if (ratio >= 0.75) return 'mandatory';
+  if (ratio >= compactAtRatio) return 'compact';
+  if (ratio >= 0.4) return 'watch';
+  return 'normal';
 }
 
 function sha256(value: string): string {

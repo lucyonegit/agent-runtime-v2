@@ -34,6 +34,9 @@ export interface ContextPreviewV1 {
   contextRulesVersion: string;
   systemPromptVersion: string;
   estimatedInputTokens: number;
+  predictedInputTokens: number;
+  predictedCandidateTokens: number;
+  pressureLevel: 'normal' | 'watch' | 'compact' | 'mandatory' | 'critical';
   compressionRecommended: boolean;
   limits: {
     maxContextTokens: number;
@@ -43,6 +46,7 @@ export interface ContextPreviewV1 {
   selection: {
     selectedBundleIds: string[];
     summarizedBundleIds: string[];
+    summarizedMessageGroupIds: string[];
     truncatedToolResultMessageIds: string[];
   };
   blockedDiagnostics: Array<{

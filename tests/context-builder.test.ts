@@ -187,7 +187,10 @@ describe('ContextCompiler', () => {
       systemPromptVersion: 'v1',
       messages: [goalMessage, old, recent],
       invocations: [],
-      summaries: [{ id: 'summary_covered', summary: 'compressed history', sourceRowIdEnd: 2 }],
+      summaries: [{
+        id: 'summary_covered', summary: 'compressed history', sourceRowIdEnd: 2,
+        sourceGroupIds: ['message:old_assistant'],
+      }],
       model: { provider: 'test', name: 'model', maxContextTokens: 1000, reservedOutputTokens: 100 },
     });
 
@@ -260,7 +263,10 @@ describe('ContextCompiler', () => {
       systemPromptVersion: 'v1',
       messages: [sourceGoal, failedAssistant],
       invocations: [],
-      summaries: [{ id: 'summary_failed', summary: '失败尝试摘要', sourceRowIdEnd: 11 }],
+      summaries: [{
+        id: 'summary_failed', summary: '失败尝试摘要', sourceRowIdEnd: 11,
+        sourceGroupIds: ['message:failed_assistant'],
+      }],
       model: { provider: 'test', name: 'model', maxContextTokens: 1000, reservedOutputTokens: 100 },
     });
 
@@ -375,6 +381,7 @@ describe('ContextCompiler', () => {
         id: 'summary_covering_current',
         summary: '压缩后的历史',
         sourceRowIdEnd: currentUser.rowId,
+        sourceGroupIds: ['message:previous_user', 'message:current_user'],
       }],
       model: { provider: 'test', name: 'model', maxContextTokens: 1000, reservedOutputTokens: 100 },
     });
@@ -464,8 +471,7 @@ function buildContext(input: CompilerFixtureInput) {
     },
     compression: {
       disabled: false,
-      newCompressibleMessageCount: 0,
-      messageThreshold: 50,
+      compactAtRatio: 0.55,
     },
   });
 }

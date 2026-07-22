@@ -3,14 +3,19 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   AgentJob,
   AgentMessage,
+  AgentModelCall,
   AgentPlan,
   AgentPlanStep,
   AgentToolInvocation,
 } from '../src/domain/index.js';
 import { ExecutionContextProvider } from '../src/orchestration/execution/execution-context-provider.js';
 import { compileContext, CONTEXT_RULES_VERSION } from '../src/runtime/context/context-compiler.js';
+import type { BuiltContext } from '../src/runtime/context/context-compiler.js';
 import type { ContextMaterial, TurnBundle } from '../src/runtime/context/context-material.js';
-import { JobContextLoader } from '../src/runtime/loaders/job-context-loader.js';
+import {
+  ExecutionContextLoader,
+  calibrateModelBudget,
+} from '../src/runtime/loaders/execution-context-loader.js';
 import type { RuntimeToolContext } from '../src/runtime/tool-executor.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 import { createPlanTools } from '../src/tools/plan-tools.js';
@@ -97,14 +102,14 @@ describe('unified ReAct planning', () => {
       listSessionMessages: async () => [goalMessage(), call, result],
       listSessionToolInvocations: async () => [planInvocation(call, result)],
       listActiveContextSummaries: async () => [],
+      listRecentSessionModelCalls: async () => [],
     };
-    const loader = new JobContextLoader({
+    const loader = new ExecutionContextLoader({
       store,
       systemPrompt: 'system',
       systemPromptVersion: 'system-v1',
       model: { provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500 },
       toolSchemas: [],
-      compressionMessageThreshold: 50,
     });
     const built = compileContext(await loader.load(job(), 'Create a report'));
 
@@ -118,17 +123,65 @@ describe('unified ReAct planning', () => {
     expect(String(built.messages.at(-1)?.content)).toContain('"status":"in_progress"');
   });
 
-  it('uses one Job context provider and reloads after rolling compression', async () => {
+  it('appends authoritative Plan state independently of compressed message history', async () => {
+    const currentPlan = plan({ status: 'active', version: 3 });
+    const currentStep = planStep({
+      id: 'step_1', key: 'research', position: 0, title: 'Research', status: 'in_progress',
+    });
+    const loader = new ExecutionContextLoader({
+      store: {
+        listSessionJobs: async () => [job()],
+        listSessionMessages: async () => [goalMessage()],
+        listSessionToolInvocations: async () => [],
+        listActiveContextSummaries: async () => [],
+        listRecentSessionModelCalls: async () => [],
+        listSessionPlans: async () => [currentPlan],
+        listSessionPlanSteps: async () => [currentStep],
+        listSessionArtifacts: async () => [],
+        listSessionUserInputRequests: async () => [],
+      },
+      systemPrompt: 'system',
+      systemPromptVersion: 'system-v1',
+      model: { provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500 },
+      toolSchemas: [],
+    });
+
+    const built = compileContext(await loader.load(job(), 'Create a report'));
+    const runtimeState = String(built.messages.at(-1)?.content);
+
+    expect(runtimeState).toContain('Durable runtime state (authoritative)');
+    expect(runtimeState).toContain('"version":3');
+    expect(runtimeState).toContain('"status":"in_progress"');
+  });
+
+  it('calibrates predicted input from recent provider usage without shrinking safety', () => {
+    const calls = Array.from({ length: 10 }, (_, index) => modelCall({
+      id: `call_${index}`,
+      estimatedInputTokens: 1_000,
+      actualInputTokens: index === 9 ? 1_300 : 1_100,
+    }));
+    const calibrated = calibrateModelBudget({
+      provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500,
+    }, calls);
+
+    expect(calibrated).toMatchObject({
+      tokenCalibrationSampleCount: 10,
+      tokenCalibrationFactor: 1.3,
+      tokenErrorReserve: 64,
+    });
+  });
+
+  it('uses one execution context provider and reloads after unified compression', async () => {
     const load = vi.fn()
       .mockResolvedValueOnce(material(true))
       .mockResolvedValueOnce(material(false));
-    const compress = vi.fn(async () => undefined);
+    const compress = vi.fn(async () => true);
     const provider = new ExecutionContextProvider({
       store: {} as AgentStore,
       modelName: 'model',
-      jobContext: { load },
+      executionContext: { load },
       compressionModels: { create: () => ({ invoke: async () => ({ text: 'summary' }) }) },
-      sessionCompression: { compress },
+      contextCompression: { compress },
     });
 
     const built = await provider.buildJobContext(job(), 'Create a report');
@@ -137,7 +190,7 @@ describe('unified ReAct planning', () => {
     expect(compress).toHaveBeenCalledTimes(1);
   });
 
-  it('falls back to the already-budgeted context when rolling compression fails', async () => {
+  it('falls back to the already-budgeted context when compact-pressure compression fails', async () => {
     const load = vi.fn().mockResolvedValue(material(true));
     const compress = vi.fn(async () => {
       throw new Error('Session context compression returned invalid JSON.');
@@ -145,9 +198,9 @@ describe('unified ReAct planning', () => {
     const provider = new ExecutionContextProvider({
       store: {} as AgentStore,
       modelName: 'model',
-      jobContext: { load },
+      executionContext: { load },
       compressionModels: { create: () => ({ invoke: async () => ({ text: 'not-json' }) }) },
-      sessionCompression: { compress },
+      contextCompression: { compress },
     });
 
     const built = await provider.buildJobContext(job(), 'Create a report');
@@ -156,12 +209,76 @@ describe('unified ReAct planning', () => {
     expect(load).toHaveBeenCalledTimes(1);
     expect(compress).toHaveBeenCalledTimes(1);
   });
+
+  it('allows compression to run before an oversized active Job fails budgeting', async () => {
+    const oversized = material(false);
+    oversized.model = {
+      provider: 'test', name: 'model', maxContextTokens: 5, reservedOutputTokens: 1,
+    };
+    oversized.compression.disabled = false;
+    const load = vi.fn()
+      .mockResolvedValueOnce(oversized)
+      .mockResolvedValueOnce(material(false));
+    const compress = vi.fn(async (input: { built?: BuiltContext }) => {
+      expect(input.built).toBeUndefined();
+      return true;
+    });
+    const provider = new ExecutionContextProvider({
+      store: {} as AgentStore,
+      modelName: 'model',
+      executionContext: { load },
+      compressionModels: { create: () => ({ invoke: async () => ({ text: 'summary' }) }) },
+      contextCompression: { compress: compress as never },
+    });
+
+    const built = await provider.buildJobContext(job(), 'Create a report');
+
+    expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(compress).toHaveBeenCalledTimes(1);
+  });
 });
 
 function job(): AgentJob {
   return {
     id: 'job_1', sessionId: 'session_1', status: 'running', currentAttemptId: 'attempt_1',
     attemptNo: 1, version: 1, createdAtMs: 1, updatedAtMs: 1,
+  };
+}
+
+function modelCall(overrides: Pick<AgentModelCall,
+  'id' | 'estimatedInputTokens' | 'actualInputTokens'>): AgentModelCall {
+  return {
+    id: overrides.id,
+    sessionId: 'session_1',
+    jobId: 'job_1',
+    attemptId: 'attempt_1',
+    logicalCallKey: overrides.id,
+    callAttemptNo: 1,
+    callType: 'job.react',
+    status: 'completed',
+    provider: 'test',
+    model: 'model',
+    contextRulesVersion: CONTEXT_RULES_VERSION,
+    inputManifest: {
+      purpose: 'job_execution',
+      contextRulesVersion: CONTEXT_RULES_VERSION,
+      systemPromptVersion: 'system-v1',
+      messageGroupIds: [],
+      summaryIds: [],
+      fixedPrefixChecksum: 'checksum',
+      estimatedBreakdown: {
+        system: 0, tools: 0, summaries: 0, messages: 0, reservedOutput: 500,
+      },
+    },
+    inputMessages: [],
+    inputChecksum: 'checksum',
+    maxContextTokens: 10_000,
+    reservedOutputTokens: 500,
+    estimatedInputTokens: overrides.estimatedInputTokens,
+    actualInputTokens: overrides.actualInputTokens,
+    usageSource: 'provider',
+    createdAtMs: 1,
   };
 }
 
@@ -246,8 +363,7 @@ function material(compressionRecommended: boolean): ContextMaterial {
     },
     compression: {
       disabled: !compressionRecommended,
-      newCompressibleMessageCount: compressionRecommended ? 1 : 0,
-      messageThreshold: 1,
+      compactAtRatio: compressionRecommended ? 0 : 1,
     },
   };
 }

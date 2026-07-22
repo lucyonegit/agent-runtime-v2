@@ -2,7 +2,7 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import type { AgentJob } from '../../domain/index.js';
 import type { JobExecutionService } from '../agent-runtime.js';
 import { ReactExecutionRuntime } from '../../runtime/react-execution-runtime.js';
-import { JobContextLoader } from '../../runtime/loaders/job-context-loader.js';
+import { ExecutionContextLoader } from '../../runtime/loaders/execution-context-loader.js';
 import { JobCoordinator } from '../lifecycle/job-coordinator.js';
 import { resolveJobGoalMessage } from '../../runtime/job-goal.js';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
@@ -27,7 +27,6 @@ export interface JobExecutionOrchestratorOptions {
   executionDeadlineMs?: number;
   jobLeaseMs?: number;
   jobHeartbeatMs?: number;
-  compressionMessageThreshold?: number;
   jobSystemPrompt: string;
   systemPromptVersion: string;
 }
@@ -57,7 +56,6 @@ export class JobExecutionOrchestrator implements JobExecutionService {
       executionDeadlineMs: 15 * 60_000,
       jobLeaseMs: 30_000,
       jobHeartbeatMs: 10_000,
-      compressionMessageThreshold: 50,
       ...options,
     };
     if (this.#options.jobHeartbeatMs >= this.#options.jobLeaseMs) {
@@ -69,13 +67,12 @@ export class JobExecutionOrchestrator implements JobExecutionService {
       maxContextTokens: this.#options.maxContextTokens,
       reservedOutputTokens: this.#options.reservedOutputTokens,
     };
-    const jobContext = new JobContextLoader({
+    const executionContext = new ExecutionContextLoader({
       store: this.#options.store,
       systemPrompt: this.#options.jobSystemPrompt,
       systemPromptVersion: this.#options.systemPromptVersion,
       model: modelBudget,
       toolSchemas: this.#options.tools.map(tool => tool.tool),
-      compressionMessageThreshold: this.#options.compressionMessageThreshold,
     });
     this.#react = new ReactExecutionRuntime({
       store: this.#options.store,
@@ -95,7 +92,7 @@ export class JobExecutionOrchestrator implements JobExecutionService {
     this.#contexts = new ExecutionContextProvider({
       store: this.#options.store,
       modelName: this.#options.modelName,
-      jobContext,
+      executionContext,
       compressionModels: {
         create: ({ job, context, logicalCallKey }) => this.#react.createAuditedModel(
           job,

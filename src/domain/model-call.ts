@@ -18,6 +18,7 @@ export interface AgentContextInputManifest {
   summaryIds: string[];
   selectedBundleIds?: string[];
   summarizedBundleIds?: string[];
+  summarizedMessageGroupIds?: string[];
   truncatedToolResultMessageIds?: string[];
   includedRowIdStart?: number;
   includedRowIdEnd?: number;
@@ -29,6 +30,17 @@ export interface AgentContextInputManifest {
     summaries: number;
     messages: number;
     reservedOutput: number;
+  };
+  tokenPrediction?: {
+    estimatorVersion: string;
+    calibrationSampleCount: number;
+    calibrationFactor: number;
+    errorReserve: number;
+    rawEstimatedInputTokens: number;
+    predictedInputTokens: number;
+    predictedCandidateTokens: number;
+    hardInputLimit: number;
+    pressureLevel: 'normal' | 'watch' | 'compact' | 'mandatory' | 'critical';
   };
 }
 

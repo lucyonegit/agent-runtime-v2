@@ -38,10 +38,25 @@ export class ToolResultContextProjector {
     }
 
     const marker = `\n\n[tool result truncated; originalTokens=${originalTokenEstimate}; checksum=sha256:${checksum}]\n\n`;
-    const targetCharacters = Math.max(0, this.#maxTokens * 4 - marker.length);
-    const headCharacters = Math.floor(targetCharacters * this.#headRatio);
-    const tailCharacters = targetCharacters - headCharacters;
-    const projected = `${content.slice(0, headCharacters)}${marker}${content.slice(-tailCharacters)}`;
+    // Character limits are unsafe for CJK. Find the largest head/tail slice
+    // which satisfies the same estimator used by the global Context budget.
+    let low = 0;
+    let high = content.length;
+    let projected = marker;
+    while (low <= high) {
+      const retainedCharacters = Math.floor((low + high) / 2);
+      const headCharacters = Math.floor(retainedCharacters * this.#headRatio);
+      const tailCharacters = retainedCharacters - headCharacters;
+      const candidate = `${content.slice(0, headCharacters)}${marker}${
+        tailCharacters > 0 ? content.slice(-tailCharacters) : ''
+      }`;
+      if (estimateTextTokens(candidate) <= this.#maxTokens) {
+        projected = candidate;
+        low = retainedCharacters + 1;
+      } else {
+        high = retainedCharacters - 1;
+      }
+    }
     return {
       content: projected,
       truncated: true,

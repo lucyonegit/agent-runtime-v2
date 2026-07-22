@@ -26,4 +26,12 @@ describe('ToolResultContextProjector', () => {
     expect(first.content.endsWith('B')).toBe(true);
     expect(first.projectedTokenEstimate).toBeLessThan(first.originalTokenEstimate);
   });
+
+  it('keeps a CJK projection inside the configured token budget', () => {
+    const result = new ToolResultContextProjector({ maxTokens: 50 })
+      .project('这是一个很长的中文工具结果。'.repeat(100));
+
+    expect(result.truncated).toBe(true);
+    expect(result.projectedTokenEstimate).toBeLessThanOrEqual(50);
+  });
 });

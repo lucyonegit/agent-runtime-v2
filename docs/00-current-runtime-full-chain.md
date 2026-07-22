@@ -5,7 +5,7 @@
 > Git 基线：cb295b6，并包含当前工作区尚未提交的 Shell 工具权限与超时调整。  
 > 数据库 schema：version 3，名称 explicit-job-recovery。  
 > Runtime 协议版本：unified-react-plan-tool-v4。  
-> Context 规则版本：unified-job-react-context-v1。
+> Context 规则版本：unified-react-context-v2。
 
 本文从一次 HTTP 请求进入系统开始，沿着 Session、Job、Job Attempt、Context、LangChain 模型调用、ReAct 循环、Plan、工具、HITL、Checkpoint、PostgreSQL、SSE 和前端 View 一直追踪到最终回复。所有结论均以当前代码为准。
 
@@ -887,7 +887,7 @@ flowchart LR
     DB[("Messages / Jobs / Summaries")] --> SCL["SessionContextLoader"]
     SCL --> MGB["MessageGroupBuilder"]
     MGB --> TB["TurnBundleBuilder"]
-    TB --> JCL["JobContextLoader"]
+    TB --> JCL["ExecutionContextLoader"]
     JCL --> MAT["ContextMaterial"]
     MAT --> CC["ContextCompiler"]
     CC --> BUD["TokenBudget"]
@@ -895,7 +895,7 @@ flowchart LR
 
     CC -->|"建议压缩"| CP["ExecutionContextProvider"]
     CP --> CM["Audited context.compress call"]
-    CM --> SCS["SessionCompressionService"]
+    CM --> SCS["ContextCompressionService"]
     SCS --> DB
     CP -->|"重新加载"| SCL
 ~~~
@@ -926,7 +926,7 @@ flowchart LR
 
 ### 18.4 TurnBundleBuilder
 
-Bundle 是 Context 选择的最小会话单元。Retry 链会合并为同一个 TurnBundle：
+MessageGroup 是压缩和精确覆盖的最小单元。TurnBundle 用于表达用户轮次、Retry lineage 和预算阶段的连续历史尾；Retry 链会合并为同一个 TurnBundle：
 
 ~~~text
 root Job
@@ -934,29 +934,30 @@ root Job
     retry Job 2
 ~~~
 
-这样预算裁剪不会只留下 Retry 的错误卡片，却丢掉原始用户目标。
+这样预算裁剪不会只留下 Retry 的错误卡片，却丢掉原始用户目标。摘要覆盖不再按整个 Bundle 或 Row 范围推断，而是记录稳定 `groupId`。
 
 每个 Bundle 包含 bundleId、rootJobId、jobIds、groups、rowIdStart/rowIdEnd、terminal、estimatedTokens、priority 和 mustKeep。
 
-### 18.5 JobContextLoader 选择规则
+### 18.5 ExecutionContextLoader 选择规则
 
 正式 Job Context 由以下部分构成：
 
 1. 固定 SystemMessage；
 2. 工具 schemas；
-3. 可选 active ContextSummary；
-4. 历史 terminal TurnBundles；
-5. 当前 Job 所在完整 TurnBundle；
-6. 原始 goal Message。
+3. 统一的 active Context Memory；
+4. 未被 `coveredGroupIds` 精确覆盖的完整 MessageGroups；
+5. 当前 Job 最近的原始 ReAct 尾部；
+6. 原始 goal Message；
+7. 从 Plan、PlanStep、Artifact、HITL 表读取的 Durable Runtime State。
 
 优先级：
 
-- 当前 Job Bundle：mustKeep，priority 1000；
-- goal：固定前缀，必须保留；
-- active summary：priority 60；
+- 当前 Job Bundle 在预算选择阶段：mustKeep，priority 1000；
+- goal：mustKeep，必须保留；
+- active Context Memory：priority 60；
 - 普通历史 Bundle：priority 40。
 
-Plan 没有额外塞一个“计划字符串”。它以 update_plan 的 AI ToolCall 与 ToolMessage 进入当前 Job Bundle，后续工具结果也在同一历史中。
+当前 Job Bundle 是选择保护，不是压缩边界。Bundle 内离开 Protected Window 的稳定旧 Group 可以被 Context Memory 覆盖。Plan 既以 `update_plan` Tool exchange 保留历史语义，也以权威 Durable Runtime State 表达当前状态。
 
 ### 18.6 Token 预算
 
@@ -965,7 +966,7 @@ hardInputLimit = maxContextTokens - reservedOutputTokens
 safeInputLimit = floor(hardInputLimit * 0.9)
 ~~~
 
-选择过程：
+Token 先使用 CJK-aware estimator，再使用同一 provider/model 最近调用的 P95 误差校准。选择过程：
 
 1. 加入固定 SystemMessage 与 tool schemas；
 2. 计算 mustKeep；
@@ -980,36 +981,23 @@ safeInputLimit = floor(hardInputLimit * 0.9)
 很大的 ToolResult 不一定原样放入模型：
 
 - 单个结果上限约 8000 估算 tokens；
-- 保留头部约 60%；
-- 保留尾部约 40%；
+- 按约 60%/40% 的比例保留头尾；
 - 中间替换为截断标记；
 - manifest 记录被截断 Message ID 与 checksum。
+
+保留字符数通过二分查找并重复估算，不再使用不适合中文的 `maxTokens * 4`。
 
 数据库原始 ToolResult 不变，裁剪只发生在 Context 投影。
 
 ### 18.8 压缩
 
-满足任一条件建议压缩：
+压缩由 `predictedCandidateTokens / hardInputLimit` 的压力等级触发，不再使用消息条数。默认 55% 进入 compact、75% mandatory、90% critical。
 
-- Context 候选超过 safe limit 的 70%；
-- 相对旧 Summary 新增可压缩消息达到 50 条。
+可压缩范围是所有已完成、已落库、未覆盖、未受保护且离开最近 24K Token 原文窗口的 MessageGroups；当前 Job 内稳定的旧 Group 与跨 Job 历史遵循同一规则。
 
-可压缩范围：
+压缩本身也是 Audited ModelCall，`callType=context.compress`。模型只生成 Memory 的语义字段；`coveredGroupIds/messageIds` 由 Runtime 根据事实生成。旧 active Memory 与新 Blocks 一起提供给模型，形成累计更新。
 
-- 只压 terminal 历史 Bundle；
-- 不压当前 Job；
-- 不压已经被 active Summary 覆盖的 row；
-- 至少保留最近 1 个 eligible Bundle 原文。
-
-压缩本身也是 Audited ModelCall，callType = context.compress。模型输出严格结构：
-
-- userGoals；
-- decisions；
-- planOutcomes；
-- artifacts；
-- unresolved。
-
-新 Summary 成功后原子 supersede 旧 Summary，再重新加载并编译 Context。压缩失败被视为优化失败，只要第一次编译结果仍安全，当前 Job 继续执行。
+新 Memory 成功后原子 supersede 旧版本，再重新加载并编译 Context。compact 压力下压缩失败允许使用已通过预算的 Context；mandatory/critical 下禁止静默降级。
 
 ### 18.9 一份含普通对话与 Plan 的完整示例
 
@@ -1536,7 +1524,7 @@ ToolInvocation failed 会有 errorCode、errorMessage、errorDetails 和正式 T
 | unified-react-plan.test.ts | update_plan 与统一 ReAct |
 | context-builder.test.ts | Group、Bundle、预算、Context |
 | turn-bundle-builder.test.ts | Retry lineage |
-| session-compression.service.test.ts | Summary 替换与压缩 |
+| context-compression.service.test.ts | 统一 Context Memory 替换、精确覆盖与当前 Job 内压缩 |
 | context-inspection.service.test.ts | Context 查询 |
 | context-preview.service.test.ts | HTTP 调试投影 |
 | runtime-tools.test.ts | 文件、Shell、HITL 等工具 |

@@ -34,13 +34,13 @@ try {
 const store = new PostgresAgentStore(pool);
 const events = new RuntimeEventBus();
 const modelConfig = resolveModelRuntimeConfig(process.env);
-const model = createLangChainChatModel(modelConfig);
 const sandboxRoot = process.env.AGENT_SANDBOX_ROOT ?? '.agent-sandbox';
 const jobLeaseMs = numberEnv('JOB_LEASE_MS', 30_000);
 const jobHeartbeatMs = numberEnv('JOB_HEARTBEAT_MS', Math.max(1_000, Math.floor(jobLeaseMs / 3)));
 const jobRecoveryScanMs = numberEnv('JOB_RECOVERY_SCAN_MS', 5_000);
 const maxContextTokens = numberEnv('MODEL_MAX_CONTEXT_TOKENS', 128_000);
 const reservedOutputTokens = numberEnv('MODEL_RESERVED_OUTPUT_TOKENS', 4_096);
+const model = createLangChainChatModel(modelConfig, reservedOutputTokens);
 if (jobHeartbeatMs >= jobLeaseMs) throw new Error('JOB_HEARTBEAT_MS must be shorter than JOB_LEASE_MS.');
 const tools = createDefaultTools({ store, workerId, publisher: events });
 const executor = new JobExecutionOrchestrator({

@@ -56,7 +56,7 @@ AIMessage(tool_call=update_plan)
 ToolMessage(content={ planId, version, status, steps })
 ```
 
-因此 Context 不需要额外插入可变的“当前 Plan 快照”。最新 Plan 状态由最新 durable tool result 表示，历史 ModelCall 也不会因为 Plan 原位更新而改变语义。
+历史语义仍由 `update_plan` ToolCall/ToolMessage 表达。除此之外，每轮还会从业务表生成只读 Durable Runtime State，提供当前 Plan/Step、最新 Artifact revision 和待处理 HITL；它是本次调用的权威状态快照，不回写历史消息。
 
 ## 3. Job Context 构建
 
@@ -65,7 +65,7 @@ ToolMessage(content={ planId, version, status, steps })
 ```mermaid
 flowchart LR
     DB["Session Jobs + Messages + ToolInvocations + Summaries"] --> L["SessionContextLoader"]
-    L --> J["JobContextLoader"]
+    L --> J["ExecutionContextLoader"]
     J --> B["TurnBundle / MessageGroup"]
     B --> C["ContextCompiler"]
     C --> LC["LangChain Message List"]
@@ -75,11 +75,11 @@ flowchart LR
 拼接原则：
 
 1. 固定前缀：系统提示和稳定 workspace 环境信息。
-2. 历史摘要：只覆盖明确的 bundle 范围。
-3. 完整历史：按 `row_id` 和 turn bundle 保持用户轮次边界。
-4. 当前 Job bundle：整体 `mustKeep`，包含本轮所有计划、工具和 HITL 消息。
+2. Context Memory：只覆盖明确的稳定 `MessageGroup.id`，Row 范围仅用于审计。
+3. 完整历史：按 `row_id` 保持时序，以 MessageGroup 保持协议，以 TurnBundle 保持轮次/Retry 连续性。
+4. 当前 Job bundle 在选择阶段整体 `mustKeep`；压缩阶段仍可覆盖其中离开 Protected Window 的稳定旧 Group。
 5. 工具调用与结果必须成组；缺失结果的调用被标记为 blocked，不产生非法 LangChain 序列。
-6. 预算不足时先使用已有摘要和截断大型 tool result，不拆散当前 Job bundle。
+6. 预算不足时先使用已有 Memory、压缩较旧稳定 Group、截断大型 ToolResult，并保留当前 goal 与最近原文尾部。
 
 Context purpose 只保留：
 
@@ -99,6 +99,7 @@ PostgreSQL `jsonb` 会规范化对象键顺序，所以 checksum 不能直接依
 `GET /model-calls/:id/context` 会：
 
 1. 根据 manifest 检查引用的持久化材料仍存在。
+   Summary 使用 manifest 的 ID 直接读取，包含已经被新 Memory supersede 的历史版本，而不是只查询 active Summary。
 2. 检查规则版本和选择结果。
 3. 对持久化 `input_messages` 做 canonical checksum。
 4. 返回精确 LangChain Message List，标记 `verification.status = exact`。

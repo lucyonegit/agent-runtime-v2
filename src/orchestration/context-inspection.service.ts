@@ -6,7 +6,11 @@ import { AgentStoreError } from '../storage/agent-store.js';
 import { compileContext, CONTEXT_RULES_VERSION } from '../runtime/context/context-compiler.js';
 import type { BuiltContext } from '../runtime/context/context-compiler.js';
 import type { ContextMaterial, ContextModelBudget } from '../runtime/context/context-material.js';
-import { JobContextLoader } from '../runtime/loaders/job-context-loader.js';
+import {
+  ExecutionContextLoader,
+  buildDurableRuntimeStateMessages,
+  calibrateModelBudget,
+} from '../runtime/loaders/execution-context-loader.js';
 import { ModelCallContextLoader } from '../runtime/loaders/model-call-context-loader.js';
 import { SessionContextLoader } from '../runtime/loaders/session-context-loader.js';
 import { resolveJobGoalMessage } from '../runtime/job-goal.js';
@@ -40,7 +44,13 @@ export type ContextInspectionStore = Pick<AgentStore,
   | 'listSessionJobs'
   | 'listSessionMessages'
   | 'listSessionToolInvocations'
+  | 'listSessionPlans'
+  | 'listSessionPlanSteps'
+  | 'listSessionArtifacts'
+  | 'listSessionUserInputRequests'
   | 'listActiveContextSummaries'
+  | 'listRecentSessionModelCalls'
+  | 'getContextSummariesByIds'
 >;
 
 export interface ContextInspectionServiceOptions {
@@ -49,26 +59,24 @@ export interface ContextInspectionServiceOptions {
   model: ContextModelBudget;
   systemPrompt: string;
   systemPromptVersion: string;
-  compressionMessageThreshold: number;
   clock?: { nowMs(): number };
 }
 
 /** Read-only reconstruction for next-turn, Job and exact ModelCall snapshots. */
 export class ContextInspectionService {
   readonly #session: SessionContextLoader;
-  readonly #jobs: JobContextLoader;
+  readonly #jobs: ExecutionContextLoader;
   readonly #modelCalls: ModelCallContextLoader;
   readonly #clock: { nowMs(): number };
 
   constructor(private readonly options: ContextInspectionServiceOptions) {
     this.#session = new SessionContextLoader(options.store);
-    this.#jobs = new JobContextLoader({
+    this.#jobs = new ExecutionContextLoader({
       store: options.store,
       systemPrompt: options.systemPrompt,
       systemPromptVersion: options.systemPromptVersion,
       model: options.model,
       toolSchemas: options.tools,
-      compressionMessageThreshold: options.compressionMessageThreshold,
     });
     this.#modelCalls = new ModelCallContextLoader(options.store);
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
@@ -88,9 +96,10 @@ export class ContextInspectionService {
         `Agent session ${JSON.stringify(query.sessionId)} was not found.`
       );
     }
-    const [jobs, facts] = await Promise.all([
+    const [jobs, facts, modelCalls] = await Promise.all([
       this.options.store.listSessionJobs(query.sessionId),
       this.#session.load(query.sessionId),
+      this.options.store.listRecentSessionModelCalls(query.sessionId, 100),
     ]);
     assertNoActiveJob(jobs);
     const material: ContextMaterial = {
@@ -100,6 +109,7 @@ export class ContextInspectionService {
         text: this.options.systemPrompt,
       }],
       fixedPrefix: { systemPrompt: this.options.systemPrompt },
+      trailingMessages: buildDurableRuntimeStateMessages(facts),
       groups: facts.groups.map(group => ({
         group,
         segment: 'session_history',
@@ -112,14 +122,9 @@ export class ContextInspectionService {
         mustKeep: false,
         priority: 40,
       })),
-      summaries: facts.summaries.map(summary => ({
-        id: summary.id,
-        summary: summary.summary,
-        sourceRowIdEnd: summary.sourceRowIdEnd,
-        sourceBundleIds: readStringArray(summary.metadata?.sourceBundleIds),
-      })),
+      summaries: facts.summaries.map(toSummaryMaterial),
       toolSchemas: this.options.tools,
-      model: this.options.model,
+      model: calibrateModelBudget(this.options.model, modelCalls),
       audit: {
         purpose: 'job_execution',
         contextRulesVersion: CONTEXT_RULES_VERSION,
@@ -132,8 +137,9 @@ export class ContextInspectionService {
       })),
       compression: {
         disabled: false,
-        newCompressibleMessageCount: facts.messages.length,
-        messageThreshold: this.options.compressionMessageThreshold,
+        recentRawTokenBudget: 24_000,
+        minimumRecentGroups: 2,
+        compactAtRatio: 0.55,
       },
     };
     const snapshot = this.#snapshot(query, session.id, compileContext(material), {
@@ -163,6 +169,10 @@ export class ContextInspectionService {
       originalGoal,
       call.inputManifest.contextRulesVersion
     );
+    const historicalSummaries = await this.options.store.getContextSummariesByIds(
+      call.inputManifest.summaryIds
+    );
+    material.summaries = historicalSummaries.map(toSummaryMaterial);
     const built = this.#modelCalls.reconstruct(call, material);
     return this.#snapshot(query, job.sessionId, built, {
       basedOnLatestJobId: job.id,
@@ -212,6 +222,23 @@ export class ContextInspectionService {
       verification,
     };
   }
+}
+
+function toSummaryMaterial(
+  summary: Awaited<ReturnType<ContextInspectionStore['getContextSummariesByIds']>>[number]
+): ContextMaterial['summaries'][number] {
+  return {
+    id: summary.id,
+    summaryType: summary.summaryType,
+    compressionPromptVersion: summary.compressionPromptVersion,
+    summary: summary.summary,
+    sourceRowIdStart: summary.sourceRowIdStart,
+    sourceRowIdEnd: summary.sourceRowIdEnd,
+    sourceGroupIds: readStringArray(summary.metadata?.sourceGroupIds),
+    sourceBundleIds: readStringArray(summary.metadata?.sourceBundleIds),
+    sourceMessageCount: summary.sourceMessageCount,
+    sourceTokenCount: summary.sourceTokenCount,
+  };
 }
 
 function readStringArray(value: unknown): string[] | undefined {

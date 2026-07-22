@@ -1166,6 +1166,11 @@ describe('PostgresAgentStore Job transactions', () => {
       totalEstimatedInputTokens: 90,
       totalTokens: 100,
     });
+    expect(await store.listRecentSessionModelCalls('session_audit', 1)).toMatchObject([{
+      id: 'model_call_2', status: 'failed',
+    }]);
+    expect((await store.listRecentSessionModelCalls('session_audit', 100)).map(call => call.id))
+      .toEqual(['model_call_1', 'model_call_2']);
 
     const firstSummary = await store.replaceContextSummary({
       id: 'summary_audit_1', sessionId: 'session_audit',
@@ -1186,6 +1191,12 @@ describe('PostgresAgentStore Job transactions', () => {
     expect(await store.listActiveContextSummaries(
       'session', 'session_audit', 'conversation', 'context-v1'
     )).toEqual([secondSummary]);
+    expect((await store.getContextSummariesByIds([
+      'summary_audit_2', 'summary_audit_1', 'missing_summary',
+    ])).map(summary => [summary.id, summary.status])).toEqual([
+      ['summary_audit_2', 'active'],
+      ['summary_audit_1', 'superseded'],
+    ]);
     expect((await pool!.query(
       `select status from agent_context_summaries where id = 'summary_audit_1'`
     )).rows[0]).toEqual({ status: 'superseded' });
