@@ -1,11 +1,10 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import type { AgentJob } from '../domain/index.js';
+import { resolveJobGoalMessage, type AgentJob } from '../domain/index.js';
 import { ReactExecution } from '../runtime/execution/react-execution.js';
 import { ContextCompressionService } from '../runtime/context/context-compression.service.js';
 import { ReActContextService } from '../runtime/context/react-context.service.js';
-import { resolveJobGoalMessage } from '../runtime/job-goal.js';
-import { RuntimeError } from '../runtime/runtime-errors.js';
-import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
+import { RuntimeError } from '../runtime/errors/runtime-error.js';
+import type { RuntimeEventPublisher } from '../runtime/events/runtime-event-writer.js';
 import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { buildStableEnvironmentContext } from '../runtime/prompting/job-agent-prompt.js';

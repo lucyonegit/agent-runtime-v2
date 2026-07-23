@@ -1,4 +1,4 @@
-import { AgentStoreError } from '../storage/agent-store.js';
+import { AgentStoreError } from '../../storage/agent-store.js';
 
 export type RuntimeErrorCode =
   | 'empty_model_output'

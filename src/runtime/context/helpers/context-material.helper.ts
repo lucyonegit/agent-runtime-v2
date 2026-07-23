@@ -7,7 +7,7 @@ import type {
   AgentPlanStep,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
-import { jobGoalMessageId } from '../../job-goal.js';
+import { jobGoalMessageId } from '../../../domain/index.js';
 import {
   buildDurableRuntimeStatePrompt,
   createJobPromptManifest,

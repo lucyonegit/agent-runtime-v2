@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentMessage, AgentToolInvocation, AgentUserInputRequest } from '../src/domain/index.js';
-import { redactToolArguments } from '../src/runtime/runtime-event-writer.js';
+import { redactToolArguments } from '../src/runtime/events/runtime-event-writer.js';
 import { projectSensitiveAnswers } from '../src/view/session-view.js';
 
 describe('public runtime projection', () => {

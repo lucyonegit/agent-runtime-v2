@@ -3,6 +3,7 @@ import { mapStoredMessagesToChatMessages } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import {
   ACTIVE_JOB_STATUSES,
+  resolveJobGoalMessage,
   type AgentJob,
   type AgentModelCall,
 } from '../domain/index.js';
@@ -13,9 +14,8 @@ import type {
   BuiltContext,
   ContextModelBudget,
 } from '../runtime/context/types/context.types.js';
-import { resolveJobGoalMessage } from '../runtime/job-goal.js';
-import { RuntimeError } from '../runtime/runtime-errors.js';
-import { canonicalJson } from '../runtime/transaction-commands.js';
+import { RuntimeError } from '../runtime/errors/runtime-error.js';
+import { stableStringify } from '../runtime/helpers/stable-json.helper.js';
 
 export type ContextQuery =
   | { kind: 'next_turn'; sessionId: string }
@@ -184,7 +184,7 @@ function assertNoActiveJob(jobs: AgentJob[]): void {
 }
 
 function reconstructRecordedModelCall(call: AgentModelCall): BuiltContext {
-  const serialized = canonicalJson(call.inputMessages);
+  const serialized = stableStringify(call.inputMessages);
   const checksum = createHash('sha256').update(serialized).digest('hex');
   if (checksum !== call.inputChecksum) {
     throw new ContextSnapshotUnreconstructableError(

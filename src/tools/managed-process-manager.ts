@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/prom
 import { isAbsolute, relative, resolve } from 'node:path';
 import { createConnection, createServer } from 'node:net';
 import type { AgentManagedProcess } from '../domain/index.js';
-import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
+import type { RuntimeEventPublisher } from '../runtime/events/runtime-event-writer.js';
 import {
   RuntimeToolExecutionError,
   type RuntimeToolContext,

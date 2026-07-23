@@ -1,7 +1,7 @@
 import type { MessageEvent } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 import type { AgentRealtimeEvent } from '../../domain/index.js';
-import type { RuntimeEventPublisher } from '../../runtime/runtime-event-writer.js';
+import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
 
 export class RuntimeEventBus implements RuntimeEventPublisher {
   readonly #subjects = new Map<string, Subject<MessageEvent>>();

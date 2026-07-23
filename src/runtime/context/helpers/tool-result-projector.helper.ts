@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { estimateTextTokens } from './token-budget.helper.js';
+import { stableStringify } from '../../helpers/stable-json.helper.js';
 
 interface ToolResultProjection {
   content: string;
@@ -24,7 +25,7 @@ export class ToolResultContextProjector {
   }
 
   project(value: unknown): ToolResultProjection {
-    const content = typeof value === 'string' ? value : canonicalJson(value);
+    const content = typeof value === 'string' ? value : stableStringify(value);
     const originalTokenEstimate = estimateTextTokens(content);
     const checksum = createHash('sha256').update(content).digest('hex');
     if (originalTokenEstimate <= this.#maxTokens) {
@@ -65,15 +66,4 @@ export class ToolResultContextProjector {
       checksum,
     };
   }
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
 }

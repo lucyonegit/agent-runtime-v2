@@ -13,8 +13,8 @@ export * from './orchestration/job-manager.js';
 
 // Extension ports
 export * from './runtime/settings/execution-limits.js';
-export * from './runtime/runtime-errors.js';
-export * from './runtime/runtime-event-writer.js';
+export * from './runtime/errors/runtime-error.js';
+export * from './runtime/events/runtime-event-writer.js';
 export * from './runtime/execution/tool-executor.js';
 export * from './storage/agent-store.js';
 export * from './tools/index.js';

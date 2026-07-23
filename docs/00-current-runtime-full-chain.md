@@ -141,13 +141,19 @@ src/
       tool-executor.ts            工具开始执行、重放、运行上下文
       helpers/
         durable-loop-execution.helper.ts 消费并持久化 LoopEvent
+        tool-call-identity.helper.ts 工具参数摘要与幂等键
       types/
         react-execution.types.ts  ReAct 执行共享类型
+    errors/
+      runtime-error.ts            Runtime 错误契约与存储错误映射
+    events/
+      runtime-event-writer.ts     事件到事务与 SSE 的桥梁
+    helpers/
+      stable-json.helper.ts       Checksum 使用的确定性 JSON 序列化
     model/
       audited-chat-model.ts       LangChain 调用审计
     settings/
       execution-limits.ts         Job 和 ReAct 共享执行限制
-    runtime-event-writer.ts       事件到事务与 SSE 的桥梁
     context/
       react-context.service.ts    唯一 Context 核心入口
       context-compiler.ts         Context 编译主链路
@@ -1707,15 +1713,15 @@ sequenceDiagram
 6. src/runtime/execution/react-execution.ts：Checkpoint 恢复。
 7. src/agent-loop/agent-loop.ts：ReAct 算法。
 8. src/runtime/execution/helpers/durable-loop-execution.helper.ts 与
-   runtime-event-writer.ts：事件落库。
+   src/runtime/events/runtime-event-writer.ts：事件落库。
 9. src/runtime/execution/tool-executor.ts：工具重放与副作用。
 10. src/tools/plan-tools.ts 与 hitl-tools.ts：Plan/HITL。
-10. src/runtime/context/react-context.service.ts：唯一 Context 入口。
-11. src/runtime/context/context-compiler.ts 与
+11. src/runtime/context/react-context.service.ts：唯一 Context 入口。
+12. src/runtime/context/context-compiler.ts 与
     context-compression.service.ts：Context 纯编译和压缩算法。
-12. src/storage/postgres/transaction-commands.ts：原子边界与 fence。
-13. src/view/session-view.ts 与 timeline-builder.ts：刷新读模型。
-14. 前端 sessionReducer.ts、timeline-presentation.ts、job-output-state.ts：SSE 收敛。
+13. src/storage/postgres/transaction-commands.ts：原子边界与 fence。
+14. src/view/session-view.ts 与 timeline-builder.ts：刷新读模型。
+15. 前端 sessionReducer.ts、timeline-presentation.ts、job-output-state.ts：SSE 收敛。
 
 ---
 

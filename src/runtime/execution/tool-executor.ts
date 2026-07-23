@@ -18,8 +18,8 @@ import {
 } from '../../agent-loop/agent-loop.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
-import { mapStoreError } from '../runtime-errors.js';
-import { checksumToolArguments } from '../transaction-commands.js';
+import { mapStoreError } from '../errors/runtime-error.js';
+import { checksumToolArguments } from './helpers/tool-call-identity.helper.js';
 
 export interface RuntimeToolContext {
   sessionId: string;

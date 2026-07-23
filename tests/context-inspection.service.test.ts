@@ -9,7 +9,7 @@ import type {
   AgentSession,
 } from '../src/domain/index.js';
 import { CONTEXT_RULES_VERSION } from '../src/runtime/context/context-compiler.js';
-import { canonicalJson } from '../src/runtime/transaction-commands.js';
+import { stableStringify } from '../src/runtime/helpers/stable-json.helper.js';
 import {
   ContextInspectionService,
   type ContextInspectionStore,
@@ -27,7 +27,7 @@ describe('ContextInspectionService', () => {
 
     const jobSnapshot = await service.inspect({ kind: 'job', jobId: 'job_1' });
     const inputMessages = mapChatMessagesToStoredMessages(jobSnapshot.built.messages);
-    const serialized = canonicalJson(inputMessages);
+    const serialized = stableStringify(inputMessages);
     modelCall = modelCallFixture({
       inputChecksum: createHash('sha256').update(serialized).digest('hex'),
       inputManifest: jobSnapshot.built.inputManifest,
@@ -71,7 +71,7 @@ describe('ContextInspectionService', () => {
     modelCall = modelCallFixture({
       inputManifest: snapshot.built.inputManifest,
       inputMessages,
-      inputChecksum: createHash('sha256').update(canonicalJson(inputMessages)).digest('hex'),
+      inputChecksum: createHash('sha256').update(stableStringify(inputMessages)).digest('hex'),
     });
     activeSummaries = [];
 

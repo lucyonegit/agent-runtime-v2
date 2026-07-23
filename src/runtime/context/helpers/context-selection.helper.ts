@@ -14,6 +14,7 @@ import type {
 } from '../types/context.types.js';
 import type { ContextSelection } from '../types/context-compiler.types.js';
 import type { MessageGroup } from '../types/message-group.types.js';
+import { stableStringify } from '../../helpers/stable-json.helper.js';
 
 type ContextItem =
   | { kind: 'message'; message: BaseMessage; category: 'system' | 'messages' }
@@ -127,7 +128,7 @@ function buildContextItems(material: ContextMaterial): Array<TokenBudgetItem<Con
       items.push({
         id: bundleMaterial.bundle.id,
         value: { kind: 'bundle', bundle: visibleBundle, formatted, category: 'messages' },
-        estimatedTokens: estimateTextTokens(canonicalJson(
+        estimatedTokens: estimateTextTokens(stableStringify(
           formatted.flatMap(item => item.messages.map(message => message.toDict()))
         )),
         mustKeep: bundleMaterial.mustKeep,
@@ -151,7 +152,7 @@ function buildContextItems(material: ContextMaterial): Array<TokenBudgetItem<Con
           annotations: formatted.annotations,
           category: 'messages',
         },
-        estimatedTokens: estimateTextTokens(canonicalJson(
+        estimatedTokens: estimateTextTokens(stableStringify(
           formatted.messages.map(message => message.toDict())
         )),
         mustKeep: groupMaterial.mustKeep,
@@ -263,7 +264,7 @@ function assembleSelectedItems(
   const toolSchemaChecksum = material.toolSchemas.length > 0
     ? sha256(serializeToolSchemas(material))
     : undefined;
-  const fixedPrefixChecksum = sha256(canonicalJson({
+  const fixedPrefixChecksum = sha256(stableStringify({
     ...material.fixedPrefix,
     toolSchemaChecksum,
   }));
@@ -301,7 +302,7 @@ function coveredGroupIdsFrom(material: ContextMaterial): Set<string> {
 }
 
 function serializeToolSchemas(material: ContextMaterial): string {
-  return canonicalJson(material.toolSchemas.map(tool => ({
+  return stableStringify(material.toolSchemas.map(tool => ({
     name: tool.name,
     description: tool.description,
     schema: tool.schema,
@@ -310,15 +311,4 @@ function serializeToolSchemas(material: ContextMaterial): string {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
 }

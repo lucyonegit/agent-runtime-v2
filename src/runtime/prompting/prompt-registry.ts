@@ -4,6 +4,7 @@ import type {
   AgentPromptManifest,
 } from '../../domain/index.js';
 import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
+import { stableStringify } from '../helpers/stable-json.helper.js';
 
 export interface PromptComponentInput {
   id: string;
@@ -27,22 +28,11 @@ export function createPromptManifest(input: {
   return {
     id: input.id,
     version: input.version,
-    checksum: sha256(canonicalJson(components)),
+    checksum: sha256(stableStringify(components)),
     components,
   };
 }
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
 }

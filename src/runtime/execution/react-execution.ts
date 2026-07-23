@@ -13,10 +13,13 @@ import type {
   ReactJobExecutionResult,
 } from './types/react-execution.types.js';
 import type { BuiltContext } from '../context/types/context.types.js';
-import { RuntimeEventWriter, type RuntimeEventPublisher } from '../runtime-event-writer.js';
+import {
+  RuntimeEventWriter,
+  type RuntimeEventPublisher,
+} from '../events/runtime-event-writer.js';
 import { ToolExecutor, type RuntimeTool } from './tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
-import { mapStoreError } from '../runtime-errors.js';
+import { mapStoreError } from '../errors/runtime-error.js';
 
 export interface ReactExecutionOptions {
   store: AgentStore;

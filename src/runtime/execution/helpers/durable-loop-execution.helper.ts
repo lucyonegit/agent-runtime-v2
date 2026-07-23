@@ -6,8 +6,8 @@ import {
   LOOP_EVENT_TYPES,
   type LoopEvent,
 } from '../../../agent-loop/loop-events.js';
-import { RuntimeError } from '../../runtime-errors.js';
-import { RuntimeEventWriter } from '../../runtime-event-writer.js';
+import { RuntimeError } from '../../errors/runtime-error.js';
+import { RuntimeEventWriter } from '../../events/runtime-event-writer.js';
 import type {
   JobExecutionStatePort,
   ReactJobExecutionResult,

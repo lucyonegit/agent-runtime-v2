@@ -15,7 +15,7 @@ import type {
   AgentRealtimeEvent,
 } from '../../domain/index.js';
 import type { AgentStore } from '../../storage/agent-store.js';
-import { canonicalJson } from '../transaction-commands.js';
+import { stableStringify } from '../helpers/stable-json.helper.js';
 import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
 
 export interface AuditedChatModelOptions {
@@ -123,7 +123,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
     this.#logicalCallNo += 1;
     const id = this.#ids.modelCallId();
     const inputMessages = storeModelInput(input);
-    const serialized = canonicalJson(inputMessages);
+    const serialized = stableStringify(inputMessages);
     const manifest = typeof this.#options.baseManifest === 'function'
       ? this.#options.baseManifest()
       : this.#options.baseManifest;

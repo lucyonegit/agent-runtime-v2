@@ -9,8 +9,8 @@ import {
   resolveExecutionLimits,
   type ExecutionLimits,
 } from '../runtime/settings/execution-limits.js';
-import { RuntimeError } from '../runtime/runtime-errors.js';
-import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
+import { RuntimeError } from '../runtime/errors/runtime-error.js';
+import type { RuntimeEventPublisher } from '../runtime/events/runtime-event-writer.js';
 import { projectSensitiveAnswers } from '../view/session-view.js';
 import type { JobExecutionSupervisorPort } from './job-execution-supervisor.js';
 import {

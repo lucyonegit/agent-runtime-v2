@@ -15,9 +15,11 @@ import { executeDurableAgentLoop } from '../src/runtime/execution/helpers/durabl
 import { ToolExecutor } from '../src/runtime/execution/tool-executor.js';
 import type { JobExecutionStatePort } from '../src/runtime/execution/types/react-execution.types.js';
 import { AgentLoop } from '../src/agent-loop/agent-loop.js';
-import { RuntimeEventWriter } from '../src/runtime/runtime-event-writer.js';
+import { RuntimeEventWriter } from '../src/runtime/events/runtime-event-writer.js';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
-import { checksumToolArguments } from '../src/runtime/transaction-commands.js';
+import {
+  checksumToolArguments,
+} from '../src/runtime/execution/helpers/tool-call-identity.helper.js';
 import { SessionView } from '../src/view/session-view.js';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';

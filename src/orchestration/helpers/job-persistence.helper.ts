@@ -1,4 +1,9 @@
-import type { AgentJob, AgentJobError } from '../../domain/index.js';
+import {
+  resolveJobGoalMessage,
+  withGoalMessageId,
+  type AgentJob,
+  type AgentJobError,
+} from '../../domain/index.js';
 import {
   AgentStoreError,
   type AgentStore,
@@ -6,8 +11,7 @@ import {
   type CreateRetryJobResult,
   type SaveUserInputAnswerResult,
 } from '../../storage/agent-store.js';
-import { resolveJobGoalMessage, withGoalMessageId } from '../../runtime/job-goal.js';
-import { RuntimeError, mapStoreError } from '../../runtime/runtime-errors.js';
+import { RuntimeError, mapStoreError } from '../../runtime/errors/runtime-error.js';
 
 export interface JobPersistenceContext {
   store: AgentStore;
