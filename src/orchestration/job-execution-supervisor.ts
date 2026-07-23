@@ -3,24 +3,30 @@ import type { AgentJob } from '../domain/index.js';
 import { ReactExecution } from '../runtime/execution/react-execution.js';
 import { ContextCompressionService } from '../runtime/context/context-compression.service.js';
 import { ReActContextService } from '../runtime/context/react-context.service.js';
-import { JobLifecycle } from './job-lifecycle.js';
 import { resolveJobGoalMessage } from '../runtime/job-goal.js';
 import { RuntimeError } from '../runtime/runtime-errors.js';
 import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
 import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { buildStableEnvironmentContext } from '../runtime/prompting/job-agent-prompt.js';
+import {
+  cancelJobRecord,
+  failJobRecord,
+  getJobRecord,
+  markJobRecoveryRequired,
+  renewJobExecutionOwnership,
+  type JobPersistenceContext,
+} from './helpers/job-persistence.helper.js';
 
-export interface JobExecutionController {
+export interface JobExecutionSupervisorPort {
   start(): Promise<void>;
-  executeJob(jobId: string): Promise<void>;
-  cancelJobExecution(jobId: string): void;
+  startExecution(jobId: string): Promise<void>;
+  abortExecution(jobId: string): void;
   shutdown(): Promise<void>;
 }
 
-export interface JobExecutionManagerOptions {
+export interface JobExecutionSupervisorOptions {
   store: AgentStore;
-  jobLifecycle: JobLifecycle;
   workerId: string;
   publisher: RuntimeEventPublisher;
   model: BaseChatModel;
@@ -46,27 +52,27 @@ export interface JobExecutionManagerOptions {
 }
 
 /**
- * Orchestration owns Job lifecycle, leases and composition. Runtime owns the
- * replaceable ReAct mechanics. Planning is intentionally absent here because
- * it is a durable tool used from inside that one loop.
+ * Supervises process-local Job execution: recovery scans, active promises,
+ * cancellation and execution ownership heartbeats. User-facing Job commands
+ * belong to JobManager; ReAct mechanics remain in Runtime.
  */
-export class JobExecutionManager implements JobExecutionController {
+export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
   readonly #activeExecutions = new Map<string, {
     controller: AbortController;
     completion: Promise<void>;
   }>();
-  readonly #options: Required<Omit<JobExecutionManagerOptions,
+  readonly #options: Required<Omit<JobExecutionSupervisorOptions,
     'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName' | 'sandboxRoot'>>
-    & JobExecutionManagerOptions;
+    & JobExecutionSupervisorOptions;
   readonly #reactExecution: ReactExecution;
   readonly #contextService: ReActContextService;
-  readonly #jobLifecycle: JobLifecycle;
+  readonly #persistence: JobPersistenceContext;
   #recoveryTimer?: ReturnType<typeof setInterval>;
   #activeRecoveryScan?: Promise<void>;
   #started = false;
   #stopping = false;
 
-  constructor(options: JobExecutionManagerOptions) {
+  constructor(options: JobExecutionSupervisorOptions) {
     const maxContextTokens = options.maxContextTokens ?? 128_000;
     const reservedOutputTokens = options.reservedOutputTokens ?? 4_096;
     const inputTokenLimit = options.inputTokenLimit
@@ -96,6 +102,12 @@ export class JobExecutionManager implements JobExecutionController {
       || this.#options.recoveryBatchSize <= 0) {
       throw new RangeError('recoveryBatchSize must be a positive integer.');
     }
+    this.#persistence = {
+      store: this.#options.store,
+      workerId: this.#options.workerId,
+      jobLeaseMs: this.#options.jobLeaseMs,
+      clock: this.#options.clock,
+    };
     const modelBudget = {
       provider: this.#options.provider,
       name: this.#options.modelName,
@@ -103,10 +115,15 @@ export class JobExecutionManager implements JobExecutionController {
       reservedOutputTokens: this.#options.reservedOutputTokens,
       inputTokenLimit: this.#options.inputTokenLimit,
     };
-    this.#jobLifecycle = this.#options.jobLifecycle;
     this.#reactExecution = new ReactExecution({
       store: this.#options.store,
-      jobState: this.#jobLifecycle,
+      jobState: {
+        getJob: jobId => getJobRecord(this.#options.store, jobId),
+        failJob: (job, error) => failJobRecord(this.#persistence, job, error),
+        cancelJob: (jobId, expectedVersion) => (
+          cancelJobRecord(this.#persistence, jobId, expectedVersion)
+        ),
+      },
       workerId: this.#options.workerId,
       publisher: this.#options.publisher,
       model: this.#options.model,
@@ -166,7 +183,7 @@ export class JobExecutionManager implements JobExecutionController {
     }
   }
 
-  async executeJob(jobId: string): Promise<void> {
+  async startExecution(jobId: string): Promise<void> {
     if (this.#stopping) return;
     const existingExecution = this.#activeExecutions.get(jobId);
     if (existingExecution) return existingExecution.completion;
@@ -183,7 +200,7 @@ export class JobExecutionManager implements JobExecutionController {
     return execution.completion;
   }
 
-  cancelJobExecution(jobId: string): void {
+  abortExecution(jobId: string): void {
     this.#activeExecutions.get(jobId)?.controller.abort();
   }
 
@@ -241,7 +258,7 @@ export class JobExecutionManager implements JobExecutionController {
     try {
       // Heartbeats only keep the current execution ownership alive. They are
       // operational bookkeeping, not a user-visible Job state transition.
-      await this.#jobLifecycle.renewJobExecutionLease(job);
+      await renewJobExecutionOwnership(this.#persistence, job);
     } catch {
       // The next fenced write observes the lost lease.
     }
@@ -283,7 +300,8 @@ export class JobExecutionManager implements JobExecutionController {
     for (const jobNeedingRecovery of jobsNeedingRecovery) {
       if (this.#stopping) break;
       try {
-        const recoveryRequiredJob = await this.#jobLifecycle.markJobRecoveryRequired(
+        const recoveryRequiredJob = await markJobRecoveryRequired(
+          this.#persistence,
           jobNeedingRecovery.id,
           jobNeedingRecovery.version
         );
@@ -306,7 +324,7 @@ export class JobExecutionManager implements JobExecutionController {
     if (!job || !job.currentAttemptId || job.leaseOwner !== this.#options.workerId
       || !['running', 'resuming'].includes(job.status)) return;
     try {
-      const failedJob = await this.#jobLifecycle.failJob(job, {
+      const failedJob = await failJobRecord(this.#persistence, job, {
         code: error instanceof RuntimeError ? error.code : 'runtime_error',
         message: error instanceof Error ? error.message : 'Runtime execution failed.',
       });
@@ -329,4 +347,5 @@ export class JobExecutionManager implements JobExecutionController {
       // SessionView is authoritative when realtime delivery fails.
     }
   }
+
 }

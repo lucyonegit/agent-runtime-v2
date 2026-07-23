@@ -8,7 +8,8 @@ export * from './agent-loop/loop-result.js';
 export * from './domain/index.js';
 export * from './orchestration/agent-runtime.js';
 export * from './orchestration/context-inspection.service.js';
-export * from './orchestration/job-execution-manager.js';
+export * from './orchestration/job-execution-supervisor.js';
+export * from './orchestration/job-manager.js';
 
 // Extension ports
 export * from './runtime/settings/execution-limits.js';

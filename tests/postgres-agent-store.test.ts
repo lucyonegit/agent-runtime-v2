@@ -8,10 +8,12 @@ import {
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import { JobLifecycle } from '../src/orchestration/job-lifecycle.js';
+import type { JobExecutionSupervisorPort } from '../src/orchestration/job-execution-supervisor.js';
+import { JobManager } from '../src/orchestration/job-manager.js';
 import { AuditedChatModel } from '../src/runtime/model/audited-chat-model.js';
 import { executeDurableAgentLoop } from '../src/runtime/execution/helpers/durable-loop-execution.helper.js';
 import { ToolExecutor } from '../src/runtime/execution/tool-executor.js';
+import type { JobExecutionStatePort } from '../src/runtime/execution/types/react-execution.types.js';
 import { AgentLoop } from '../src/agent-loop/agent-loop.js';
 import { RuntimeEventWriter } from '../src/runtime/runtime-event-writer.js';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
@@ -106,32 +108,37 @@ describe('PostgresAgentStore Job transactions', () => {
 
   it('replays an identical clientRequestId and rejects payload drift', async () => {
     await store.createSession({ id: 'session_idempotent', nowMs: 10 });
-    const lifecycle = new JobLifecycle({
+    const jobIds = ['job_idempotent', 'job_unused', 'job_changed'];
+    const messageIds = ['message_idempotent', 'message_unused', 'message_changed'];
+    const manager = new JobManager({
       store,
+      publisher: { publish: () => undefined },
+      execution: noOpExecutionSupervisor(),
       workerId: 'worker_idempotent',
       clock: { nowMs: () => 20 },
+      ids: {
+        jobId: () => jobIds.shift()!,
+        messageId: () => messageIds.shift()!,
+        attemptId: () => 'attempt_idempotent',
+      },
     });
-    const first = await lifecycle.createJob({
+    const first = await manager.createJob({
       sessionId: 'session_idempotent',
-      jobId: 'job_idempotent',
-      userMessageId: 'message_idempotent',
       clientRequestId: 'request_idempotent',
-      content: 'same payload',
+      message: 'same payload',
     });
-    const replay = await lifecycle.createJob({
+    const replay = await manager.createJob({
       sessionId: 'session_idempotent',
-      jobId: 'job_unused',
-      userMessageId: 'message_unused',
       clientRequestId: 'request_idempotent',
-      content: 'same payload',
+      message: 'same payload',
     });
     expect(replay).toEqual(first);
     expect(await store.listSessionMessages('session_idempotent')).toHaveLength(1);
 
-    await expect(lifecycle.createJob({
+    await expect(manager.createJob({
       sessionId: 'session_idempotent',
       clientRequestId: 'request_idempotent',
-      content: 'changed payload',
+      message: 'changed payload',
     })).rejects.toMatchObject({ code: 'idempotency_conflict' });
   });
 
@@ -566,17 +573,12 @@ describe('PostgresAgentStore Job transactions', () => {
       },
       clock: { nowMs: () => 36 },
     });
-    const jobLifecycle = new JobLifecycle({
-      store,
-      workerId: 'worker_direct',
-      clock: { nowMs: () => 36 },
-    });
     let outputNo = 1;
 
     const result = await executeDurableAgentLoop({
       loop,
       writer,
-      jobState: jobLifecycle,
+      jobState: jobExecutionState(store, 'worker_direct', 36),
       input: {
         job: startedJob,
         messages: [],
@@ -732,11 +734,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const execution = {
       loop,
       writer,
-      jobState: new JobLifecycle({
-        store,
-        workerId: 'worker_invalid_tool_args',
-        clock: { nowMs: () => 36 },
-      }),
+      jobState: jobExecutionState(store, 'worker_invalid_tool_args', 36),
     };
 
     const result = await executeDurableAgentLoop({
@@ -821,9 +819,7 @@ describe('PostgresAgentStore Job transactions', () => {
         store, workerId: 'worker_disposition', tools: [], requireModelCallAudit: true,
         clock: { nowMs: () => 36 },
       }),
-      jobState: new JobLifecycle({
-        store, workerId: 'worker_disposition', clock: { nowMs: () => 36 },
-      }),
+      jobState: jobExecutionState(store, 'worker_disposition', 36),
     };
     let outputNo = 0;
     const result = await executeDurableAgentLoop({
@@ -887,8 +883,10 @@ describe('PostgresAgentStore Job transactions', () => {
       },
       clock: { nowMs: () => writerNowMs },
     });
-    const jobLifecycle = new JobLifecycle({
+    const jobManager = new JobManager({
       store,
+      publisher: { publish: () => undefined },
+      execution: noOpExecutionSupervisor(),
       workerId: 'worker_hitl',
       clock: { nowMs: () => 40 },
       ids: {
@@ -912,7 +910,7 @@ describe('PostgresAgentStore Job transactions', () => {
         clock: { nowMs: () => 35 },
       }),
       writer,
-      jobState: jobLifecycle,
+      jobState: jobExecutionState(store, 'worker_hitl', 40),
     };
     const waiting = await executeDurableAgentLoop({
       ...waitingExecution,
@@ -932,7 +930,7 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     if (waiting.type !== 'waiting_user_input') throw new Error('expected waiting result');
 
-    const answered = await jobLifecycle.answerUserInputRequest({
+    const answered = await jobManager.answerUserInputRequest({
       requestId: waiting.requests[0].id,
       expectedVersion: waiting.requests[0].version,
       clientAnswerId: 'hitl_client_answer',
@@ -959,7 +957,7 @@ describe('PostgresAgentStore Job transactions', () => {
         clock: { nowMs: () => 41 },
       }),
       writer,
-      jobState: jobLifecycle,
+      jobState: jobExecutionState(store, 'worker_hitl', 42),
     };
     const resumed = await executeDurableAgentLoop({
       ...resumeExecution,
@@ -1667,6 +1665,41 @@ async function createJob(
     content: `hello ${jobId}`,
     nowMs,
   });
+}
+
+function noOpExecutionSupervisor(): JobExecutionSupervisorPort {
+  return {
+    start: async () => undefined,
+    startExecution: async () => undefined,
+    abortExecution: () => undefined,
+    shutdown: async () => undefined,
+  };
+}
+
+function jobExecutionState(
+  store: PostgresAgentStore,
+  workerId: string,
+  nowMs: number
+): JobExecutionStatePort {
+  return {
+    getJob: jobId => store.getJob(jobId),
+    failJob: (job, error) => {
+      if (!job.currentAttemptId) throw new Error(`Job ${job.id} has no active attempt.`);
+      return store.failJob({
+        jobId: job.id,
+        expectedVersion: job.version,
+        workerId,
+        attemptId: job.currentAttemptId,
+        error,
+        nowMs,
+      });
+    },
+    cancelJob: (jobId, expectedVersion) => store.cancelJob({
+      jobId,
+      expectedVersion,
+      nowMs,
+    }),
+  };
 }
 
 function pendingInvocation(

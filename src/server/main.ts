@@ -4,8 +4,8 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Pool } from 'pg';
 import { AgentRuntime } from '../orchestration/agent-runtime.js';
-import { JobExecutionManager } from '../orchestration/job-execution-manager.js';
-import { JobLifecycle } from '../orchestration/job-lifecycle.js';
+import { JobExecutionSupervisor } from '../orchestration/job-execution-supervisor.js';
+import { JobManager } from '../orchestration/job-manager.js';
 import { PostgresAgentStore } from '../storage/postgres/postgres-agent-store.js';
 import { assertAgentRuntimeSchemaVersion } from '../storage/postgres/migrations.js';
 import { AgentHttpModule } from './http/agent-http.module.js';
@@ -50,20 +50,14 @@ const jobHeartbeatMs = numberEnv('JOB_HEARTBEAT_MS', Math.max(1_000, Math.floor(
 const jobRecoveryScanMs = numberEnv('JOB_RECOVERY_SCAN_MS', 5_000);
 const model = createLangChainChatModel(modelConfig, modelTokenLimits.outputTokenLimit);
 if (jobHeartbeatMs >= jobLeaseMs) throw new Error('JOB_HEARTBEAT_MS must be shorter than JOB_LEASE_MS.');
-const jobLifecycle = new JobLifecycle({
-  store,
-  workerId,
-  limits: { jobLeaseMs, jobHeartbeatMs },
-});
 const tools = createDefaultTools({
   store,
   workerId,
   publisher: events,
   managedProcessManager: managedProcesses,
 });
-const jobExecution = new JobExecutionManager({
+const jobExecutionSupervisor = new JobExecutionSupervisor({
   store,
-  jobLifecycle,
   workerId,
   publisher: events,
   model,
@@ -82,6 +76,13 @@ const jobExecution = new JobExecutionManager({
   promptId: JOB_AGENT_PROMPT_ID,
   promptVersion: JOB_AGENT_PROMPT_VERSION,
 });
+const jobs = new JobManager({
+  store,
+  publisher: events,
+  execution: jobExecutionSupervisor,
+  workerId,
+  limits: { jobLeaseMs, jobHeartbeatMs },
+});
 const contextPreview = new ContextPreviewService({
   store,
   tools,
@@ -94,9 +95,7 @@ const contextPreview = new ContextPreviewService({
 });
 const runtime = new AgentRuntime({
   store,
-  jobLifecycle,
-  publisher: events,
-  jobExecution,
+  jobs,
   processReader: managedProcesses,
   beforeDeleteSession: sessionId => managedProcesses.stopSessionProcesses(sessionId),
   removeSessionWorkspace: sessionId => removeSessionSandbox({ sandboxRoot, sessionId }),

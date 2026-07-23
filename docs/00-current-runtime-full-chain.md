@@ -20,16 +20,16 @@
 flowchart LR
     UI["Web UI"] -->|"HTTP command"| HTTP["NestJS HTTP"]
     HTTP --> AR["AgentRuntime"]
-    AR --> JL["JobLifecycle"]
-    AR --> JEM["JobExecutionManager"]
-    JEM --> JL
-    JEM --> RER["ReactExecution"]
+    AR --> JM["JobManager"]
+    JM --> JES["JobExecutionSupervisor"]
+    JM --> STORE["PostgresAgentStore"]
+    JES --> STORE
+    JES --> RER["ReactExecution"]
     RER --> AL["AgentLoop"]
     AL --> LC["LangChain ChatModel"]
     AL --> TE["ToolExecutor"]
     TE --> TOOLS["Plan / HITL / FS / Shell / Web tools"]
 
-    JL --> STORE["PostgresAgentStore"]
     RER --> STORE
     TE --> STORE
     STORE --> PG[("PostgreSQL")]
@@ -40,7 +40,7 @@ flowchart LR
     AR --> VIEW["SessionView builder"]
     VIEW --> STORE
     HTTP --> SSE["RuntimeEventBus / SSE"]
-    AR --> SSE
+    JM --> SSE
     RER --> SSE
     SSE --> UI
     VIEW --> UI
@@ -53,9 +53,9 @@ flowchart LR
 3. **先落库，后广播**：稳定状态先在事务内提交，再通过 SSE 通知前端。
 4. **恢复稳定边界，不恢复 JS 调用栈**：Checkpoint 保存循环所处阶段、计数器和工具批次，而不是序列化进程内对象。
 
-Server 作为 composition root 只创建一个 `JobLifecycle`，并将这个共享实例
-同时注入 `AgentRuntime` 和 `JobExecutionManager`。Job 的时钟、ID 和所有权
-配置因此只有一个来源。
+Server 作为 composition root 创建 `JobExecutionSupervisor` 和 `JobManager`，
+并只把 `JobManager` 注入 `AgentRuntime`。Job 用户用例、进程内执行调度和
+数据库原子事务形成单向依赖，不再存在两个同级 Job 管理对象。
 
 ---
 
@@ -128,9 +128,11 @@ src/
     realtime-event.ts
 
   orchestration/
-    agent-runtime.ts              Session/Job 对外命令与 SSE
-    job-lifecycle.ts              Job 状态和事务命令
-    job-execution-manager.ts      恢复扫描、进程内执行、心跳和 Runtime 组合
+    agent-runtime.ts              HTTP 应用入口与 Session 用例
+    job-manager.ts                Job 用户命令、状态编排与 SSE
+    job-execution-supervisor.ts   恢复扫描、进程内执行、心跳和 Runtime 组合
+    helpers/
+      job-persistence.helper.ts   AgentStore 原子命令参数与错误映射
     context-inspection.service.ts 调试查询编排
 
   runtime/
@@ -204,7 +206,8 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant PS as Local process supervisor
     participant RT as AgentRuntime
-    participant JEM as JobExecutionManager
+    participant JM as JobManager
+    participant JES as JobExecutionSupervisor
     participant HTTP as NestJS/Fastify
 
     P->>ENV: 加载 .env
@@ -215,8 +218,9 @@ sequenceDiagram
     P->>PS: 扫描带 Runtime 身份标记的存活进程
     P->>P: 创建 Orchestrator/ContextPreview/AgentRuntime
     P->>RT: start()
-    RT->>JEM: start()
-    JEM->>JEM: 扫描中断 Job 并启动定时恢复检查
+    RT->>JM: start()
+    JM->>JES: start()
+    JES->>JES: 扫描中断 Job 并启动定时恢复检查
     P->>HTTP: 创建应用、注册 Filter/CORS
     P->>HTTP: listen(HOST, PORT)
 ~~~
@@ -283,8 +287,8 @@ JOB_HEARTBEAT_MS 必须短于 JOB_LEASE_MS，否则启动直接失败。
 
 SIGINT 或 SIGTERM 时：
 
-1. AgentRuntime.stop 委托 JobExecutionManager.shutdown；
-2. JobExecutionManager 关闭恢复扫描并 abort 所有本进程执行；
+1. AgentRuntime.stop 委托 JobManager.shutdown；
+2. JobManager 委托 JobExecutionSupervisor 关闭恢复扫描并 abort 所有本进程执行；
 3. ManagedProcessManager 关闭本地发现轮询，但不终止独立开发服务；
 4. 等待活动 Promise 收敛；
 5. 关闭 HTTP；
@@ -333,20 +337,18 @@ sequenceDiagram
     participant UI as Frontend
     participant HTTP as AgentController
     participant AR as AgentRuntime
-    participant JL as JobLifecycle
+    participant JM as JobManager
     participant DB as PostgreSQL
-    participant BG as JobExecutionManager
+    participant BG as JobExecutionSupervisor
 
     UI->>HTTP: POST /sessions/:id/jobs
     HTTP->>AR: createJob
-    AR->>JL: createJob
-    JL->>DB: 单事务创建 Job + HumanMessage
-    DB-->>JL: createdJob, userMessage
-    JL-->>AR: CreateJobResult
-    AR->>JL: startJobExecution
-    JL->>DB: attemptNo + 1, 设置租约, 写 ready_for_model checkpoint
-    DB-->>AR: running Job
-    AR->>BG: 后台 executeJob
+    AR->>JM: createJob
+    JM->>DB: 单事务创建 Job + HumanMessage
+    DB-->>JM: createdJob, userMessage
+    JM->>DB: attemptNo + 1, 设置租约, 写 ready_for_model checkpoint
+    DB-->>JM: running Job
+    JM->>BG: 后台 startExecution
     AR-->>UI: running Job + Message
 ~~~
 
@@ -411,7 +413,7 @@ stateDiagram-v2
 
 ---
 
-## 8. JobExecutionManager：进程内执行管理
+## 8. JobExecutionSupervisor：进程内执行调度
 
 该类不实现 ReAct 细节，负责：
 
@@ -813,7 +815,7 @@ sequenceDiagram
 
 ### 16.3 recovery_required
 
-`JobExecutionManager` 启动后立即扫描一次，之后定时扫描：
+`JobExecutionSupervisor` 启动后立即扫描一次，之后定时扫描：
 
 1. abandon 已失去有效 lease 的 started ModelCall；
 2. 找 created 且长时间未启动的 Job；
@@ -1559,9 +1561,9 @@ ToolInvocation failed 会有 errorCode、errorMessage、errorDetails 和正式 T
 | 测试 | 主要覆盖 |
 | --- | --- |
 | agent-loop.test.ts | 流式、工具批次、限制、取消、组装 |
-| agent-runtime.test.ts | 对外命令、Resume、启动/关闭委托 |
-| job-execution-manager.test.ts | 中断 Job 扫描与 recovery_required 迁移 |
-| job-lifecycle.test.ts | 创建、Retry、幂等与冲突 |
+| agent-runtime.test.ts | HTTP 应用入口到 JobManager 的命令委托 |
+| job-execution-supervisor.test.ts | 中断 Job 扫描与 recovery_required 迁移 |
+| job-manager.test.ts | 创建、取消、Retry、幂等与执行调度 |
 | runtime-event-writer.test.ts | LoopEvent 到事务/SSE |
 | unified-react-plan.test.ts | update_plan 与统一 ReAct |
 | context-builder.test.ts | Group、Bundle、预算、Context |
@@ -1698,15 +1700,16 @@ sequenceDiagram
 ## 31. 代码阅读顺序
 
 1. src/domain/job.ts：Job 状态。
-2. src/orchestration/agent-runtime.ts：创建、取消、Retry、Resume。
-3. src/orchestration/job-lifecycle.ts：生命周期事务入口。
-4. src/orchestration/job-execution-manager.ts：租约、心跳、后台执行。
-5. src/runtime/execution/react-execution.ts：Checkpoint 恢复。
-6. src/agent-loop/agent-loop.ts：ReAct 算法。
-7. src/runtime/execution/helpers/durable-loop-execution.helper.ts 与
+2. src/orchestration/agent-runtime.ts：HTTP 应用入口与 Session 用例。
+3. src/orchestration/job-manager.ts：Job 用户命令与状态编排。
+4. src/orchestration/job-execution-supervisor.ts：执行所有权、心跳与后台调度。
+5. src/orchestration/helpers/job-persistence.helper.ts：AgentStore 原子命令适配。
+6. src/runtime/execution/react-execution.ts：Checkpoint 恢复。
+7. src/agent-loop/agent-loop.ts：ReAct 算法。
+8. src/runtime/execution/helpers/durable-loop-execution.helper.ts 与
    runtime-event-writer.ts：事件落库。
-8. src/runtime/execution/tool-executor.ts：工具重放与副作用。
-9. src/tools/plan-tools.ts 与 hitl-tools.ts：Plan/HITL。
+9. src/runtime/execution/tool-executor.ts：工具重放与副作用。
+10. src/tools/plan-tools.ts 与 hitl-tools.ts：Plan/HITL。
 10. src/runtime/context/react-context.service.ts：唯一 Context 入口。
 11. src/runtime/context/context-compiler.ts 与
     context-compression.service.ts：Context 纯编译和压缩算法。

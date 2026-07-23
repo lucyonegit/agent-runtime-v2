@@ -31,9 +31,10 @@ flowchart TD
 
 `src/orchestration` 只负责跨组件生命周期：
 
-- `AgentRuntime` 是 HTTP 使用的应用入口，只处理 Session/Job 用户命令和 SSE 发布。
-- `JobLifecycle` 将创建、开始、续期、取消、失败、Retry、Resume 映射为原子存储命令。
-- `JobExecutionManager` 管理恢复扫描、活动执行、AbortController、所有权续期，并组合 Runtime。
+- `AgentRuntime` 是 HTTP 使用的应用入口，处理 Session，并将 Job 命令委托给 `JobManager`。
+- `JobManager` 组织创建、取消、Retry、Resume、HITL 和对应 SSE，不管理进程内执行。
+- `JobExecutionSupervisor` 管理恢复扫描、活动执行、AbortController、所有权续期，并组合 Runtime。
+- `AgentStore` 提供 Job 状态迁移所需的原子持久化命令；编排层不实现 SQL。
 - `ContextInspectionService` 是独立的只读调试查询，不参与正式 Job 执行。
 
 依赖方向固定为：
@@ -41,10 +42,11 @@ flowchart TD
 ```mermaid
 flowchart LR
     HTTP["HTTP / Server"] --> AR["AgentRuntime"]
-    AR --> JL["JobLifecycle"]
-    AR --> JEM["JobExecutionManager"]
-    JEM --> JL
-    JEM --> RE["ReactExecution"]
+    AR --> JM["JobManager"]
+    JM --> JES["JobExecutionSupervisor"]
+    JM --> STORE["AgentStore"]
+    JES --> STORE
+    JES --> RE["ReactExecution"]
     RE --> AL["AgentLoop"]
     CIS["ContextInspectionService"] --> CS["ReActContextService"]
 ```
@@ -52,9 +54,9 @@ flowchart LR
 `runtime` 不依赖 `orchestration`。`ReactExecution` 只通过
 `JobExecutionStatePort` 请求查询、失败和取消 Job，具体实现由编排层注入。
 
-Server 是 composition root：它只创建一个 `JobLifecycle` 实例，并将同一个
-实例同时注入 `AgentRuntime` 与 `JobExecutionManager`。前者用它执行用户命令，
-后者用它维护后台执行状态；两者不会各自维护一套 Job 生命周期配置。
+Server 是 composition root：它创建 `JobExecutionSupervisor`，再将其交给
+`JobManager`，最后只把 `JobManager` 注入 `AgentRuntime`。Job 状态事务由
+`AgentStore` 保证，调度状态不会混入持久化层。
 
 ### Runtime
 

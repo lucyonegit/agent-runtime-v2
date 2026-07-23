@@ -1,11 +1,10 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentJob } from '../src/domain/index.js';
-import { JobExecutionManager } from '../src/orchestration/job-execution-manager.js';
-import { JobLifecycle } from '../src/orchestration/job-lifecycle.js';
+import { JobExecutionSupervisor } from '../src/orchestration/job-execution-supervisor.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
-describe('JobExecutionManager recovery', () => {
+describe('JobExecutionSupervisor recovery', () => {
   it('marks interrupted Jobs for explicit recovery without restarting them', async () => {
     const candidate = jobFixture({ leaseExpiresAtMs: 999 });
     const recoveryRequiredJob = jobFixture({
@@ -22,15 +21,8 @@ describe('JobExecutionManager recovery', () => {
       startJobExecution: vi.fn(),
     } as unknown as AgentStore;
     const publisher = { publish: vi.fn(async () => undefined) };
-    const lifecycle = new JobLifecycle({
+    const supervisor = new JobExecutionSupervisor({
       store,
-      workerId: 'worker_test',
-      clock: { nowMs: () => 1_000 },
-      limits: { jobLeaseMs: 30_000, jobHeartbeatMs: 10_000 },
-    });
-    const manager = new JobExecutionManager({
-      store,
-      jobLifecycle: lifecycle,
       workerId: 'worker_test',
       publisher,
       model: {} as BaseChatModel,
@@ -46,8 +38,8 @@ describe('JobExecutionManager recovery', () => {
       clock: { nowMs: () => 1_000 },
     });
 
-    await manager.start();
-    await manager.shutdown();
+    await supervisor.start();
+    await supervisor.shutdown();
 
     expect(store.abandonStartedModelCalls).toHaveBeenCalledWith(1_000);
     expect(store.listJobsNeedingRuntimeRecovery).toHaveBeenCalledWith({
