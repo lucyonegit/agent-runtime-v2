@@ -1,3 +1,4 @@
+/** Terminal outcome returned by the storage-independent ReAct loop. */
 export type LoopFailureCode =
   | 'empty_model_output'
   | 'max_iterations'

@@ -3,9 +3,9 @@ import type { AgentJob, AgentMessage, AgentRealtimeEvent } from '../../domain/in
 import {
   LOOP_EVENT_TYPES,
   type LoopEvent,
-} from '../../agent-loop/loop-events.js';
+} from '../loop/loop-events.js';
 import type { RuntimeTool } from '../execution/tool-executor.js';
-import type { AgentLoopTarget } from '../../agent-loop/agent-loop.js';
+import type { AgentLoopTarget } from '../loop/agent-loop.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { mapStoreError } from '../errors/runtime-error.js';
 import {

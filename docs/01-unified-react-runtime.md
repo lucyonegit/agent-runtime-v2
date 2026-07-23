@@ -69,7 +69,7 @@ Server 是 composition root：它创建 `JobExecutionSupervisor`，再将其交�
 
 ### AgentLoop
 
-`src/agent-loop` 只负责 ReAct 协议：
+`src/runtime/loop` 只负责 ReAct 协议：
 
 - LangChain 流式响应与 tool call assembly。
 - 工具调用上限、迭代上限、deadline 和 abort。

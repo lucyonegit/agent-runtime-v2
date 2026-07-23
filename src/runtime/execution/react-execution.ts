@@ -4,7 +4,7 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import type { AIMessageChunk } from '@langchain/core/messages';
 import type { Runnable } from '@langchain/core/runnables';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import { AgentLoop } from '../../agent-loop/agent-loop.js';
+import { AgentLoop } from '../loop/agent-loop.js';
 import type { AgentContextInputManifest, AgentJob, AgentModelCallType } from '../../domain/index.js';
 import { AuditedChatModel } from '../model/audited-chat-model.js';
 import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';

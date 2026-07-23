@@ -14,7 +14,7 @@ import { AuditedChatModel } from '../src/runtime/model/audited-chat-model.js';
 import { executeDurableAgentLoop } from '../src/runtime/execution/helpers/durable-loop-execution.helper.js';
 import { ToolExecutor } from '../src/runtime/execution/tool-executor.js';
 import type { JobExecutionStatePort } from '../src/runtime/execution/types/react-execution.types.js';
-import { AgentLoop } from '../src/agent-loop/agent-loop.js';
+import { AgentLoop } from '../src/runtime/loop/agent-loop.js';
 import { RuntimeEventWriter } from '../src/runtime/events/runtime-event-writer.js';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
 import {

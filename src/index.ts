@@ -1,8 +1,8 @@
 // ReAct core
-export * from './agent-loop/agent-loop.js';
-export * from './agent-loop/langchain-model.js';
-export * from './agent-loop/loop-events.js';
-export * from './agent-loop/loop-result.js';
+export * from './runtime/loop/agent-loop.js';
+export * from './runtime/loop/langchain-model.js';
+export * from './runtime/loop/loop-events.js';
+export * from './runtime/loop/loop-result.js';
 
 // Durable product model and orchestration surface
 export * from './domain/index.js';

@@ -6,7 +6,7 @@ import type {
   UsageMetadata,
 } from '@langchain/core/messages';
 import type { Runnable } from '@langchain/core/runnables';
-import type { AgentToolCall } from '../domain/index.js';
+import type { AgentToolCall } from '../../domain/index.js';
 import type { LoopFailureCode } from './loop-result.js';
 
 export type LangChainChatRunnable = Runnable<BaseLanguageModelInput, AIMessageChunk>;

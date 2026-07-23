@@ -4,7 +4,7 @@ import type {
   AgentLoop,
   AgentLoopLimits,
   ToolExecutorPort,
-} from '../../../agent-loop/agent-loop.js';
+} from '../../loop/agent-loop.js';
 import type {
   AgentJob,
   AgentJobError,

@@ -1,11 +1,11 @@
 import {
   FatalToolExecutionError,
   type AgentLoop,
-} from '../../../agent-loop/agent-loop.js';
+} from '../../loop/agent-loop.js';
 import {
   LOOP_EVENT_TYPES,
   type LoopEvent,
-} from '../../../agent-loop/loop-events.js';
+} from '../../loop/loop-events.js';
 import { RuntimeError } from '../../errors/runtime-error.js';
 import { RuntimeEventWriter } from '../../events/runtime-event-writer.js';
 import type {

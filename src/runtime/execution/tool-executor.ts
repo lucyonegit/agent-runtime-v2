@@ -9,13 +9,13 @@ import type {
   AgentToolInvocation,
   AgentToolSideEffectLevel,
 } from '../../domain/index.js';
-import type { ToolUserInputRequest } from '../../agent-loop/loop-events.js';
+import type { ToolUserInputRequest } from '../loop/loop-events.js';
 import {
   FatalToolExecutionError,
   type ToolExecutionRequest,
   type ToolExecutionResult,
   type ToolExecutorPort,
-} from '../../agent-loop/agent-loop.js';
+} from '../loop/agent-loop.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
 import { mapStoreError } from '../errors/runtime-error.js';

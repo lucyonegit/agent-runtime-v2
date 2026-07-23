@@ -7,7 +7,7 @@ import {
   type UsageMetadata,
 } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import type { AgentArtifactDraft, AgentToolCall } from '../domain/index.js';
+import type { AgentArtifactDraft, AgentToolCall } from '../../domain/index.js';
 import {
   LOOP_EVENT_TYPES,
   type LoopEvent,

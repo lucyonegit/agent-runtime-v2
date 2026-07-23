@@ -108,12 +108,6 @@ attemptId 还会写入 Message、ModelCall、LoopCheckpoint、ToolInvocation 和
 
 ~~~text
 src/
-  agent-loop/
-    agent-loop.ts                 纯循环协议、模型流、工具批次、退出条件
-    langchain-model.ts            AgentLoop 所需模型接口
-    loop-events.ts                循环事件
-    loop-result.ts                循环终态
-
   domain/
     session.ts
     job.ts
@@ -136,6 +130,11 @@ src/
     context-inspection.service.ts 调试查询编排
 
   runtime/
+    loop/
+      agent-loop.ts               纯循环协议、模型流、工具批次、退出条件
+      langchain-model.ts          AgentLoop 所需模型接口
+      loop-events.ts              循环事件
+      loop-result.ts              循环终态
     execution/
       react-execution.ts          将持久化事实接入 AgentLoop
       tool-executor.ts            工具开始执行、重放、运行上下文
@@ -1711,7 +1710,7 @@ sequenceDiagram
 4. src/orchestration/job-execution-supervisor.ts：执行所有权、心跳与后台调度。
 5. src/orchestration/helpers/job-persistence.helper.ts：AgentStore 原子命令适配。
 6. src/runtime/execution/react-execution.ts：Checkpoint 恢复。
-7. src/agent-loop/agent-loop.ts：ReAct 算法。
+7. src/runtime/loop/agent-loop.ts：ReAct 算法。
 8. src/runtime/execution/helpers/durable-loop-execution.helper.ts 与
    src/runtime/events/runtime-event-writer.ts：事件落库。
 9. src/runtime/execution/tool-executor.ts：工具重放与副作用。

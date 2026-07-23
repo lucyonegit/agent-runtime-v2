@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { LOOP_EVENT_TYPES } from '../src/agent-loop/loop-events.js';
+import { LOOP_EVENT_TYPES } from '../src/runtime/loop/loop-events.js';
 import { RuntimeEventWriter } from '../src/runtime/events/runtime-event-writer.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 

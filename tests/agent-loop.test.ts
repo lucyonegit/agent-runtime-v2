@@ -7,9 +7,9 @@ import {
   AgentLoop,
   type AgentLoopInput,
   type ToolExecutorPort,
-} from '../src/agent-loop/agent-loop.js';
-import { LOOP_EVENT_TYPES, type LoopEvent } from '../src/agent-loop/loop-events.js';
-import type { LoopResult } from '../src/agent-loop/loop-result.js';
+} from '../src/runtime/loop/agent-loop.js';
+import { LOOP_EVENT_TYPES, type LoopEvent } from '../src/runtime/loop/loop-events.js';
+import type { LoopResult } from '../src/runtime/loop/loop-result.js';
 
 describe('AgentLoop with LangChain messages', () => {
   it('streams AIMessageChunks and returns an explicit completed result', async () => {

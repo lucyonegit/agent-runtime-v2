@@ -4,7 +4,7 @@ import type {
   AgentUserInputAnswerMode,
   AgentUserInputSchema,
   AgentUserInputSource,
-} from '../domain/index.js';
+} from '../../domain/index.js';
 import type { UsageMetadata } from '@langchain/core/messages';
 
 export const LOOP_EVENT_TYPES = {
