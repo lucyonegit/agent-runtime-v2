@@ -35,4 +35,3 @@ export function stringRecord(value: unknown, fieldName: string): Record<string, 
   }
   return Object.fromEntries(entries) as Record<string, string>;
 }
-

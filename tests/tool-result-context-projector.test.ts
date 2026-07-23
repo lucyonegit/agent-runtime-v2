@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ToolResultContextProjector } from '../src/runtime/context/tool-result-context-projector.js';
+import {
+  ToolResultContextProjector,
+} from '../src/runtime/context/helpers/tool-result-projector.helper.js';
 
 describe('ToolResultContextProjector', () => {
   it('leaves short tool results unchanged', () => {

@@ -4,7 +4,7 @@ import {
   type ContextQuery,
   type ContextInspectionStore,
 } from '../../orchestration/context-inspection.service.js';
-import type { RuntimeTool } from '../../runtime/tool-executor.js';
+import type { RuntimeTool } from '../../runtime/execution/tool-executor.js';
 import {
   buildStableEnvironmentContext,
   JOB_AGENT_PROMPT_ID,

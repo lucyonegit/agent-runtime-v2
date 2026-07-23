@@ -1,42 +1,13 @@
 import type {
   AgentMessage,
   AgentToolInvocation,
-} from '../../domain/index.js';
-
-interface RuntimeRefs {
-  sessionId: string;
-  jobId: string;
-  planId?: string;
-  planStepId?: string;
-}
-
-export type MessageGroup =
-  | { id: string; type: 'single'; messages: [AgentMessage] }
-  | {
-      id: string;
-      type: 'tool_exchange';
-      callMessage: AgentMessage;
-      invocations: AgentToolInvocation[];
-      resultMessages: AgentMessage[];
-      refs: RuntimeRefs;
-    }
-  ;
-
-export interface BlockedMessageGroup {
-  callMessage: AgentMessage;
-  reason:
-    | 'missing_tool_calls'
-    | 'missing_invocation'
-    | 'invocation_not_terminal'
-    | 'missing_result_message'
-    | 'result_protocol_mismatch';
-  toolCallId?: string;
-}
-
-export interface MessageGroupBuildResult {
-  groups: MessageGroup[];
-  blocked: BlockedMessageGroup[];
-}
+} from '../../../domain/index.js';
+import type {
+  BlockedMessageGroup,
+  MessageGroup,
+  MessageGroupBuildResult,
+  RuntimeRefs,
+} from '../types/message-group.types.js';
 
 export class MessageGroupBuilder {
   build(
@@ -134,6 +105,26 @@ export function messagesInGroup(group: MessageGroup): AgentMessage[] {
       return [group.callMessage, ...group.resultMessages];
     case 'single':
       return group.messages;
+  }
+}
+
+export function assertNoBlockedMessageGroups(
+  blocked: BlockedMessageGroup[],
+  predicate: (blocked: BlockedMessageGroup) => boolean
+): void {
+  const relevant = blocked.find(predicate);
+  if (!relevant) return;
+  throw new IncompleteMessageGroupError(
+    `Tool exchange ${JSON.stringify(relevant.callMessage.id)} is incomplete: ${relevant.reason}.`
+  );
+}
+
+export class IncompleteMessageGroupError extends Error {
+  readonly code = 'incomplete_message_group';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'IncompleteMessageGroupError';
   }
 }
 

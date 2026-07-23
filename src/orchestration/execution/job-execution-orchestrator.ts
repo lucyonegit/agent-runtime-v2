@@ -1,15 +1,15 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { AgentJob } from '../../domain/index.js';
 import type { JobExecutionService } from '../agent-runtime.js';
-import { ReactExecutionRuntime } from '../../runtime/react-execution-runtime.js';
-import { ExecutionContextLoader } from '../../runtime/loaders/execution-context-loader.js';
+import { ReactExecutionRuntime } from '../../runtime/execution/react-execution-runtime.js';
+import { ContextCompressionService } from '../../runtime/context/context-compression.service.js';
+import { ReActContextService } from '../../runtime/context/react-context.service.js';
 import { JobCoordinator } from '../lifecycle/job-coordinator.js';
 import { resolveJobGoalMessage } from '../../runtime/job-goal.js';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
 import type { RuntimeEventPublisher } from '../../runtime/runtime-event-writer.js';
-import type { RuntimeTool } from '../../runtime/tool-executor.js';
+import type { RuntimeTool } from '../../runtime/execution/tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
-import { ExecutionContextProvider } from './execution-context-provider.js';
 import { buildStableEnvironmentContext } from '../../runtime/prompting/job-agent-prompt.js';
 
 export interface JobExecutionOrchestratorOptions {
@@ -41,7 +41,7 @@ export interface JobExecutionOrchestratorOptions {
  * it is a durable tool used from inside that one loop.
  */
 export class JobExecutionOrchestrator implements JobExecutionService {
-  readonly #running = new Map<string, {
+  readonly #activeExecutions = new Map<string, {
     controller: AbortController;
     completion: Promise<void>;
   }>();
@@ -49,7 +49,7 @@ export class JobExecutionOrchestrator implements JobExecutionService {
     'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName' | 'sandboxRoot'>>
     & JobExecutionOrchestratorOptions;
   readonly #react: ReactExecutionRuntime;
-  readonly #contexts: ExecutionContextProvider;
+  readonly #contexts: ReActContextService;
 
   constructor(options: JobExecutionOrchestratorOptions) {
     const maxContextTokens = options.maxContextTokens ?? 128_000;
@@ -77,19 +77,6 @@ export class JobExecutionOrchestrator implements JobExecutionService {
       reservedOutputTokens: this.#options.reservedOutputTokens,
       inputTokenLimit: this.#options.inputTokenLimit,
     };
-    const executionContext = new ExecutionContextLoader({
-      store: this.#options.store,
-      systemPrompt: this.#options.jobSystemPrompt,
-      systemPromptVersion: this.#options.systemPromptVersion,
-      promptId: this.#options.promptId,
-      promptVersion: this.#options.promptVersion,
-      model: modelBudget,
-      toolSchemas: this.#options.tools.map(tool => tool.tool),
-      stableContext: sessionId => buildStableEnvironmentContext({
-        sandboxRoot: this.#options.sandboxRoot ?? '.agent-sandbox',
-        sessionId,
-      }),
-    });
     this.#react = new ReactExecutionRuntime({
       store: this.#options.store,
       workerId: this.#options.workerId,
@@ -105,10 +92,22 @@ export class JobExecutionOrchestrator implements JobExecutionService {
       maxToolCalls: this.#options.maxToolCalls,
       executionDeadlineMs: this.#options.executionDeadlineMs,
     });
-    this.#contexts = new ExecutionContextProvider({
+    this.#contexts = new ReActContextService({
       store: this.#options.store,
-      modelName: this.#options.modelName,
-      executionContext,
+      systemPrompt: this.#options.jobSystemPrompt,
+      systemPromptVersion: this.#options.systemPromptVersion,
+      promptId: this.#options.promptId,
+      promptVersion: this.#options.promptVersion,
+      model: modelBudget,
+      toolSchemas: this.#options.tools.map(tool => tool.tool),
+      stableContext: sessionId => buildStableEnvironmentContext({
+        sandboxRoot: this.#options.sandboxRoot ?? '.agent-sandbox',
+        sessionId,
+      }),
+      compression: new ContextCompressionService({
+        store: this.#options.store,
+        modelName: this.#options.modelName,
+      }),
       compressionModels: {
         create: ({ job, context, logicalCallKey }) => this.#react.createAuditedModel(
           job,
@@ -120,26 +119,28 @@ export class JobExecutionOrchestrator implements JobExecutionService {
     });
   }
 
-  async execute(jobId: string): Promise<void> {
-    const existingExecution = this.#running.get(jobId);
+  async executeJob(jobId: string): Promise<void> {
+    const existingExecution = this.#activeExecutions.get(jobId);
     if (existingExecution) return existingExecution.completion;
     const execution = {
       controller: new AbortController(),
       completion: Promise.resolve(),
     };
-    this.#running.set(jobId, execution);
+    this.#activeExecutions.set(jobId, execution);
     execution.completion = this.#runJobWithLease(jobId, execution.controller.signal).finally(() => {
-      if (this.#running.get(jobId) === execution) this.#running.delete(jobId);
+      if (this.#activeExecutions.get(jobId) === execution) {
+        this.#activeExecutions.delete(jobId);
+      }
     });
     return execution.completion;
   }
 
-  cancel(jobId: string): void {
-    this.#running.get(jobId)?.controller.abort();
+  cancelJobExecution(jobId: string): void {
+    this.#activeExecutions.get(jobId)?.controller.abort();
   }
 
   async shutdown(): Promise<void> {
-    const activeExecutions = [...this.#running.values()];
+    const activeExecutions = [...this.#activeExecutions.values()];
     for (const execution of activeExecutions) execution.controller.abort('runtime_shutdown');
     await Promise.allSettled(activeExecutions.map(execution => execution.completion));
   }
@@ -164,7 +165,7 @@ export class JobExecutionOrchestrator implements JobExecutionService {
     if (!originalGoal) throw new Error(`Job ${job.id} has no original user goal.`);
     await this.#react.runJob({
       job,
-      loadContext: () => this.#contexts.buildJobContext(job, originalGoal),
+      loadContext: () => this.#contexts.buildForJob(job, originalGoal),
       signal,
     });
   }
@@ -193,12 +194,9 @@ export class JobExecutionOrchestrator implements JobExecutionService {
           jobHeartbeatMs: this.#options.jobHeartbeatMs,
         },
       });
-      const renewedJob = await coordinator.renewJobExecutionLease(job);
-      await this.#publishWithoutFailingExecution({
-        type: 'job.upserted',
-        sessionId: renewedJob.sessionId,
-        job: renewedJob,
-      });
+      // Heartbeats only keep the current execution ownership alive. They are
+      // operational bookkeeping, not a user-visible Job state transition.
+      await coordinator.renewJobExecutionLease(job);
     } catch {
       // The next fenced write observes the lost lease.
     }

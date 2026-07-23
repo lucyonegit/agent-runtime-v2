@@ -1,5 +1,5 @@
 import type { RunnableConfig } from '@langchain/core/runnables';
-import type { RuntimeToolContext } from '../runtime/tool-executor.js';
+import type { RuntimeToolContext } from '../../runtime/execution/tool-executor.js';
 
 export function runtimeContext(config?: RunnableConfig): RuntimeToolContext {
   const context = config?.configurable?.agentRuntimeContext;

@@ -1,3 +1,4 @@
+/** Limits shared by Job ownership and the inner ReAct execution loop. */
 export interface ExecutionLimits {
   maxIterations: number;
   maxToolCalls: number;

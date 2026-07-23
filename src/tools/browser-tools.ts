@@ -1,8 +1,12 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import type { RuntimeTool } from '../runtime/tool-executor.js';
-import { jsonToolOutput, numberArgument, stringArgument } from './tool-utils.js';
+import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
+import {
+  jsonToolOutput,
+  numberArgument,
+  stringArgument,
+} from './helpers/tool-input.helper.js';
 
 const defaultHeaders = {
   'user-agent': 'Mozilla/5.0 AgentRuntimeV2/0.1',

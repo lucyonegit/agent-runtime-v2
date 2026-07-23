@@ -1,7 +1,12 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import type { RuntimeTool } from '../runtime/tool-executor.js';
-import { jsonToolOutput, numberArgument, runtimeContext, stringArgument } from './tool-utils.js';
-import { stringRecord } from './process-environment.js';
+import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
+import {
+  jsonToolOutput,
+  numberArgument,
+  runtimeContext,
+  stringArgument,
+} from './helpers/tool-input.helper.js';
+import { stringRecord } from './helpers/process-environment.helper.js';
 import type { ManagedProcessManager } from './managed-process-manager.js';
 
 export function createManagedProcessTools(manager: ManagedProcessManager): RuntimeTool[] {

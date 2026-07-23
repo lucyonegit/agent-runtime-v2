@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import type { AgentPromptManifest } from '../../domain/index.js';
-import { estimateTextTokens } from '../context/token-budget.js';
+import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
 import { createPromptManifest } from './prompt-registry.js';
 
 export const JOB_AGENT_PROMPT_ID = 'job-agent';

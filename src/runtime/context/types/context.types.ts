@@ -1,10 +1,12 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import type {
+  AgentContextInputManifest,
   AgentContextSummaryType,
   AgentPromptManifest,
-} from '../../domain/index.js';
-import type { MessageGroup } from './message-group-builder.js';
+} from '../../../domain/index.js';
+import type { AgentStore } from '../../../storage/agent-store.js';
+import type { MessageGroup } from './message-group.types.js';
 
 type ContextSegment =
   | 'session_history'
@@ -109,4 +111,67 @@ export interface ContextMaterial {
     protectedMessageIds?: string[];
     candidateMessageIds?: string[];
   };
+}
+
+export type ContextPressureLevel =
+  | 'normal'
+  | 'watch'
+  | 'compact'
+  | 'mandatory'
+  | 'critical';
+
+export interface CompiledContext {
+  messages: BaseMessage[];
+  inputManifest: AgentContextInputManifest;
+  estimatedInputTokens: number;
+  predictedInputTokens: number;
+  predictedCandidateTokens: number;
+  hardInputLimit: number;
+  pressureLevel: ContextPressureLevel;
+  contextRulesVersion: string;
+  summaryIds: string[];
+  mustKeepMessageIds: string[];
+  compressibleMessageIds: string[];
+  shouldCompress: boolean;
+  mustCompress: boolean;
+  annotations: CompiledContextAnnotation[];
+  blockedDiagnostics: NonNullable<ContextMaterial['blockedDiagnostics']>;
+}
+
+export type BuiltContext = CompiledContext;
+
+export interface TokenBudgetItem<T> {
+  id: string;
+  value: T;
+  estimatedTokens: number;
+  mustKeep: boolean;
+  priority: number;
+  recency: number;
+  originalOrder: number;
+}
+
+export type ReActContextStore = Pick<AgentStore,
+  | 'listSessionJobs'
+  | 'listSessionMessages'
+  | 'listSessionToolInvocations'
+  | 'listActiveContextSummaries'
+  | 'listRecentSessionModelCalls'
+> & Partial<Pick<AgentStore,
+  | 'listSessionPlans'
+  | 'listSessionPlanSteps'
+  | 'listSessionArtifacts'
+  | 'listSessionUserInputRequests'
+>>;
+
+export interface ReActContextMaterialOptions {
+  store: ReActContextStore;
+  systemPrompt: string;
+  systemPromptVersion: string;
+  model: ContextModelBudget;
+  toolSchemas: StructuredToolInterface[];
+  promptId?: string;
+  promptVersion?: number;
+  stableContext?: (sessionId: string) => string | undefined;
+  recentRawTokenBudget?: number;
+  minimumRecentGroups?: number;
 }

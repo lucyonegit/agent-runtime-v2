@@ -5,7 +5,8 @@
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
     "serve": "node dist/src/server/main.js",
     "dev:server": "npm run build && node dist/src/server/main.js",
     "typecheck": "tsc --noEmit",

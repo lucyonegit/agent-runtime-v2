@@ -66,9 +66,8 @@ ToolMessage(content={ planId, version, status, steps })
 
 ```mermaid
 flowchart LR
-    DB["Session Jobs + Messages + ToolInvocations + Summaries"] --> L["SessionContextLoader"]
-    L --> J["ExecutionContextLoader"]
-    J --> B["TurnBundle / MessageGroup"]
+    DB["Session Jobs + Messages + ToolInvocations + Summaries"] --> R["ReActContextService"]
+    R --> B["TurnBundle / MessageGroup"]
     B --> C["ContextCompiler"]
     C --> LC["LangChain Message List"]
     LC --> M["AuditedChatModel"]
@@ -100,11 +99,13 @@ PostgreSQL `jsonb` 会规范化对象键顺序，所以 checksum 不能直接依
 
 `GET /model-calls/:id/context` 会：
 
-1. 根据 manifest 检查引用的持久化材料仍存在。
-   Summary 使用 manifest 的 ID 直接读取，包含已经被新 Memory supersede 的历史版本，而不是只查询 active Summary。
-2. 检查规则版本和选择结果。
-3. 对持久化 `input_messages` 做 canonical checksum。
-4. 返回精确 LangChain Message List，标记 `verification.status = exact`。
+1. 读取当次调用已持久化的 `input_messages` 和 `input_manifest`。
+2. 对 `input_messages` 做 canonical checksum。
+3. checksum 一致后直接还原 LangChain Message List，标记
+   `verification.status = exact`。
+
+历史调用不再使用当前 Session 事实“重建过去”。Manifest 用于解释当时为何选择这些
+Group/Summary；真正的精确输入以当时已落库的 `input_messages` 为准。
 
 ## 5. SessionView
 

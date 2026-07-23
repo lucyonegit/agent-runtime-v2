@@ -1,7 +1,8 @@
-import type { AgentJob } from '../../domain/index.js';
-import { isTerminalJobStatus } from '../../domain/job.js';
-import type { TurnBundle } from './context-material.js';
-import { messagesInGroup, type MessageGroup } from './message-group-builder.js';
+import type { AgentJob } from '../../../domain/index.js';
+import { isTerminalJobStatus } from '../../../domain/job.js';
+import type { TurnBundle } from '../types/context.types.js';
+import type { MessageGroup } from '../types/message-group.types.js';
+import { messagesInGroup } from './message-group.helper.js';
 
 export class TurnBundleBuilder {
   build(input: {

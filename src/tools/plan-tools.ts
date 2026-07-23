@@ -1,19 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { AgentPlanStepResult } from '../domain/index.js';
-import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
-import type { RuntimeTool } from '../runtime/tool-executor.js';
-import type { AgentStore } from '../storage/agent-store.js';
+import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import { resolveJobGoalMessage } from '../runtime/job-goal.js';
-import { jsonToolOutput, runtimeContext, stringArgument } from './tool-utils.js';
+import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
+import {
+  jsonToolOutput,
+  runtimeContext,
+  stringArgument,
+} from './helpers/tool-input.helper.js';
+import type { CreatePlanToolsOptions } from './types/plan-tool.types.js';
 
-export interface CreatePlanToolsOptions {
-  store: AgentStore;
-  workerId: string;
-  publisher: RuntimeEventPublisher;
-  clock?: { nowMs(): number };
-  ids?: { planId(): string; planStepId(): string };
-}
+export type { CreatePlanToolsOptions } from './types/plan-tool.types.js';
 
 export function createPlanTools(options: CreatePlanToolsOptions): RuntimeTool[] {
   const clock = options.clock ?? { nowMs: () => Date.now() };

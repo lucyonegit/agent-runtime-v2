@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
 import { ManagedProcessManager } from '../src/tools/managed-process-manager.js';
-import type { RuntimeToolContext } from '../src/runtime/tool-executor.js';
+import type { RuntimeToolContext } from '../src/runtime/execution/tool-executor.js';
 
 describe('ManagedProcessManager', () => {
   const roots: string[] = [];

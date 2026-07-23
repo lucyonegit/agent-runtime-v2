@@ -1,6 +1,6 @@
 import { lstat, mkdir, realpath, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
-import type { RuntimeToolContext } from '../runtime/tool-executor.js';
+import type { RuntimeToolContext } from '../../runtime/execution/tool-executor.js';
 
 const SESSION_WORKSPACE_AREAS = [
   'code',
@@ -10,7 +10,7 @@ const SESSION_WORKSPACE_AREAS = [
   'tmp',
 ] as const;
 
-export type SessionWorkspaceArea = typeof SESSION_WORKSPACE_AREAS[number];
+type SessionWorkspaceArea = typeof SESSION_WORKSPACE_AREAS[number];
 
 function sessionWorkspaceRoot(
   context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>

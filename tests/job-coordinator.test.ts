@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentJob, AgentMessage, AgentSession } from '../src/domain/index.js';
 import { JobCoordinator } from '../src/orchestration/lifecycle/job-coordinator.js';
-import { resolveExecutionLimits } from '../src/runtime/execution-limits.js';
+import { resolveExecutionLimits } from '../src/runtime/execution/execution-limits.js';
 import {
   AgentStoreError,
   type AgentStore,

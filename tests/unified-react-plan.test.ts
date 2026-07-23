@@ -8,15 +8,20 @@ import type {
   AgentPlanStep,
   AgentToolInvocation,
 } from '../src/domain/index.js';
-import { ExecutionContextProvider } from '../src/orchestration/execution/execution-context-provider.js';
-import { compileContext, CONTEXT_RULES_VERSION } from '../src/runtime/context/context-compiler.js';
-import type { BuiltContext } from '../src/runtime/context/context-compiler.js';
-import type { ContextMaterial, TurnBundle } from '../src/runtime/context/context-material.js';
+import { CONTEXT_RULES_VERSION } from '../src/runtime/context/context-compiler.js';
 import {
-  ExecutionContextLoader,
+  buildContextWithCompression,
+} from '../src/runtime/context/helpers/context-build.helper.js';
+import {
   calibrateModelBudget,
-} from '../src/runtime/loaders/execution-context-loader.js';
-import type { RuntimeToolContext } from '../src/runtime/tool-executor.js';
+} from '../src/runtime/context/helpers/model-budget.helper.js';
+import { ReActContextService } from '../src/runtime/context/react-context.service.js';
+import type {
+  BuiltContext,
+  ContextMaterial,
+  TurnBundle,
+} from '../src/runtime/context/types/context.types.js';
+import type { RuntimeToolContext } from '../src/runtime/execution/tool-executor.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 import { createPlanTools } from '../src/tools/plan-tools.js';
 
@@ -104,14 +109,14 @@ describe('unified ReAct planning', () => {
       listActiveContextSummaries: async () => [],
       listRecentSessionModelCalls: async () => [],
     };
-    const loader = new ExecutionContextLoader({
+    const contexts = new ReActContextService({
       store,
       systemPrompt: 'system',
       systemPromptVersion: 'system-v1',
       model: { provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500 },
       toolSchemas: [],
     });
-    const built = compileContext(await loader.load(job(), 'Create a report'));
+    const built = await contexts.previewJob(job(), 'Create a report');
 
     expect(built.messages.map(message => message.content)).toEqual([
       'system',
@@ -128,7 +133,7 @@ describe('unified ReAct planning', () => {
     const currentStep = planStep({
       id: 'step_1', key: 'research', position: 0, title: 'Research', status: 'in_progress',
     });
-    const loader = new ExecutionContextLoader({
+    const contexts = new ReActContextService({
       store: {
         listSessionJobs: async () => [job()],
         listSessionMessages: async () => [goalMessage()],
@@ -146,7 +151,7 @@ describe('unified ReAct planning', () => {
       toolSchemas: [],
     });
 
-    const built = compileContext(await loader.load(job(), 'Create a report'));
+    const built = await contexts.previewJob(job(), 'Create a report');
     const runtimeState = String(built.messages.at(-1)?.content);
 
     expect(runtimeState).toContain('Durable runtime state (authoritative, schemaVersion=1)');
@@ -171,20 +176,13 @@ describe('unified ReAct planning', () => {
     });
   });
 
-  it('uses one execution context provider and reloads after unified compression', async () => {
+  it('reloads the single ReAct context after unified compression', async () => {
     const load = vi.fn()
       .mockResolvedValueOnce(material(true))
       .mockResolvedValueOnce(material(false));
     const compress = vi.fn(async () => true);
-    const provider = new ExecutionContextProvider({
-      store: {} as AgentStore,
-      modelName: 'model',
-      executionContext: { load },
-      compressionModels: { create: () => ({ invoke: async () => ({ text: 'summary' }) }) },
-      contextCompression: { compress },
-    });
 
-    const built = await provider.buildJobContext(job(), 'Create a report');
+    const built = await buildContextWithCompression(load, compress);
     expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
     expect(load).toHaveBeenCalledTimes(2);
     expect(compress).toHaveBeenCalledTimes(1);
@@ -195,15 +193,8 @@ describe('unified ReAct planning', () => {
     const compress = vi.fn(async () => {
       throw new Error('Session context compression returned invalid JSON.');
     });
-    const provider = new ExecutionContextProvider({
-      store: {} as AgentStore,
-      modelName: 'model',
-      executionContext: { load },
-      compressionModels: { create: () => ({ invoke: async () => ({ text: 'not-json' }) }) },
-      contextCompression: { compress },
-    });
 
-    const built = await provider.buildJobContext(job(), 'Create a report');
+    const built = await buildContextWithCompression(load, compress);
 
     expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
     expect(load).toHaveBeenCalledTimes(1);
@@ -215,15 +206,8 @@ describe('unified ReAct planning', () => {
     required.model.tokenErrorReserve = 700;
     const load = vi.fn().mockResolvedValue(required);
     const compress = vi.fn(async () => false);
-    const provider = new ExecutionContextProvider({
-      store: {} as AgentStore,
-      modelName: 'model',
-      executionContext: { load },
-      compressionModels: { create: () => ({ invoke: async () => ({ text: 'summary' }) }) },
-      contextCompression: { compress },
-    });
 
-    await expect(provider.buildJobContext(job(), 'Create a report'))
+    await expect(buildContextWithCompression(load, compress))
       .rejects.toMatchObject({ code: 'context_overflow' });
     expect(load).toHaveBeenCalledTimes(1);
     expect(compress).toHaveBeenCalledTimes(1);
@@ -238,19 +222,12 @@ describe('unified ReAct planning', () => {
     const load = vi.fn()
       .mockResolvedValueOnce(oversized)
       .mockResolvedValueOnce(material(false));
-    const compress = vi.fn(async (input: { built?: BuiltContext }) => {
-      expect(input.built).toBeUndefined();
+    const compress = vi.fn(async (_material: ContextMaterial, built?: BuiltContext) => {
+      expect(built).toBeUndefined();
       return true;
     });
-    const provider = new ExecutionContextProvider({
-      store: {} as AgentStore,
-      modelName: 'model',
-      executionContext: { load },
-      compressionModels: { create: () => ({ invoke: async () => ({ text: 'summary' }) }) },
-      contextCompression: { compress: compress as never },
-    });
 
-    const built = await provider.buildJobContext(job(), 'Create a report');
+    const built = await buildContextWithCompression(load, compress);
 
     expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
     expect(load).toHaveBeenCalledTimes(2);

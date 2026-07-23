@@ -3,7 +3,7 @@ import type {
   AgentPromptComponentManifest,
   AgentPromptManifest,
 } from '../../domain/index.js';
-import { estimateTextTokens } from '../context/token-budget.js';
+import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
 
 export interface PromptComponentInput {
   id: string;

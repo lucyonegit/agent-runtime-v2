@@ -9,10 +9,10 @@ import type { BaseLanguageModelInput } from '@langchain/core/language_models/bas
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { JobCoordinator } from '../src/orchestration/lifecycle/job-coordinator.js';
-import { AuditedChatModel } from '../src/runtime/audited-chat-model.js';
-import { ToolExecutor } from '../src/runtime/tool-executor.js';
+import { AuditedChatModel } from '../src/runtime/execution/audited-chat-model.js';
+import { ToolExecutor } from '../src/runtime/execution/tool-executor.js';
 import { AgentLoop } from '../src/agent-loop/agent-loop.js';
-import { AgentRunner } from '../src/runtime/agent-runner.js';
+import { AgentRunner } from '../src/runtime/execution/agent-runner.js';
 import { RuntimeEventWriter } from '../src/runtime/runtime-event-writer.js';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
 import { checksumToolArguments } from '../src/runtime/transaction-commands.js';
@@ -27,7 +27,7 @@ import type {
   RuntimeTool,
   RuntimeToolContext,
   RuntimeUserInputArtifact,
-} from '../src/runtime/tool-executor.js';
+} from '../src/runtime/execution/tool-executor.js';
 
 const databaseUrl = process.env.DATABASE_URL
   ?? 'postgresql://postgres:postgres@127.0.0.1:55433/agent_runtime_test';
@@ -183,13 +183,18 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 40,
       leaseUntilMs: 120,
     });
-    expect(renewed).toMatchObject({ version: 2, leaseExpiresAtMs: 120, attemptNo: 1 });
+    expect(renewed).toMatchObject({
+      version: 1,
+      leaseExpiresAtMs: 120,
+      attemptNo: 1,
+      updatedAtMs: startedJob.updatedAtMs,
+    });
 
     const paused = await store.markJobRecoveryRequired({
       jobId: renewed.id, expectedVersion: renewed.version, nowMs: 121,
     });
     expect(paused).toMatchObject({
-      status: 'recovery_required', version: 3,
+      status: 'recovery_required', version: 2,
     });
     expect(paused).not.toHaveProperty('currentAttemptId');
     expect(paused).not.toHaveProperty('leaseOwner');
@@ -204,7 +209,7 @@ describe('PostgresAgentStore Job transactions', () => {
       leaseUntilMs: 200,
     });
     expect(recovered).toMatchObject({
-      version: 4,
+      version: 3,
       attemptNo: 2,
       leaseOwner: 'worker_recovery',
       currentAttemptId: 'attempt_recovery',

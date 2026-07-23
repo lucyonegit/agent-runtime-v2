@@ -50,21 +50,6 @@ export interface AgentJob {
   completedAtMs?: number;
 }
 
-const JOB_TRANSITIONS: Record<AgentJobStatus, readonly AgentJobStatus[]> = {
-  created: ['running', 'cancelled'],
-  running: ['waiting_user_input', 'recovery_required', 'completed', 'failed', 'cancelled'],
-  waiting_user_input: ['resuming', 'cancelled'],
-  resuming: ['running', 'recovery_required', 'failed', 'cancelled'],
-  recovery_required: ['running', 'cancelled'],
-  completed: [],
-  failed: [],
-  cancelled: [],
-};
-
 export function isTerminalJobStatus(status: AgentJobStatus): boolean {
   return TERMINAL_JOB_STATUSES.includes(status as typeof TERMINAL_JOB_STATUSES[number]);
-}
-
-export function canTransitionJob(from: AgentJobStatus, to: AgentJobStatus): boolean {
-  return JOB_TRANSITIONS[from].includes(to);
 }

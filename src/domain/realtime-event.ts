@@ -6,18 +6,6 @@ import type { AgentPlan, AgentPlanStep } from './plan.js';
 import type { AgentToolInvocation } from './tool-invocation.js';
 import type { AgentUserInputRequest } from './user-input-request.js';
 
-export const AGENT_REALTIME_ENTITY_EVENT_TYPES = [
-  'message.upserted',
-  'job.upserted',
-  'plan.upserted',
-  'plan_step.upserted',
-  'tool_invocation.upserted',
-  'user_input.upserted',
-  'model_usage.updated',
-  'artifact.upserted',
-  'managed_process.upserted',
-] as const;
-
 export type AgentRealtimeEvent =
   | {
       type: 'message.delta';

@@ -260,9 +260,7 @@ export async function renewJobExecutionLeaseCommand(
   assertFutureLease(input.nowMs, input.leaseUntilMs);
   const result = await client.query<AgentJobRow>(
     `update agent_jobs
-     set lease_expires_at_ms = $6,
-         version = version + 1,
-         updated_at_ms = $5
+     set lease_expires_at_ms = $6
      where id = $1
        and version = $2
        and status in ('running', 'resuming')

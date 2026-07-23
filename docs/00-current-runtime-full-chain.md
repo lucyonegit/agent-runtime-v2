@@ -896,26 +896,29 @@ Resume 后：
 
 ~~~mermaid
 flowchart LR
-    DB[("Messages / Jobs / Summaries")] --> SCL["SessionContextLoader"]
-    SCL --> MGB["MessageGroupBuilder"]
+    DB[("Messages / Jobs / Summaries")] --> RCS["ReActContextService"]
+    RCS --> MGB["MessageGroupBuilder"]
     MGB --> TB["TurnBundleBuilder"]
-    TB --> JCL["ExecutionContextLoader"]
-    JCL --> MAT["ContextMaterial"]
+    TB --> MAT["唯一 ContextMaterial"]
     MAT --> CC["ContextCompiler"]
     CC --> BUD["TokenBudget"]
     BUD --> LC["LangChain BaseMessage[]"]
 
-    CC -->|"建议压缩"| CP["ExecutionContextProvider"]
-    CP --> CM["Audited context.compress call"]
+    CC -->|"建议压缩"| RCS
+    RCS --> CM["Audited context.compress call"]
     CM --> SCS["ContextCompressionService"]
     SCS --> DB
-    CP -->|"重新加载"| SCL
+    RCS -->|"重新加载事实"| DB
 ~~~
 
-### 18.2 SessionContextLoader
+### 18.2 ReActContextService
 
-读取 Session、Session 下所有 Jobs、所有 Messages、ToolInvocations，以及 conversation purpose 的 active ContextSummary。
+这是正式执行链唯一公开的 Context 入口。每次 ReAct 模型调用前，
+`buildForJob(job, originalGoal)` 会读取 Session 下所有 Jobs、Messages、
+ToolInvocations 和 active ContextSummary，并在需要时完成
+compile → compress → reload。
 
+Session 事实读取是该服务的内部步骤，不再暴露成另一种 “Session Context”。
 它不会把每一行简单按时间拼起来，而是先构造合法消息组。
 
 ### 18.3 MessageGroupBuilder
@@ -950,7 +953,7 @@ root Job
 
 每个 Bundle 包含 bundleId、rootJobId、jobIds、groups、rowIdStart/rowIdEnd、terminal、estimatedTokens、priority 和 mustKeep。
 
-### 18.5 ExecutionContextLoader 选择规则
+### 18.5 ReActContextService 选择规则
 
 正式 Job Context 由以下部分构成：
 
@@ -1682,15 +1685,17 @@ sequenceDiagram
 2. src/orchestration/agent-runtime.ts：创建、取消、Retry、Resume。
 3. src/orchestration/lifecycle/job-coordinator.ts：生命周期事务入口。
 4. src/orchestration/execution/job-execution-orchestrator.ts：租约、心跳、后台执行。
-5. src/runtime/react-execution-runtime.ts：Checkpoint 恢复。
+5. src/runtime/execution/react-execution-runtime.ts：Checkpoint 恢复。
 6. src/agent-loop/agent-loop.ts：ReAct 算法。
-7. src/runtime/agent-runner.ts 与 runtime-event-writer.ts：事件落库。
-8. src/runtime/tool-executor.ts：工具重放与副作用。
+7. src/runtime/execution/agent-runner.ts 与 runtime-event-writer.ts：事件落库。
+8. src/runtime/execution/tool-executor.ts：工具重放与副作用。
 9. src/tools/plan-tools.ts 与 hitl-tools.ts：Plan/HITL。
-10. src/runtime/loaders 与 runtime/context：Context。
-11. src/storage/postgres/transaction-commands.ts：原子边界与 fence。
-12. src/view/session-view.ts 与 timeline-builder.ts：刷新读模型。
-13. 前端 sessionReducer.ts、timeline-presentation.ts、job-output-state.ts：SSE 收敛。
+10. src/runtime/context/react-context.service.ts：唯一 Context 入口。
+11. src/runtime/context/context-compiler.ts 与
+    context-compression.service.ts：Context 纯编译和压缩算法。
+12. src/storage/postgres/transaction-commands.ts：原子边界与 fence。
+13. src/view/session-view.ts 与 timeline-builder.ts：刷新读模型。
+14. 前端 sessionReducer.ts、timeline-presentation.ts、job-output-state.ts：SSE 收敛。
 
 ---
 

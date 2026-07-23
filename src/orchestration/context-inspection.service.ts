@@ -1,21 +1,21 @@
-import { SystemMessage } from '@langchain/core/messages';
+import { createHash } from 'node:crypto';
+import { mapStoredMessagesToChatMessages } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import type { AgentJob } from '../domain/index.js';
+import {
+  ACTIVE_JOB_STATUSES,
+  type AgentJob,
+  type AgentModelCall,
+} from '../domain/index.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { AgentStoreError } from '../storage/agent-store.js';
-import { compileContext, CONTEXT_RULES_VERSION } from '../runtime/context/context-compiler.js';
-import type { BuiltContext } from '../runtime/context/context-compiler.js';
-import type { ContextMaterial, ContextModelBudget } from '../runtime/context/context-material.js';
-import {
-  ExecutionContextLoader,
-  buildDurableRuntimeStateMessages,
-  calibrateModelBudget,
-} from '../runtime/loaders/execution-context-loader.js';
-import { ModelCallContextLoader } from '../runtime/loaders/model-call-context-loader.js';
-import { SessionContextLoader } from '../runtime/loaders/session-context-loader.js';
+import { ReActContextService } from '../runtime/context/react-context.service.js';
+import type {
+  BuiltContext,
+  ContextModelBudget,
+} from '../runtime/context/types/context.types.js';
 import { resolveJobGoalMessage } from '../runtime/job-goal.js';
 import { RuntimeError } from '../runtime/runtime-errors.js';
-import { createJobPromptManifest } from '../runtime/prompting/job-agent-prompt.js';
+import { canonicalJson } from '../runtime/transaction-commands.js';
 
 export type ContextQuery =
   | { kind: 'next_turn'; sessionId: string }
@@ -34,9 +34,7 @@ export interface ContextSnapshot {
   verification: { status: 'reconstructed' | 'exact'; checksumMatched?: boolean };
 }
 
-const ACTIVE_JOB_STATUSES = new Set<AgentJob['status']>([
-  'created', 'running', 'waiting_user_input', 'resuming', 'recovery_required',
-]);
+const ACTIVE_JOB_STATUS_SET = new Set<AgentJob['status']>(ACTIVE_JOB_STATUSES);
 
 export type ContextInspectionStore = Pick<AgentStore,
   | 'getSession'
@@ -51,7 +49,6 @@ export type ContextInspectionStore = Pick<AgentStore,
   | 'listSessionUserInputRequests'
   | 'listActiveContextSummaries'
   | 'listRecentSessionModelCalls'
-  | 'getContextSummariesByIds'
 >;
 
 export interface ContextInspectionServiceOptions {
@@ -68,14 +65,11 @@ export interface ContextInspectionServiceOptions {
 
 /** Read-only reconstruction for next-turn, Job and exact ModelCall snapshots. */
 export class ContextInspectionService {
-  readonly #session: SessionContextLoader;
-  readonly #jobs: ExecutionContextLoader;
-  readonly #modelCalls: ModelCallContextLoader;
+  readonly #contexts: ReActContextService;
   readonly #clock: { nowMs(): number };
 
   constructor(private readonly options: ContextInspectionServiceOptions) {
-    this.#session = new SessionContextLoader(options.store);
-    this.#jobs = new ExecutionContextLoader({
+    this.#contexts = new ReActContextService({
       store: options.store,
       systemPrompt: options.systemPrompt,
       systemPromptVersion: options.systemPromptVersion,
@@ -85,7 +79,6 @@ export class ContextInspectionService {
       toolSchemas: options.tools,
       stableContext: options.stableContext,
     });
-    this.#modelCalls = new ModelCallContextLoader(options.store);
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
   }
 
@@ -103,72 +96,11 @@ export class ContextInspectionService {
         `Agent session ${JSON.stringify(query.sessionId)} was not found.`
       );
     }
-    const [jobs, facts, modelCalls] = await Promise.all([
-      this.options.store.listSessionJobs(query.sessionId),
-      this.#session.load(query.sessionId),
-      this.options.store.listRecentSessionModelCalls(query.sessionId, 100),
-    ]);
+    const jobs = await this.options.store.listSessionJobs(query.sessionId);
     assertNoActiveJob(jobs);
-    const stableContext = this.options.stableContext?.(session.id);
-    const fixedMessages: ContextMaterial['fixedMessages'] = [{
-        id: 'must_keep:system',
-        message: new SystemMessage(this.options.systemPrompt),
-        text: this.options.systemPrompt,
-      }];
-    if (stableContext) {
-      fixedMessages.push({
-        id: 'must_keep:stable',
-        message: new SystemMessage(stableContext),
-        text: stableContext,
-      });
-    }
-    const trailingMessages = buildDurableRuntimeStateMessages(facts);
-    const material: ContextMaterial = {
-      fixedMessages,
-      fixedPrefix: { systemPrompt: this.options.systemPrompt, stableContext },
-      trailingMessages,
-      groups: facts.groups.map(group => ({
-        group,
-        segment: 'session_history',
-        mustKeep: false,
-        priority: 40,
-      })),
-      bundles: facts.bundles.map(bundle => ({
-        bundle,
-        segment: 'session_history',
-        mustKeep: false,
-        priority: 40,
-      })),
-      summaries: facts.summaries.map(toSummaryMaterial),
-      toolSchemas: this.options.tools,
-      model: calibrateModelBudget(this.options.model, modelCalls),
-      audit: {
-        purpose: 'job_execution',
-        contextRulesVersion: CONTEXT_RULES_VERSION,
-        systemPromptVersion: this.options.systemPromptVersion,
-        ...(this.options.promptId && this.options.promptVersion !== undefined ? {
-          prompt: createJobPromptManifest({
-            systemPrompt: this.options.systemPrompt,
-            promptId: this.options.promptId,
-            promptVersion: this.options.promptVersion,
-            stableContext,
-            runtimeStateMessages: trailingMessages.map(message => message.text),
-          }),
-        } : {}),
-      },
-      blockedDiagnostics: facts.blocked.map(item => ({
-        messageId: item.callMessage.id,
-        reason: item.reason,
-        ...(item.toolCallId ? { toolCallId: item.toolCallId } : {}),
-      })),
-      compression: {
-        disabled: false,
-        recentRawTokenBudget: 24_000,
-        minimumRecentGroups: 2,
-      },
-    };
-    const snapshot = this.#snapshot(query, session.id, compileContext(material), {
-      basedOnLatestJobId: latestJobId(jobs),
+    const preview = await this.#contexts.previewNextTurn(session.id);
+    const snapshot = this.#snapshot(query, session.id, preview.built, {
+      basedOnLatestJobId: preview.latestJobId,
     });
     assertNoActiveJob(await this.options.store.listSessionJobs(query.sessionId));
     return snapshot;
@@ -180,27 +112,17 @@ export class ContextInspectionService {
     return this.#snapshot(
       query,
       job.sessionId,
-      compileContext(await this.#jobs.load(job, originalGoal)),
+      await this.#contexts.previewJob(job, originalGoal),
       { basedOnLatestJobId: job.id }
     );
   }
 
   async #modelCall(modelCallId: string, query: ContextQuery): Promise<ContextSnapshot> {
-    const call = await this.#modelCalls.load(modelCallId);
-    const job = await this.#requireJob(call.jobId);
-    const originalGoal = await this.#originalGoal(job);
-    const material = await this.#jobs.load(
-      job,
-      originalGoal,
-      call.inputManifest.contextRulesVersion
-    );
-    const historicalSummaries = await this.options.store.getContextSummariesByIds(
-      call.inputManifest.summaryIds
-    );
-    material.summaries = historicalSummaries.map(toSummaryMaterial);
-    const built = this.#modelCalls.reconstruct(call, material);
-    return this.#snapshot(query, job.sessionId, built, {
-      basedOnLatestJobId: job.id,
+    const call = await this.options.store.getModelCall(modelCallId);
+    if (!call) throw new Error(`ModelCall ${JSON.stringify(modelCallId)} was not found.`);
+    const built = reconstructRecordedModelCall(call);
+    return this.#snapshot(query, call.sessionId, built, {
+      basedOnLatestJobId: call.jobId,
       verification: { status: 'exact', checksumMatched: true },
       limits: {
         maxContextTokens: call.maxContextTokens,
@@ -249,32 +171,9 @@ export class ContextInspectionService {
   }
 }
 
-function toSummaryMaterial(
-  summary: Awaited<ReturnType<ContextInspectionStore['getContextSummariesByIds']>>[number]
-): ContextMaterial['summaries'][number] {
-  return {
-    id: summary.id,
-    summaryType: summary.summaryType,
-    compressionPromptVersion: summary.compressionPromptVersion,
-    summary: summary.summary,
-    sourceRowIdStart: summary.sourceRowIdStart,
-    sourceRowIdEnd: summary.sourceRowIdEnd,
-    sourceGroupIds: readStringArray(summary.metadata?.sourceGroupIds),
-    sourceBundleIds: readStringArray(summary.metadata?.sourceBundleIds),
-    sourceMessageCount: summary.sourceMessageCount,
-    sourceTokenCount: summary.sourceTokenCount,
-  };
-}
-
-function readStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every(item => typeof item === 'string')
-    ? value
-    : undefined;
-}
-
 function assertNoActiveJob(jobs: AgentJob[]): void {
   const active = [...jobs]
-    .filter(job => ACTIVE_JOB_STATUSES.has(job.status))
+    .filter(job => ACTIVE_JOB_STATUS_SET.has(job.status))
     .sort((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
   if (!active) return;
   throw new RuntimeError(
@@ -284,8 +183,46 @@ function assertNoActiveJob(jobs: AgentJob[]): void {
   );
 }
 
-function latestJobId(jobs: AgentJob[]): string | undefined {
-  return [...jobs].sort((left, right) => (
-    right.createdAtMs - left.createdAtMs || right.id.localeCompare(left.id)
-  ))[0]?.id;
+function reconstructRecordedModelCall(call: AgentModelCall): BuiltContext {
+  const serialized = canonicalJson(call.inputMessages);
+  const checksum = createHash('sha256').update(serialized).digest('hex');
+  if (checksum !== call.inputChecksum) {
+    throw new ContextSnapshotUnreconstructableError(
+      `ModelCall ${JSON.stringify(call.id)} persisted input checksum is invalid.`
+    );
+  }
+  const messages = mapStoredMessagesToChatMessages(call.inputMessages);
+  const prediction = call.inputManifest.tokenPrediction;
+  const pressureLevel = prediction?.pressureLevel ?? 'normal';
+  return {
+    messages,
+    inputManifest: call.inputManifest,
+    estimatedInputTokens: call.estimatedInputTokens,
+    predictedInputTokens: prediction?.predictedInputTokens
+      ?? call.estimatedInputTokens,
+    predictedCandidateTokens: prediction?.predictedCandidateTokens
+      ?? call.estimatedInputTokens,
+    hardInputLimit: prediction?.hardInputLimit
+      ?? call.maxContextTokens - call.reservedOutputTokens,
+    pressureLevel,
+    contextRulesVersion: call.inputManifest.contextRulesVersion,
+    summaryIds: call.inputManifest.summaryIds,
+    mustKeepMessageIds: [],
+    compressibleMessageIds: [],
+    shouldCompress: ['compact', 'mandatory', 'critical'].includes(pressureLevel),
+    mustCompress: ['mandatory', 'critical'].includes(pressureLevel),
+    annotations: messages.map((_, index) => ({
+      groupId: `model_call:${call.id}:input:${index}`,
+    })),
+    blockedDiagnostics: [],
+  };
+}
+
+class ContextSnapshotUnreconstructableError extends Error {
+  readonly code = 'context_snapshot_unreconstructable';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ContextSnapshotUnreconstructableError';
+  }
 }

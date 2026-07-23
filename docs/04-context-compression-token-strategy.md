@@ -66,8 +66,8 @@ Context Memory 精确记录 coveredGroupIds
 
 ```mermaid
 flowchart TD
-    A["ReAct 准备下一次模型调用"] --> B["ExecutionContextLoader"]
-    B --> C["SessionContextLoader 读取数据库事实"]
+    A["ReAct 准备下一次模型调用"] --> B["ReActContextService.buildForJob"]
+    B --> C["内部读取 Session 数据库事实"]
     C --> D["MessageGroupBuilder 构建完整协议组"]
     D --> E["TurnBundleBuilder 仅提供会话审计与连续尾选择"]
     E --> F["ContextCompiler 精确移除 coveredGroupIds"]
@@ -83,7 +83,9 @@ flowchart TD
     N --> A
 ```
 
-关键点：`ReactExecutionRuntime.runJob()` 的每次循环都会重新调用 `buildJobContext()`。压缩判断天然发生在每次 ReAct 迭代，不需要额外的“长 Job 分支”。
+关键点：`ReactExecutionRuntime.runJob()` 的每次循环都会重新调用
+`ReActContextService.buildForJob()`。压缩判断天然发生在每次 ReAct
+迭代，不需要额外的“长 Job 分支”。
 
 ## 4. 数据事实和派生数据
 
@@ -598,18 +600,23 @@ Job 没有结束，也没有创建第二个 Job Summary。
 
 | 职责 | 文件 |
 | --- | --- |
-| 数据库事实加载 | `src/runtime/loaders/session-context-loader.ts` |
-| 单次执行 Context 材料 | `src/runtime/loaders/execution-context-loader.ts` |
-| 协议分组 | `src/runtime/context/message-group-builder.ts` |
-| Turn/Retry 审计分组 | `src/runtime/context/turn-bundle-builder.ts` |
-| 精确覆盖和 Context 编译 | `src/runtime/context/context-compiler.ts` |
-| Token 选择与 CJK 估算 | `src/runtime/context/token-budget.ts` |
+| 唯一 ReAct Context 核心入口 | `src/runtime/context/react-context.service.ts` |
+| 数据库事实读取与 ContextMaterial 组装 | `src/runtime/context/helpers/context-material.helper.ts` |
+| compile/compress/reload 控制 | `src/runtime/context/helpers/context-build.helper.ts` |
+| 协议分组 | `src/runtime/context/helpers/message-group.helper.ts` |
+| Turn/Retry 审计分组 | `src/runtime/context/helpers/turn-bundle.helper.ts` |
+| Context 编译主链路 | `src/runtime/context/context-compiler.ts` |
+| 候选构建、选择和输出拼装 | `src/runtime/context/helpers/context-selection.helper.ts` |
+| 模型预算校准与压力判断 | `src/runtime/context/helpers/model-budget.helper.ts` |
+| Token 选择与 CJK 估算 | `src/runtime/context/helpers/token-budget.helper.ts` |
 | 统一累计压缩 | `src/runtime/context/context-compression.service.ts` |
-| compile → compress → reload | `src/runtime/context/context-build.service.ts` |
-| ReAct 每轮接入 | `src/orchestration/execution/execution-context-provider.ts` |
 | Context 调试重建 | `src/orchestration/context-inspection.service.ts` |
-| ToolResult 投影 | `src/runtime/context/tool-result-context-projector.ts` |
-| ModelCall 用量审计 | `src/runtime/audited-chat-model.ts` |
+| ToolResult 投影 | `src/runtime/context/helpers/tool-result-projector.helper.ts` |
+| 共享 Context 类型 | `src/runtime/context/types/context.types.ts` |
+| 编译阶段共享类型 | `src/runtime/context/types/context-compiler.types.ts` |
+| Context Memory 类型 | `src/runtime/context/types/context-memory.types.ts` |
+| MessageGroup 类型 | `src/runtime/context/types/message-group.types.ts` |
+| ModelCall 用量审计 | `src/runtime/execution/audited-chat-model.ts` |
 
 ## 19. 已实现与后续
 

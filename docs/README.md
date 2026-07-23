@@ -9,8 +9,9 @@
 2. [持久化、Context 与 View](./02-persistence-context-view.md)：表模型、上下文编译、ModelCall 审计、SSE 和刷新一致性。
 3. [HTTP、运行与验收](./03-http-operations.md)：接口、环境、schema 管理和验收清单。
 4. [统一 Context 拼接、压缩与 Token 用量策略](./04-context-compression-token-strategy.md)：基于稳定 MessageGroup 的精确覆盖、统一 Context Memory、provider usage 校准与每轮 ReAct 预算。
+5. [后续 TODO 路线图](./05-runtime-roadmap-todo.md)：恢复闭环、调度背压、安全隔离、Durable SSE、历史精确回查、模型治理和故障评测的优先级与验收标准。
 
-后面四份是专题说明；当它们与“当前实现全链路”冲突时，以全链路文档和代码为准。
+其余文档是专题说明；当它们与“当前实现全链路”冲突时，以全链路文档和代码为准。
 
 ## 已删除的旧概念
 

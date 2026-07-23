@@ -16,7 +16,7 @@ import {
 } from '../src/orchestration/context-inspection.service.js';
 
 describe('ContextInspectionService', () => {
-  it('routes next_turn, job and exact model_call through shared loaders', async () => {
+  it('uses the shared ReAct context and exact recorded ModelCall input', async () => {
     const messages = [message({ id: 'goal_1', rowId: 1, content: 'hello' })];
     const jobs = [job({ metadata: { goalMessageId: 'goal_1' } })];
     let modelCall: AgentModelCall | undefined;
@@ -65,7 +65,6 @@ describe('ContextInspectionService', () => {
       jobs,
       getModelCall: () => modelCall,
       activeSummaries: () => activeSummaries,
-      historicalSummaries: ids => ids.includes(summary.id) ? [summary] : [],
     }));
     const snapshot = await service.inspect({ kind: 'job', jobId: 'job_1' });
     const inputMessages = mapChatMessagesToStoredMessages(snapshot.built.messages);
@@ -109,7 +108,6 @@ function store(input: {
   jobs: AgentJob[];
   getModelCall?: () => AgentModelCall | undefined;
   activeSummaries?: () => AgentContextSummary[];
-  historicalSummaries?: (ids: string[]) => AgentContextSummary[];
 }): ContextInspectionStore {
   return {
     getSession: async () => session(),
@@ -124,7 +122,6 @@ function store(input: {
     listSessionUserInputRequests: async () => [],
     listActiveContextSummaries: async () => input.activeSummaries?.() ?? [],
     listRecentSessionModelCalls: async () => [],
-    getContextSummariesByIds: async ids => input.historicalSummaries?.(ids) ?? [],
   };
 }
 

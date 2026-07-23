@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { estimateTextTokens } from '../src/runtime/context/token-budget.js';
+import {
+  estimateTextTokens,
+} from '../src/runtime/context/helpers/token-budget.helper.js';
 import {
   buildDurableRuntimeStatePrompt,
   buildStableEnvironmentContext,

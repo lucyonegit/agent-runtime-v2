@@ -5,12 +5,12 @@ import {
   ToolMessage,
   type BaseMessage,
 } from '@langchain/core/messages';
-import type { AgentMessage } from '../../domain/index.js';
-import type { MessageGroup } from './message-group-builder.js';
-import type { CompiledContextAnnotation } from './context-material.js';
-import { ToolResultContextProjector } from './tool-result-context-projector.js';
+import type { AgentMessage } from '../../../domain/index.js';
+import type { CompiledContextAnnotation } from '../types/context.types.js';
+import type { MessageGroup } from '../types/message-group.types.js';
+import { ToolResultContextProjector } from './tool-result-projector.helper.js';
 
-export interface FormattedContextGroup {
+interface FormattedContextGroup {
   messages: BaseMessage[];
   truncatedToolResultMessageIds: string[];
   annotations: Array<Omit<CompiledContextAnnotation, 'groupId' | 'bundleId'>>;

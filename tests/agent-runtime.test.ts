@@ -15,14 +15,14 @@ describe('AgentRuntime cancellation and recovery', () => {
       }),
     } as unknown as AgentStore;
     const executor: JobExecutionService = {
-      execute: vi.fn(async () => undefined),
-      cancel: vi.fn(() => { order.push('aborted'); }),
+      executeJob: vi.fn(async () => undefined),
+      cancelJobExecution: vi.fn(() => { order.push('aborted'); }),
     };
     const runtime = createRuntime(store, executor);
 
     await expect(runtime.cancelJob(running.id, running.version)).resolves.toEqual(cancelled);
     expect(order).toEqual(['persisted', 'aborted']);
-    expect(executor.cancel).toHaveBeenCalledWith(running.id);
+    expect(executor.cancelJobExecution).toHaveBeenCalledWith(running.id);
   });
 
   it('marks an expired Job as recovery-required without executing it', async () => {
@@ -43,7 +43,7 @@ describe('AgentRuntime cancellation and recovery', () => {
     });
     const store = recoveryStore(candidate, pausedJob, [], startedJob);
     const executor: JobExecutionService = {
-      execute: vi.fn(async () => undefined),
+      executeJob: vi.fn(async () => undefined),
       shutdown: vi.fn(async () => undefined),
     };
     const runtime = createRuntime(store, executor);
@@ -63,7 +63,7 @@ describe('AgentRuntime cancellation and recovery', () => {
       nowMs: 1_000,
     });
     expect(store.startJobExecution).not.toHaveBeenCalled();
-    expect(executor.execute).not.toHaveBeenCalled();
+    expect(executor.executeJob).not.toHaveBeenCalled();
     expect(store.failJob).not.toHaveBeenCalled();
   });
 
@@ -82,13 +82,13 @@ describe('AgentRuntime cancellation and recovery', () => {
     });
     const store = recoveryStore(candidate, pausedJob, [], startedJob);
     const executor: JobExecutionService = {
-      execute: vi.fn(async () => undefined),
+      executeJob: vi.fn(async () => undefined),
       shutdown: vi.fn(async () => undefined),
     };
     const runtime = createRuntime(store, executor);
 
     await runtime.start();
-    expect(executor.execute).not.toHaveBeenCalled();
+    expect(executor.executeJob).not.toHaveBeenCalled();
 
     await expect(runtime.resumeJob(pausedJob.id, pausedJob.version)).resolves.toEqual(startedJob);
     expect(store.startJobExecution).toHaveBeenCalledWith(expect.objectContaining({
@@ -100,7 +100,7 @@ describe('AgentRuntime cancellation and recovery', () => {
       jobId: startedJob.id,
       attemptId: startedJob.currentAttemptId,
     }));
-    expect(executor.execute).toHaveBeenCalledWith(candidate.id);
+    expect(executor.executeJob).toHaveBeenCalledWith(candidate.id);
     await runtime.stop();
   });
 
@@ -117,7 +117,7 @@ describe('AgentRuntime cancellation and recovery', () => {
     const invocation = invocationFixture();
     const store = recoveryStore(candidate, pausedJob, [invocation], startedJob);
     const executor: JobExecutionService = {
-      execute: vi.fn(async () => undefined),
+      executeJob: vi.fn(async () => undefined),
       shutdown: vi.fn(async () => undefined),
     };
     const runtime = createRuntime(store, executor);
@@ -132,7 +132,7 @@ describe('AgentRuntime cancellation and recovery', () => {
       attemptId: startedJob.currentAttemptId,
       error: expect.objectContaining({ code: 'unsafe_tool_recovery' }),
     }));
-    expect(executor.execute).not.toHaveBeenCalled();
+    expect(executor.executeJob).not.toHaveBeenCalled();
   });
 });
 

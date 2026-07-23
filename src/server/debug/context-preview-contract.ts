@@ -2,7 +2,9 @@ import type {
   AgentContextInputManifest,
   AgentPromptManifest,
 } from '../../domain/index.js';
-import type { CompiledContextAnnotation } from '../../runtime/context/context-material.js';
+import type {
+  CompiledContextAnnotation,
+} from '../../runtime/context/types/context.types.js';
 
 export interface ContextPreviewMessage {
   index: number;

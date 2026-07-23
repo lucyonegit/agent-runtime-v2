@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { estimateTextTokens } from './token-budget.js';
+import { estimateTextTokens } from './token-budget.helper.js';
 
-export interface ToolResultProjection {
+interface ToolResultProjection {
   content: string;
   truncated: boolean;
   originalTokenEstimate: number;
@@ -9,7 +9,7 @@ export interface ToolResultProjection {
   checksum: string;
 }
 
-export interface ToolResultContextProjectorOptions {
+interface ToolResultContextProjectorOptions {
   maxTokens?: number;
   headRatio?: number;
 }

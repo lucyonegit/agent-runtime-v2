@@ -1,4 +1,4 @@
-import type { RuntimeTool } from '../../runtime/tool-executor.js';
+import type { RuntimeTool } from '../../runtime/execution/tool-executor.js';
 import { createRuntimeTools } from '../../tools/index.js';
 import type { ManagedProcessManager } from '../../tools/index.js';
 import { createPlanTools, type CreatePlanToolsOptions } from '../../tools/plan-tools.js';

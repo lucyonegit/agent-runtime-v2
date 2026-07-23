@@ -35,10 +35,3 @@ export interface AgentUserInputRequest {
   updatedAtMs: number;
   answeredAtMs?: number;
 }
-
-export function isValidAnswerModeForSource(
-  source: AgentUserInputSource,
-  answerMode: AgentUserInputAnswerMode
-): boolean {
-  return source !== 'tool' || answerMode === 'as_tool_result';
-}

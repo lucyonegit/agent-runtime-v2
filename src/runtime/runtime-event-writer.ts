@@ -4,7 +4,7 @@ import {
   LOOP_EVENT_TYPES,
   type LoopEvent,
 } from '../agent-loop/loop-events.js';
-import type { RuntimeTool } from './tool-executor.js';
+import type { RuntimeTool } from './execution/tool-executor.js';
 import type { AgentLoopTarget } from '../agent-loop/agent-loop.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { mapStoreError } from './runtime-errors.js';

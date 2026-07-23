@@ -2,15 +2,22 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import type { RuntimeTool } from '../runtime/tool-executor.js';
+import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import {
   assertFileWriteContentLimit,
   FILE_WRITE_MAX_CHARACTERS,
   FILE_WRITE_MAX_ESTIMATED_TOKENS,
   fileContentArgumentLimit,
 } from './filesystem-tools.js';
-import { resolveWorkspaceAreaPath, resolveWorkspacePath } from './sandbox.js';
-import { jsonToolOutput, runtimeContext, stringArgument } from './tool-utils.js';
+import {
+  resolveWorkspaceAreaPath,
+  resolveWorkspacePath,
+} from './helpers/workspace-path.helper.js';
+import {
+  jsonToolOutput,
+  runtimeContext,
+  stringArgument,
+} from './helpers/tool-input.helper.js';
 
 const formatExtensions: Record<string, string> = {
   markdown: '.md',

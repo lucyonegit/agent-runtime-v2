@@ -1,4 +1,4 @@
-import type { RuntimeTool } from '../runtime/tool-executor.js';
+import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import { createArtifactTools } from './artifact-tools.js';
 import { createBasicTools } from './basic-tools.js';
 import { createBrowserTools } from './browser-tools.js';
@@ -14,7 +14,7 @@ export {
 
 export {
   removeSessionSandbox,
-} from './sandbox.js';
+} from './helpers/workspace-path.helper.js';
 
 export function createRuntimeTools(options: { managedProcessManager?: ManagedProcessManager } = {}): RuntimeTool[] {
   return [

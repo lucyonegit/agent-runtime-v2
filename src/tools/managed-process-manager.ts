@@ -5,10 +5,13 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { createConnection, createServer } from 'node:net';
 import type { AgentManagedProcess } from '../domain/index.js';
 import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
-import { RuntimeToolExecutionError, type RuntimeToolContext } from '../runtime/tool-executor.js';
-import { workspaceRoot } from './sandbox.js';
-import { buildWorkspaceProcessEnv } from './process-environment.js';
-import { WORKSPACE_PROCESS_SUPERVISOR_SOURCE } from './workspace-process-supervisor.js';
+import {
+  RuntimeToolExecutionError,
+  type RuntimeToolContext,
+} from '../runtime/execution/tool-executor.js';
+import { buildWorkspaceProcessEnv } from './helpers/process-environment.helper.js';
+import { WORKSPACE_PROCESS_SUPERVISOR_SOURCE } from './helpers/process-supervisor-script.helper.js';
+import { workspaceRoot } from './helpers/workspace-path.helper.js';
 
 const DEFAULT_HOST = '127.0.0.1';
 const PORT_RANGE_START = 4_100;
@@ -21,7 +24,7 @@ const DISCOVERY_POLL_MS = 1_000;
 const MAX_LOG_BYTES = 64 * 1024;
 const PROCESS_SPEC_VERSION = 1;
 
-export interface StartManagedProcessInput {
+interface StartManagedProcessInput {
   context: RuntimeToolContext;
   name: string;
   command: string;

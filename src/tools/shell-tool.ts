@@ -6,15 +6,18 @@ import {
   RuntimeToolExecutionError,
   type RuntimeTool,
   type RuntimeToolContext,
-} from '../runtime/tool-executor.js';
-import { workspaceRoot } from './sandbox.js';
+} from '../runtime/execution/tool-executor.js';
+import { workspaceRoot } from './helpers/workspace-path.helper.js';
 import {
   jsonToolOutput,
   numberArgument,
   runtimeContext,
   stringArgument,
-} from './tool-utils.js';
-import { buildWorkspaceProcessEnv, stringRecord } from './process-environment.js';
+} from './helpers/tool-input.helper.js';
+import {
+  buildWorkspaceProcessEnv,
+  stringRecord,
+} from './helpers/process-environment.helper.js';
 
 const SHELL_PATH = '/bin/zsh';
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -23,7 +26,7 @@ const MAX_TIMEOUT_MS = 1_800_000;
 const MAX_OUTPUT_BYTES = 32 * 1024;
 const TERMINATION_GRACE_MS = 1_000;
 
-export interface ShellExecutionResult {
+interface ShellExecutionResult {
   command: string;
   cwd: string;
   exitCode: number | null;

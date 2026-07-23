@@ -6,7 +6,10 @@ import {
   CONTEXT_RULES_VERSION,
 } from '../src/runtime/context/context-compiler.js';
 import { ContextCompressionService } from '../src/runtime/context/context-compression.service.js';
-import type { ContextMaterial, TurnBundle } from '../src/runtime/context/context-material.js';
+import type {
+  ContextMaterial,
+  TurnBundle,
+} from '../src/runtime/context/types/context.types.js';
 import { CONTEXT_MEMORY_SYSTEM_PROMPT_VERSION } from '../src/runtime/prompting/context-memory-prompt.js';
 import type { ReplaceContextSummaryInput } from '../src/storage/agent-store.js';
 

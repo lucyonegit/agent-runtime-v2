@@ -2,8 +2,11 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import type {
   AgentUserInputSchema,
 } from '../domain/index.js';
-import type { RuntimeTool, RuntimeUserInputArtifact } from '../runtime/tool-executor.js';
-import { stringArgument } from './tool-utils.js';
+import {
+  type RuntimeTool,
+  type RuntimeUserInputArtifact,
+} from '../runtime/execution/tool-executor.js';
+import { stringArgument } from './helpers/tool-input.helper.js';
 
 export function createHitlTools(): RuntimeTool[] {
   const requestUserInput = new DynamicStructuredTool({

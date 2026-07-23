@@ -11,10 +11,10 @@ export * from './orchestration/context-inspection.service.js';
 export * from './orchestration/execution/job-execution-orchestrator.js';
 
 // Extension ports
-export * from './runtime/execution-limits.js';
+export * from './runtime/execution/execution-limits.js';
 export * from './runtime/runtime-errors.js';
 export * from './runtime/runtime-event-writer.js';
-export * from './runtime/tool-executor.js';
+export * from './runtime/execution/tool-executor.js';
 export * from './storage/agent-store.js';
 export * from './tools/index.js';
 

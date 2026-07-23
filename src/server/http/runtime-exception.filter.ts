@@ -5,7 +5,7 @@ import {
   type ExceptionFilter,
 } from '@nestjs/common';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
-import { RuntimeToolExecutionError } from '../../runtime/tool-executor.js';
+import { RuntimeToolExecutionError } from '../../runtime/execution/tool-executor.js';
 import { AgentStoreError } from '../../storage/agent-store.js';
 
 interface HttpReply {

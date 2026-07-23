@@ -1,14 +1,6 @@
-export interface TokenBudgetItem<T> {
-  id: string;
-  value: T;
-  estimatedTokens: number;
-  mustKeep: boolean;
-  priority: number;
-  recency: number;
-  originalOrder: number;
-}
+import type { TokenBudgetItem } from '../types/context.types.js';
 
-export interface TokenBudgetSelection<T> {
+interface TokenBudgetSelection<T> {
   selected: TokenBudgetItem<T>[];
   dropped: TokenBudgetItem<T>[];
   estimatedInputTokens: number;

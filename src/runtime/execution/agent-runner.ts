@@ -4,17 +4,17 @@ import {
   FatalToolExecutionError,
   type AgentLoopLimits,
   type ToolExecutorPort,
-} from '../agent-loop/agent-loop.js';
-import { LOOP_EVENT_TYPES, type LoopEvent } from '../agent-loop/loop-events.js';
+} from '../../agent-loop/agent-loop.js';
+import { LOOP_EVENT_TYPES, type LoopEvent } from '../../agent-loop/loop-events.js';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import type {
   AgentJob,
   AgentMessage,
   AgentUserInputRequest,
-} from '../domain/index.js';
-import { JobCoordinator } from '../orchestration/lifecycle/job-coordinator.js';
-import { RuntimeError } from './runtime-errors.js';
-import { RuntimeEventWriter } from './runtime-event-writer.js';
+} from '../../domain/index.js';
+import { JobCoordinator } from '../../orchestration/lifecycle/job-coordinator.js';
+import { RuntimeError } from '../runtime-errors.js';
+import { RuntimeEventWriter } from '../runtime-event-writer.js';
 
 export interface JobAgentRunInput {
   job: AgentJob;

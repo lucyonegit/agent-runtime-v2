@@ -8,8 +8,8 @@ import { SessionView, type SessionProcessReader } from '../view/session-view.js'
 import { projectSensitiveAnswers } from '../view/session-view.js';
 
 export interface JobExecutionService {
-  execute(jobId: string): Promise<void>;
-  cancel?(jobId: string): void;
+  executeJob(jobId: string): Promise<void>;
+  cancelJobExecution?(jobId: string): void;
   shutdown?(): Promise<void>;
 }
 
@@ -144,7 +144,7 @@ export class AgentRuntime {
         creationResult.job.version
       );
       await this.#publishMany([{ type: 'job.upserted', sessionId: input.sessionId, job: runningJob }]);
-      this.#schedule(runningJob.id);
+      this.#startJobExecutionInBackground(runningJob.id);
       return { ...creationResult, job: runningJob };
     }
     return creationResult;
@@ -154,7 +154,7 @@ export class AgentRuntime {
     const job = await this.#cancelUsingLatestVersion(jobId, expectedVersion);
     // Persist the terminal state before aborting I/O so every subsequent write
     // is rejected by the Job fence, even if a driver ignores AbortSignal.
-    this.#executor.cancel?.(job.id);
+    this.#executor.cancelJobExecution?.(job.id);
     await this.#publishMany([{ type: 'job.upserted', sessionId: job.sessionId, job }]);
     return job;
   }
@@ -182,7 +182,7 @@ export class AgentRuntime {
     await this.#publishMany([{
       type: 'job.upserted', sessionId: runningJob.sessionId, job: runningJob,
     }]);
-    this.#schedule(runningJob.id);
+    this.#startJobExecutionInBackground(runningJob.id);
     return { ...retryResult, job: runningJob };
   }
 
@@ -227,7 +227,7 @@ export class AgentRuntime {
       }]);
       return failedJob;
     }
-    this.#schedule(recoveredRunningJob.id);
+    this.#startJobExecutionInBackground(recoveredRunningJob.id);
     return recoveredRunningJob;
   }
 
@@ -253,7 +253,9 @@ export class AgentRuntime {
       { type: 'user_input.upserted', sessionId: answerResult.job.sessionId, request: publicAnswer.requests[0]! },
       { type: 'job.upserted', sessionId: answerResult.job.sessionId, job: answerResult.job },
     ]);
-    if (answerResult.shouldResume) this.#schedule(answerResult.job.id);
+    if (answerResult.shouldResume) {
+      this.#startJobExecutionInBackground(answerResult.job.id);
+    }
     return answerResult;
   }
 
@@ -317,9 +319,9 @@ export class AgentRuntime {
     }
   }
 
-  #schedule(jobId: string): void {
+  #startJobExecutionInBackground(jobId: string): void {
     if (this.#stopping) return;
-    void this.#executor.execute(jobId).catch(() => {
+    void this.#executor.executeJob(jobId).catch(() => {
       // The executor persists terminal failure when it still owns the lease.
     });
   }

@@ -13,10 +13,10 @@ import type {
   AgentContextInputManifest,
   AgentModelCallType,
   AgentRealtimeEvent,
-} from '../domain/index.js';
-import type { AgentStore } from '../storage/agent-store.js';
-import { canonicalJson } from './transaction-commands.js';
-import { estimateTextTokens } from './context/token-budget.js';
+} from '../../domain/index.js';
+import type { AgentStore } from '../../storage/agent-store.js';
+import { canonicalJson } from '../transaction-commands.js';
+import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
 
 export interface AuditedChatModelOptions {
   delegate: Runnable<BaseLanguageModelInput, AIMessageChunk>;

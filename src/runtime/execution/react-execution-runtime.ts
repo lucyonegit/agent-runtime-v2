@@ -4,16 +4,16 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import type { AIMessageChunk } from '@langchain/core/messages';
 import type { Runnable } from '@langchain/core/runnables';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import { AgentLoop } from '../agent-loop/agent-loop.js';
-import type { AgentContextInputManifest, AgentJob, AgentModelCallType } from '../domain/index.js';
-import { JobCoordinator } from '../orchestration/lifecycle/job-coordinator.js';
+import { AgentLoop } from '../../agent-loop/agent-loop.js';
+import type { AgentContextInputManifest, AgentJob, AgentModelCallType } from '../../domain/index.js';
+import { JobCoordinator } from '../../orchestration/lifecycle/job-coordinator.js';
 import { AgentRunner, type JobAgentRunResult } from './agent-runner.js';
 import { AuditedChatModel } from './audited-chat-model.js';
-import type { BuiltContext } from './context/context-compiler.js';
-import { RuntimeEventWriter, type RuntimeEventPublisher } from './runtime-event-writer.js';
+import type { BuiltContext } from '../context/types/context.types.js';
+import { RuntimeEventWriter, type RuntimeEventPublisher } from '../runtime-event-writer.js';
 import { ToolExecutor, type RuntimeTool } from './tool-executor.js';
-import type { AgentStore } from '../storage/agent-store.js';
-import { mapStoreError } from './runtime-errors.js';
+import type { AgentStore } from '../../storage/agent-store.js';
+import { mapStoreError } from '../runtime-errors.js';
 
 export interface ReactExecutionRuntimeOptions {
   store: AgentStore;

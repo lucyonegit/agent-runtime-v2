@@ -187,7 +187,6 @@ function storeFixture(overrides: {
     listSessionUserInputRequests: async () => [],
     listActiveContextSummaries: async () => [],
     listRecentSessionModelCalls: async () => [],
-    getContextSummariesByIds: async () => [],
   };
 }
 

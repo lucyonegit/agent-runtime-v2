@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentJob, AgentMessage } from '../src/domain/index.js';
-import { TurnBundleBuilder } from '../src/runtime/context/turn-bundle-builder.js';
-import type { MessageGroup } from '../src/runtime/context/message-group-builder.js';
+import { TurnBundleBuilder } from '../src/runtime/context/helpers/turn-bundle.helper.js';
+import type { MessageGroup } from '../src/runtime/context/types/message-group.types.js';
 
 describe('TurnBundleBuilder', () => {
   it('keeps retry lineage in one atomic turn ordered by persisted rows', () => {

@@ -10,14 +10,17 @@ import {
   compileContext,
   CONTEXT_RULES_VERSION,
 } from '../src/runtime/context/context-compiler.js';
-import type { ContextMaterial } from '../src/runtime/context/context-material.js';
-import { MessageGroupBuilder, messagesInGroup } from '../src/runtime/context/message-group-builder.js';
+import {
+  IncompleteMessageGroupError,
+  MessageGroupBuilder,
+  messagesInGroup,
+} from '../src/runtime/context/helpers/message-group.helper.js';
 import {
   ContextOverflowError,
   TokenBudget,
   estimateTextTokens,
-} from '../src/runtime/context/token-budget.js';
-import { IncompleteMessageGroupError } from '../src/runtime/loaders/session-context-loader.js';
+} from '../src/runtime/context/helpers/token-budget.helper.js';
+import type { ContextMaterial } from '../src/runtime/context/types/context.types.js';
 
 describe('MessageGroupBuilder', () => {
   it('builds a complete multi-tool exchange in model call order', () => {
