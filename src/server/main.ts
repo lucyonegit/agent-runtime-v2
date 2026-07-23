@@ -4,7 +4,8 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Pool } from 'pg';
 import { AgentRuntime } from '../orchestration/agent-runtime.js';
-import { JobExecutionOrchestrator } from '../orchestration/execution/job-execution-orchestrator.js';
+import { JobExecutionManager } from '../orchestration/job-execution-manager.js';
+import { JobLifecycle } from '../orchestration/job-lifecycle.js';
 import { PostgresAgentStore } from '../storage/postgres/postgres-agent-store.js';
 import { assertAgentRuntimeSchemaVersion } from '../storage/postgres/migrations.js';
 import { AgentHttpModule } from './http/agent-http.module.js';
@@ -49,14 +50,20 @@ const jobHeartbeatMs = numberEnv('JOB_HEARTBEAT_MS', Math.max(1_000, Math.floor(
 const jobRecoveryScanMs = numberEnv('JOB_RECOVERY_SCAN_MS', 5_000);
 const model = createLangChainChatModel(modelConfig, modelTokenLimits.outputTokenLimit);
 if (jobHeartbeatMs >= jobLeaseMs) throw new Error('JOB_HEARTBEAT_MS must be shorter than JOB_LEASE_MS.');
+const jobLifecycle = new JobLifecycle({
+  store,
+  workerId,
+  limits: { jobLeaseMs, jobHeartbeatMs },
+});
 const tools = createDefaultTools({
   store,
   workerId,
   publisher: events,
   managedProcessManager: managedProcesses,
 });
-const executor = new JobExecutionOrchestrator({
+const jobExecution = new JobExecutionManager({
   store,
+  jobLifecycle,
   workerId,
   publisher: events,
   model,
@@ -69,6 +76,7 @@ const executor = new JobExecutionOrchestrator({
   inputTokenLimit: modelTokenLimits.inputTokenLimit,
   jobLeaseMs,
   jobHeartbeatMs,
+  recoveryIntervalMs: jobRecoveryScanMs,
   jobSystemPrompt: JOB_AGENT_SYSTEM_PROMPT,
   systemPromptVersion: JOB_AGENT_SYSTEM_PROMPT_VERSION,
   promptId: JOB_AGENT_PROMPT_ID,
@@ -86,11 +94,9 @@ const contextPreview = new ContextPreviewService({
 });
 const runtime = new AgentRuntime({
   store,
-  workerId,
+  jobLifecycle,
   publisher: events,
-  executor,
-  jobLeaseMs,
-  recoveryIntervalMs: jobRecoveryScanMs,
+  jobExecution,
   processReader: managedProcesses,
   beforeDeleteSession: sessionId => managedProcesses.stopSessionProcesses(sessionId),
   removeSessionWorkspace: sessionId => removeSessionSandbox({ sandboxRoot, sessionId }),

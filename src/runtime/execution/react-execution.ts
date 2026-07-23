@@ -6,17 +6,21 @@ import type { Runnable } from '@langchain/core/runnables';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import { AgentLoop } from '../../agent-loop/agent-loop.js';
 import type { AgentContextInputManifest, AgentJob, AgentModelCallType } from '../../domain/index.js';
-import { JobCoordinator } from '../../orchestration/lifecycle/job-coordinator.js';
-import { AgentRunner, type JobAgentRunResult } from './agent-runner.js';
-import { AuditedChatModel } from './audited-chat-model.js';
+import { AuditedChatModel } from '../model/audited-chat-model.js';
+import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';
+import type {
+  JobExecutionStatePort,
+  ReactJobExecutionResult,
+} from './types/react-execution.types.js';
 import type { BuiltContext } from '../context/types/context.types.js';
 import { RuntimeEventWriter, type RuntimeEventPublisher } from '../runtime-event-writer.js';
 import { ToolExecutor, type RuntimeTool } from './tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { mapStoreError } from '../runtime-errors.js';
 
-export interface ReactExecutionRuntimeOptions {
+export interface ReactExecutionOptions {
   store: AgentStore;
+  jobState: JobExecutionStatePort;
   workerId: string;
   publisher: RuntimeEventPublisher;
   model: BaseChatModel;
@@ -36,14 +40,14 @@ export interface ReactExecutionRuntimeOptions {
  * the canonical database context, so tool calls, plan updates and HITL answers
  * become visible without a nested executor or an in-memory context fork.
  */
-export class ReactExecutionRuntime {
-  constructor(private readonly options: ReactExecutionRuntimeOptions) {}
+export class ReactExecution {
+  constructor(private readonly options: ReactExecutionOptions) {}
 
   async runJob(input: {
     job: AgentJob;
     loadContext(): Promise<BuiltContext>;
     signal?: AbortSignal;
-  }): Promise<JobAgentRunResult> {
+  }): Promise<ReactJobExecutionResult> {
     const checkpoint = await this.options.store.getLatestLoopCheckpoint(input.job.id);
     const resumeToolCalls = await this.#loadPendingToolCalls(input.job, checkpoint?.callMessageId);
     let current = checkpoint?.phase === 'tool_batch'
@@ -51,7 +55,7 @@ export class ReactExecutionRuntime {
       : await input.loadContext();
     const toolExecutor = this.#toolExecutor();
     const tools = toolExecutor.tools();
-    const runner = new AgentRunner({
+    return executeDurableAgentLoop({
       loop: new AgentLoop({
         model: this.#auditedModel(
           input.job,
@@ -66,30 +70,27 @@ export class ReactExecutionRuntime {
         streaming: true,
       }),
       writer: this.#writer(),
-      coordinator: new JobCoordinator({
-        store: this.options.store,
-        workerId: this.options.workerId,
-      }),
-    });
-    return runner.runJob({
-      job: input.job,
-      messages: current?.messages ?? [],
-      prepareMessages: async () => {
-        current = await input.loadContext();
-        return current.messages;
+      jobState: this.options.jobState,
+      input: {
+        job: input.job,
+        messages: current?.messages ?? [],
+        prepareMessages: async () => {
+          current = await input.loadContext();
+          return current.messages;
+        },
+        tools,
+        exclusiveToolNames: new Set(
+          this.options.tools.filter(tool => tool.exclusive).map(tool => tool.tool.name)
+        ),
+        validateToolCalls: candidate => this.#validateToolCalls(candidate.toolCalls),
+        validateFinalAnswer: () => this.#validateFinalAnswer(input.job.id),
+        toolExecutor,
+        outputIdFactory: outputId,
+        limits: this.#limits(input.job, input.signal),
+        initialIterationNo: checkpoint?.iterationNo ?? 0,
+        initialExecutedToolCalls: checkpoint?.executedToolCalls ?? 0,
+        resumeToolCalls,
       },
-      tools,
-      exclusiveToolNames: new Set(
-        this.options.tools.filter(tool => tool.exclusive).map(tool => tool.tool.name)
-      ),
-      validateToolCalls: candidate => this.#validateToolCalls(candidate.toolCalls),
-      validateFinalAnswer: () => this.#validateFinalAnswer(input.job.id),
-      toolExecutor,
-      outputIdFactory: outputId,
-      limits: this.#limits(input.job, input.signal),
-      initialIterationNo: checkpoint?.iterationNo ?? 0,
-      initialExecutedToolCalls: checkpoint?.executedToolCalls ?? 0,
-      resumeToolCalls,
     });
   }
 

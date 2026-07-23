@@ -20,15 +20,16 @@
 flowchart LR
     UI["Web UI"] -->|"HTTP command"| HTTP["NestJS HTTP"]
     HTTP --> AR["AgentRuntime"]
-    AR --> JC["JobCoordinator"]
-    AR --> JEO["JobExecutionOrchestrator"]
-    JEO --> RER["ReactExecutionRuntime"]
+    AR --> JL["JobLifecycle"]
+    AR --> JEM["JobExecutionManager"]
+    JEM --> JL
+    JEM --> RER["ReactExecution"]
     RER --> AL["AgentLoop"]
     AL --> LC["LangChain ChatModel"]
     AL --> TE["ToolExecutor"]
     TE --> TOOLS["Plan / HITL / FS / Shell / Web tools"]
 
-    JC --> STORE["PostgresAgentStore"]
+    JL --> STORE["PostgresAgentStore"]
     RER --> STORE
     TE --> STORE
     STORE --> PG[("PostgreSQL")]
@@ -51,6 +52,10 @@ flowchart LR
 2. **Plan 是事实，不是嵌套执行器**：PlanStep 只表达进度，不创建 StepRun 小循环。
 3. **先落库，后广播**：稳定状态先在事务内提交，再通过 SSE 通知前端。
 4. **恢复稳定边界，不恢复 JS 调用栈**：Checkpoint 保存循环所处阶段、计数器和工具批次，而不是序列化进程内对象。
+
+Server 作为 composition root 只创建一个 `JobLifecycle`，并将这个共享实例
+同时注入 `AgentRuntime` 和 `JobExecutionManager`。Job 的时钟、ID 和所有权
+配置因此只有一个来源。
 
 ---
 
@@ -123,22 +128,29 @@ src/
     realtime-event.ts
 
   orchestration/
-    agent-runtime.ts              对外命令、恢复扫描、后台调度
+    agent-runtime.ts              Session/Job 对外命令与 SSE
+    job-lifecycle.ts              Job 状态和事务命令
+    job-execution-manager.ts      恢复扫描、进程内执行、心跳和 Runtime 组合
     context-inspection.service.ts 调试查询编排
-    lifecycle/
-      job-coordinator.ts          Job 生命周期命令
-    execution/
-      job-execution-orchestrator.ts 执行所有权、心跳、组合 Runtime
-      execution-context-provider.ts 正式 Context + 压缩编排
 
   runtime/
-    react-execution-runtime.ts    将持久化事实接入 AgentLoop
-    agent-runner.ts               消费 LoopEvent 并持久化
-    audited-chat-model.ts         LangChain 调用审计
+    execution/
+      react-execution.ts          将持久化事实接入 AgentLoop
+      tool-executor.ts            工具开始执行、重放、运行上下文
+      helpers/
+        durable-loop-execution.helper.ts 消费并持久化 LoopEvent
+      types/
+        react-execution.types.ts  ReAct 执行共享类型
+    model/
+      audited-chat-model.ts       LangChain 调用审计
+    settings/
+      execution-limits.ts         Job 和 ReAct 共享执行限制
     runtime-event-writer.ts       事件到事务与 SSE 的桥梁
-    tool-executor.ts              工具开始执行、重放、运行上下文
-    context/                      分组、Bundle、预算、编译、压缩
-    loaders/                      Session、Job、ModelCall Context 数据加载
+    context/
+      react-context.service.ts    唯一 Context 核心入口
+      context-compiler.ts         Context 编译主链路
+      helpers/                    分组、选择、预算和材料组装
+      types/                      跨 Context 文件共享类型
 
   tools/
     plan-tools.ts
@@ -192,6 +204,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant PS as Local process supervisor
     participant RT as AgentRuntime
+    participant JEM as JobExecutionManager
     participant HTTP as NestJS/Fastify
 
     P->>ENV: 加载 .env
@@ -202,7 +215,8 @@ sequenceDiagram
     P->>PS: 扫描带 Runtime 身份标记的存活进程
     P->>P: 创建 Orchestrator/ContextPreview/AgentRuntime
     P->>RT: start()
-    RT->>RT: 启动 recovery scan
+    RT->>JEM: start()
+    JEM->>JEM: 扫描中断 Job 并启动定时恢复检查
     P->>HTTP: 创建应用、注册 Filter/CORS
     P->>HTTP: listen(HOST, PORT)
 ~~~
@@ -269,8 +283,8 @@ JOB_HEARTBEAT_MS 必须短于 JOB_LEASE_MS，否则启动直接失败。
 
 SIGINT 或 SIGTERM 时：
 
-1. AgentRuntime.stop 关闭恢复扫描；
-2. JobExecutionOrchestrator.shutdown abort 所有本进程执行；
+1. AgentRuntime.stop 委托 JobExecutionManager.shutdown；
+2. JobExecutionManager 关闭恢复扫描并 abort 所有本进程执行；
 3. ManagedProcessManager 关闭本地发现轮询，但不终止独立开发服务；
 4. 等待活动 Promise 收敛；
 5. 关闭 HTTP；
@@ -319,18 +333,18 @@ sequenceDiagram
     participant UI as Frontend
     participant HTTP as AgentController
     participant AR as AgentRuntime
-    participant JC as JobCoordinator
+    participant JL as JobLifecycle
     participant DB as PostgreSQL
-    participant BG as JobExecutionOrchestrator
+    participant BG as JobExecutionManager
 
     UI->>HTTP: POST /sessions/:id/jobs
     HTTP->>AR: createJob
-    AR->>JC: createJobWithUserMessage
-    JC->>DB: 单事务创建 Job + HumanMessage
-    DB-->>JC: createdJob, userMessage
-    JC-->>AR: CreateJobResult
-    AR->>JC: startJobExecution
-    JC->>DB: attemptNo + 1, 设置租约, 写 ready_for_model checkpoint
+    AR->>JL: createJob
+    JL->>DB: 单事务创建 Job + HumanMessage
+    DB-->>JL: createdJob, userMessage
+    JL-->>AR: CreateJobResult
+    AR->>JL: startJobExecution
+    JL->>DB: attemptNo + 1, 设置租约, 写 ready_for_model checkpoint
     DB-->>AR: running Job
     AR->>BG: 后台 executeJob
     AR-->>UI: running Job + Message
@@ -397,7 +411,7 @@ stateDiagram-v2
 
 ---
 
-## 8. JobExecutionOrchestrator：执行所有权
+## 8. JobExecutionManager：进程内执行管理
 
 该类不实现 ReAct 细节，负责：
 
@@ -406,9 +420,10 @@ stateDiagram-v2
 3. 定时续租；
 4. 验证 Job 状态、worker、attempt 和租约；
 5. 读取稳定 goal；
-6. 组合 ReactExecutionRuntime；
+6. 组合 ReactExecution；
 7. 将未被底层处理的异常转成 Job failed；
-8. 服务关闭时中止活动执行。
+8. 扫描因进程退出而中断的 Job，并标记为 recovery_required；
+9. 服务关闭时停止扫描、等待当前扫描结束并中止活动执行。
 
 默认执行限制：
 
@@ -426,7 +441,7 @@ stateDiagram-v2
 
 ---
 
-## 9. ReactExecutionRuntime：持久化事实接入 ReAct
+## 9. ReactExecution：持久化事实接入 ReAct
 
 每次 execute 前先读取最新 LoopCheckpoint。
 
@@ -594,7 +609,7 @@ sequenceDiagram
 
 ## 12. RuntimeEventWriter：从循环事件到事务
 
-AgentRunner 逐个消费 AgentLoop 事件。每处理完并持久化一个事件，才向 generator 请求下一个，形成自然背压。
+`executeDurableAgentLoop` 逐个消费 AgentLoop 事件。每处理完并持久化一个事件，才向 generator 请求下一个，形成自然背压。
 
 | Loop 事件 | 稳定写入 | SSE |
 | --- | --- | --- |
@@ -798,7 +813,7 @@ sequenceDiagram
 
 ### 16.3 recovery_required
 
-服务启动后定时扫描：
+`JobExecutionManager` 启动后立即扫描一次，之后定时扫描：
 
 1. abandon 已失去有效 lease 的 started ModelCall；
 2. 找 created 且长时间未启动的 Job；
@@ -1544,8 +1559,9 @@ ToolInvocation failed 会有 errorCode、errorMessage、errorDetails 和正式 T
 | 测试 | 主要覆盖 |
 | --- | --- |
 | agent-loop.test.ts | 流式、工具批次、限制、取消、组装 |
-| agent-runtime.test.ts | recovery scan、Resume、生命周期 |
-| job-coordinator.test.ts | 创建、Retry、幂等与冲突 |
+| agent-runtime.test.ts | 对外命令、Resume、启动/关闭委托 |
+| job-execution-manager.test.ts | 中断 Job 扫描与 recovery_required 迁移 |
+| job-lifecycle.test.ts | 创建、Retry、幂等与冲突 |
 | runtime-event-writer.test.ts | LoopEvent 到事务/SSE |
 | unified-react-plan.test.ts | update_plan 与统一 ReAct |
 | context-builder.test.ts | Group、Bundle、预算、Context |
@@ -1683,11 +1699,12 @@ sequenceDiagram
 
 1. src/domain/job.ts：Job 状态。
 2. src/orchestration/agent-runtime.ts：创建、取消、Retry、Resume。
-3. src/orchestration/lifecycle/job-coordinator.ts：生命周期事务入口。
-4. src/orchestration/execution/job-execution-orchestrator.ts：租约、心跳、后台执行。
-5. src/runtime/execution/react-execution-runtime.ts：Checkpoint 恢复。
+3. src/orchestration/job-lifecycle.ts：生命周期事务入口。
+4. src/orchestration/job-execution-manager.ts：租约、心跳、后台执行。
+5. src/runtime/execution/react-execution.ts：Checkpoint 恢复。
 6. src/agent-loop/agent-loop.ts：ReAct 算法。
-7. src/runtime/execution/agent-runner.ts 与 runtime-event-writer.ts：事件落库。
+7. src/runtime/execution/helpers/durable-loop-execution.helper.ts 与
+   runtime-event-writer.ts：事件落库。
 8. src/runtime/execution/tool-executor.ts：工具重放与副作用。
 9. src/tools/plan-tools.ts 与 hitl-tools.ts：Plan/HITL。
 10. src/runtime/context/react-context.service.ts：唯一 Context 入口。

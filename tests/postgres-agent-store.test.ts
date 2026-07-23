@@ -8,11 +8,11 @@ import {
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import { JobCoordinator } from '../src/orchestration/lifecycle/job-coordinator.js';
-import { AuditedChatModel } from '../src/runtime/execution/audited-chat-model.js';
+import { JobLifecycle } from '../src/orchestration/job-lifecycle.js';
+import { AuditedChatModel } from '../src/runtime/model/audited-chat-model.js';
+import { executeDurableAgentLoop } from '../src/runtime/execution/helpers/durable-loop-execution.helper.js';
 import { ToolExecutor } from '../src/runtime/execution/tool-executor.js';
 import { AgentLoop } from '../src/agent-loop/agent-loop.js';
-import { AgentRunner } from '../src/runtime/execution/agent-runner.js';
 import { RuntimeEventWriter } from '../src/runtime/runtime-event-writer.js';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
 import { checksumToolArguments } from '../src/runtime/transaction-commands.js';
@@ -106,19 +106,19 @@ describe('PostgresAgentStore Job transactions', () => {
 
   it('replays an identical clientRequestId and rejects payload drift', async () => {
     await store.createSession({ id: 'session_idempotent', nowMs: 10 });
-    const coordinator = new JobCoordinator({
+    const lifecycle = new JobLifecycle({
       store,
       workerId: 'worker_idempotent',
       clock: { nowMs: () => 20 },
     });
-    const first = await coordinator.createJob({
+    const first = await lifecycle.createJob({
       sessionId: 'session_idempotent',
       jobId: 'job_idempotent',
       userMessageId: 'message_idempotent',
       clientRequestId: 'request_idempotent',
       content: 'same payload',
     });
-    const replay = await coordinator.createJob({
+    const replay = await lifecycle.createJob({
       sessionId: 'session_idempotent',
       jobId: 'job_unused',
       userMessageId: 'message_unused',
@@ -128,7 +128,7 @@ describe('PostgresAgentStore Job transactions', () => {
     expect(replay).toEqual(first);
     expect(await store.listSessionMessages('session_idempotent')).toHaveLength(1);
 
-    await expect(coordinator.createJob({
+    await expect(lifecycle.createJob({
       sessionId: 'session_idempotent',
       clientRequestId: 'request_idempotent',
       content: 'changed payload',
@@ -566,21 +566,25 @@ describe('PostgresAgentStore Job transactions', () => {
       },
       clock: { nowMs: () => 36 },
     });
-    const coordinator = new JobCoordinator({
+    const jobLifecycle = new JobLifecycle({
       store,
       workerId: 'worker_direct',
       clock: { nowMs: () => 36 },
     });
-    const runner = new AgentRunner({ loop, writer, coordinator });
     let outputNo = 1;
 
-    const result = await runner.runJob({
-      job: startedJob,
-      messages: [],
-      tools: [definition],
-      toolExecutor,
-      outputIdFactory: () => `runtime_output_${outputNo++}`,
-      limits: { maxIterations: 4, maxToolCalls: 4, deadlineMs: 90 },
+    const result = await executeDurableAgentLoop({
+      loop,
+      writer,
+      jobState: jobLifecycle,
+      input: {
+        job: startedJob,
+        messages: [],
+        tools: [definition],
+        toolExecutor,
+        outputIdFactory: () => `runtime_output_${outputNo++}`,
+        limits: { maxIterations: 4, maxToolCalls: 4, deadlineMs: 90 },
+      },
     });
 
     expect(durableBeforeExternalExecution).toBe(true);
@@ -725,28 +729,31 @@ describe('PostgresAgentStore Job transactions', () => {
       },
       clock: { nowMs: () => 36 },
     });
-    const runner = new AgentRunner({
+    const execution = {
       loop,
       writer,
-      coordinator: new JobCoordinator({
+      jobState: new JobLifecycle({
         store,
         workerId: 'worker_invalid_tool_args',
         clock: { nowMs: () => 36 },
       }),
-    });
+    };
 
-    const result = await runner.runJob({
-      job: startedJob,
-      messages: [],
-      tools: [runtimeLookup.tool],
-      toolExecutor: new ToolExecutor({
-        store,
-        workerId: 'worker_invalid_tool_args',
-        tools: [runtimeLookup],
-        clock: { nowMs: () => 35 },
-      }),
-      outputIdFactory: () => `invalid_tool_output_${modelCalls + 1}`,
-      limits: { maxIterations: 3, maxToolCalls: 3, deadlineMs: 90 },
+    const result = await executeDurableAgentLoop({
+      ...execution,
+      input: {
+        job: startedJob,
+        messages: [],
+        tools: [runtimeLookup.tool],
+        toolExecutor: new ToolExecutor({
+          store,
+          workerId: 'worker_invalid_tool_args',
+          tools: [runtimeLookup],
+          clock: { nowMs: () => 35 },
+        }),
+        outputIdFactory: () => `invalid_tool_output_${modelCalls + 1}`,
+        limits: { maxIterations: 3, maxToolCalls: 3, deadlineMs: 90 },
+      },
     });
 
     if (result.type !== 'completed') {
@@ -808,25 +815,28 @@ describe('PostgresAgentStore Job transactions', () => {
       )),
       nowMs: 34,
     });
-    const runner = new AgentRunner({
+    const execution = {
       loop: new AgentLoop({ model, streaming: false, clock: { nowMs: () => 35 } }),
       writer: new RuntimeEventWriter({
         store, workerId: 'worker_disposition', tools: [], requireModelCallAudit: true,
         clock: { nowMs: () => 36 },
       }),
-      coordinator: new JobCoordinator({
+      jobState: new JobLifecycle({
         store, workerId: 'worker_disposition', clock: { nowMs: () => 36 },
       }),
-    });
+    };
     let outputNo = 0;
-    const result = await runner.runJob({
-      job: startedJob, messages: [], tools: [],
-      toolExecutor: { execute: async () => ({ type: 'completed', content: 'unused' }) },
-      outputIdFactory: () => `output_disposition_${++outputNo}`,
-      validateFinalAnswer: async candidate => candidate.content === 'premature'
-        ? { type: 'retry', feedback: 'Complete the durable work first.' }
-        : { type: 'accept' },
-      limits: { maxIterations: 3, maxToolCalls: 1, deadlineMs: 90 },
+    const result = await executeDurableAgentLoop({
+      ...execution,
+      input: {
+        job: startedJob, messages: [], tools: [],
+        toolExecutor: { execute: async () => ({ type: 'completed', content: 'unused' }) },
+        outputIdFactory: () => `output_disposition_${++outputNo}`,
+        validateFinalAnswer: async candidate => candidate.content === 'premature'
+          ? { type: 'retry', feedback: 'Complete the durable work first.' }
+          : { type: 'accept' },
+        limits: { maxIterations: 3, maxToolCalls: 1, deadlineMs: 90 },
+      },
     });
 
     expect(result).toMatchObject({ type: 'completed', message: { content: 'accepted final' } });
@@ -877,7 +887,7 @@ describe('PostgresAgentStore Job transactions', () => {
       },
       clock: { nowMs: () => writerNowMs },
     });
-    const coordinator = new JobCoordinator({
+    const jobLifecycle = new JobLifecycle({
       store,
       workerId: 'worker_hitl',
       clock: { nowMs: () => 40 },
@@ -887,7 +897,7 @@ describe('PostgresAgentStore Job transactions', () => {
         attemptId: () => 'attempt_hitl_2',
       },
     });
-    const waitingRunner = new AgentRunner({
+    const waitingExecution = {
       loop: new AgentLoop({
         streaming: false,
         model: auditedTestModel({
@@ -902,15 +912,18 @@ describe('PostgresAgentStore Job transactions', () => {
         clock: { nowMs: () => 35 },
       }),
       writer,
-      coordinator,
-    });
-    const waiting = await waitingRunner.runJob({
-      job: startedJob,
-      messages: [],
-      tools: [definition],
-      toolExecutor,
-      outputIdFactory: () => 'hitl_output_1',
-      limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+      jobState: jobLifecycle,
+    };
+    const waiting = await executeDurableAgentLoop({
+      ...waitingExecution,
+      input: {
+        job: startedJob,
+        messages: [],
+        tools: [definition],
+        toolExecutor,
+        outputIdFactory: () => 'hitl_output_1',
+        limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+      },
     });
     expect(waiting).toMatchObject({
       type: 'waiting_user_input',
@@ -919,7 +932,7 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     if (waiting.type !== 'waiting_user_input') throw new Error('expected waiting result');
 
-    const answered = await coordinator.answerUserInputRequest({
+    const answered = await jobLifecycle.answerUserInputRequest({
       requestId: waiting.requests[0].id,
       expectedVersion: waiting.requests[0].version,
       clientAnswerId: 'hitl_client_answer',
@@ -934,7 +947,7 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     writerNowMs = 42;
 
-    const resumeRunner = new AgentRunner({
+    const resumeExecution = {
       loop: new AgentLoop({
         streaming: false,
         model: auditedTestModel({
@@ -946,15 +959,18 @@ describe('PostgresAgentStore Job transactions', () => {
         clock: { nowMs: () => 41 },
       }),
       writer,
-      coordinator,
-    });
-    const resumed = await resumeRunner.runJob({
-      job: answered.job,
-      messages: [],
-      tools: [definition],
-      toolExecutor,
-      outputIdFactory: () => 'hitl_output_2',
-      limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+      jobState: jobLifecycle,
+    };
+    const resumed = await executeDurableAgentLoop({
+      ...resumeExecution,
+      input: {
+        job: answered.job,
+        messages: [],
+        tools: [definition],
+        toolExecutor,
+        outputIdFactory: () => 'hitl_output_2',
+        limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+      },
     });
     expect(resumed).toMatchObject({
       type: 'completed',

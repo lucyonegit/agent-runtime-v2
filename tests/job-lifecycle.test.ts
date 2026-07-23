@@ -1,20 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentJob, AgentMessage, AgentSession } from '../src/domain/index.js';
-import { JobCoordinator } from '../src/orchestration/lifecycle/job-coordinator.js';
-import { resolveExecutionLimits } from '../src/runtime/execution/execution-limits.js';
+import { JobLifecycle } from '../src/orchestration/job-lifecycle.js';
+import { resolveExecutionLimits } from '../src/runtime/settings/execution-limits.js';
 import {
   AgentStoreError,
   type AgentStore,
 } from '../src/storage/agent-store.js';
 
-describe('JobCoordinator', () => {
+describe('JobLifecycle', () => {
   it('generates an attempt and a bounded lease when execution starts', async () => {
     const store = createStore();
     const startedJob = { ...jobFixture, status: 'running', version: 1 } as AgentJob;
     vi.mocked(store.startJobExecution).mockResolvedValue(startedJob);
-    const coordinator = createCoordinator(store, 1_000);
+    const lifecycle = createLifecycle(store, 1_000);
 
-    await expect(coordinator.startJobExecution('job_1', 0)).resolves.toBe(startedJob);
+    await expect(lifecycle.startJobExecution('job_1', 0)).resolves.toBe(startedJob);
     expect(store.startJobExecution).toHaveBeenCalledWith({
       jobId: 'job_1',
       expectedVersion: 0,
@@ -37,9 +37,9 @@ describe('JobCoordinator', () => {
       clientRequestId: 'request_1',
     });
     vi.mocked(store.listSessionMessages).mockResolvedValue([messageFixture]);
-    const coordinator = createCoordinator(store, 1_000);
+    const lifecycle = createLifecycle(store, 1_000);
 
-    await expect(coordinator.createJob({
+    await expect(lifecycle.createJob({
       sessionId: 'session_1',
       content: 'hello',
       clientRequestId: 'request_1',
@@ -59,9 +59,9 @@ describe('JobCoordinator', () => {
     vi.mocked(store.getSession).mockResolvedValue(sessionFixture);
     vi.mocked(store.getJobByClientRequestId).mockResolvedValue(jobFixture);
     vi.mocked(store.listSessionMessages).mockResolvedValue([messageFixture]);
-    const coordinator = createCoordinator(store, 1_000);
+    const lifecycle = createLifecycle(store, 1_000);
 
-    await expect(coordinator.createJob({
+    await expect(lifecycle.createJob({
       sessionId: 'session_1',
       content: 'different',
       clientRequestId: 'request_1',
@@ -82,9 +82,9 @@ describe('JobCoordinator', () => {
       session: sessionFixture,
       job: { ...jobFixture, id: input.jobId, retryOfJobId: input.retryOfJobId },
     }));
-    const coordinator = createCoordinator(store, 1_000);
+    const lifecycle = createLifecycle(store, 1_000);
 
-    const retry = await coordinator.retryJob({ failedJobId: 'job_1' });
+    const retry = await lifecycle.retryJob({ failedJobId: 'job_1' });
     expect(retry.job).toMatchObject({ id: 'job_2', retryOfJobId: 'job_1' });
     expect(retry).not.toHaveProperty('message');
     expect(store.createRetryJob).toHaveBeenCalledWith(expect.objectContaining({
@@ -110,9 +110,9 @@ describe('JobCoordinator', () => {
       job: { ...jobFixture, id: input.jobId, retryOfJobId: input.retryOfJobId },
       message: { ...messageFixture, id: input.userMessageId, jobId: input.jobId },
     }));
-    const coordinator = createCoordinator(store, 1_000);
+    const lifecycle = createLifecycle(store, 1_000);
 
-    await coordinator.retryJob({ failedJobId: 'job_1', content: 'new goal' });
+    await lifecycle.retryJob({ failedJobId: 'job_1', content: 'new goal' });
 
     expect(store.createJobAndAppendUserMessage).toHaveBeenCalledWith(expect.objectContaining({
       content: 'new goal',
@@ -130,13 +130,13 @@ describe('JobCoordinator', () => {
       'CONCURRENCY_CONFLICT',
       'stale'
     ));
-    const coordinator = createCoordinator(store, 1_000);
+    const lifecycle = createLifecycle(store, 1_000);
 
-    await expect(coordinator.startJobExecution('job_1', 0)).rejects.toMatchObject({
+    await expect(lifecycle.startJobExecution('job_1', 0)).rejects.toMatchObject({
       code: 'concurrency_conflict',
       retryable: false,
     });
-    await expect(coordinator.renewJobExecutionLease(jobFixture)).rejects.toMatchObject({
+    await expect(lifecycle.renewJobExecutionLease(jobFixture)).rejects.toMatchObject({
       code: 'lease_lost',
       retryable: false,
     });
@@ -152,11 +152,11 @@ describe('execution limits', () => {
   });
 });
 
-function createCoordinator(store: AgentStore, nowMs: number): JobCoordinator {
+function createLifecycle(store: AgentStore, nowMs: number): JobLifecycle {
   let jobNo = 1;
   let messageNo = 1;
   let attemptNo = 1;
-  return new JobCoordinator({
+  return new JobLifecycle({
     store,
     workerId: 'worker_1',
     clock: { nowMs: () => nowMs },

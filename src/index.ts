@@ -8,10 +8,10 @@ export * from './agent-loop/loop-result.js';
 export * from './domain/index.js';
 export * from './orchestration/agent-runtime.js';
 export * from './orchestration/context-inspection.service.js';
-export * from './orchestration/execution/job-execution-orchestrator.js';
+export * from './orchestration/job-execution-manager.js';
 
 // Extension ports
-export * from './runtime/execution/execution-limits.js';
+export * from './runtime/settings/execution-limits.js';
 export * from './runtime/runtime-errors.js';
 export * from './runtime/runtime-event-writer.js';
 export * from './runtime/execution/tool-executor.js';

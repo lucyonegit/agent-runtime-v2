@@ -83,7 +83,7 @@ flowchart TD
     N --> A
 ```
 
-关键点：`ReactExecutionRuntime.runJob()` 的每次循环都会重新调用
+关键点：`ReactExecution.runJob()` 的每次循环都会重新调用
 `ReActContextService.buildForJob()`。压缩判断天然发生在每次 ReAct
 迭代，不需要额外的“长 Job 分支”。
 
@@ -616,7 +616,8 @@ Job 没有结束，也没有创建第二个 Job Summary。
 | 编译阶段共享类型 | `src/runtime/context/types/context-compiler.types.ts` |
 | Context Memory 类型 | `src/runtime/context/types/context-memory.types.ts` |
 | MessageGroup 类型 | `src/runtime/context/types/message-group.types.ts` |
-| ModelCall 用量审计 | `src/runtime/execution/audited-chat-model.ts` |
+| ModelCall 用量审计 | `src/runtime/model/audited-chat-model.ts` |
+| Durable Loop 事件消费 | `src/runtime/execution/helpers/durable-loop-execution.helper.ts` |
 
 ## 19. 已实现与后续
 

@@ -1,38 +1,38 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentJob, AgentJobError } from '../../domain/index.js';
+import type { AgentJob, AgentJobError } from '../domain/index.js';
 import {
   AgentStoreError,
   type AgentStore,
   type SaveUserInputAnswerResult,
   type CreateJobAndAppendUserMessageResult,
   type CreateRetryJobResult,
-} from '../../storage/agent-store.js';
+} from '../storage/agent-store.js';
 import {
   resolveExecutionLimits,
   type ExecutionLimits,
-} from '../../runtime/execution/execution-limits.js';
-import { RuntimeError, mapStoreError } from '../../runtime/runtime-errors.js';
-import { resolveJobGoalMessage, withGoalMessageId } from '../../runtime/job-goal.js';
+} from '../runtime/settings/execution-limits.js';
+import { RuntimeError, mapStoreError } from '../runtime/runtime-errors.js';
+import { resolveJobGoalMessage, withGoalMessageId } from '../runtime/job-goal.js';
 
-export interface RuntimeClock {
+export interface JobLifecycleClock {
   nowMs(): number;
 }
 
-export interface RuntimeIdGenerator {
+export interface JobLifecycleIds {
   jobId(): string;
   messageId(): string;
   attemptId(): string;
 }
 
-export interface JobCoordinatorOptions {
+export interface JobLifecycleOptions {
   store: AgentStore;
   workerId: string;
   limits?: Partial<ExecutionLimits>;
-  clock?: RuntimeClock;
-  ids?: RuntimeIdGenerator;
+  clock?: JobLifecycleClock;
+  ids?: JobLifecycleIds;
 }
 
-export interface CreateCoordinatedJobInput {
+export interface CreateJobInput {
   sessionId: string;
   content: string;
   clientRequestId?: string;
@@ -42,7 +42,7 @@ export interface CreateCoordinatedJobInput {
   userMessageId?: string;
 }
 
-export interface RetryCoordinatedJobInput {
+export interface RetryJobInput {
   failedJobId: string;
   content?: string;
   clientRequestId?: string;
@@ -50,7 +50,7 @@ export interface RetryCoordinatedJobInput {
   userMessageId?: string;
 }
 
-export type RetryCoordinatedJobResult =
+export type RetryJobResult =
   | CreateJobAndAppendUserMessageResult
   | CreateRetryJobResult;
 
@@ -62,14 +62,14 @@ export interface AnswerUserInputRequestInput {
   answerMessageId?: string;
 }
 
-export class JobCoordinator {
+export class JobLifecycle {
   readonly #store: AgentStore;
   readonly #workerId: string;
   readonly #limits: ExecutionLimits;
-  readonly #clock: RuntimeClock;
-  readonly #ids: RuntimeIdGenerator;
+  readonly #clock: JobLifecycleClock;
+  readonly #ids: JobLifecycleIds;
 
-  constructor(options: JobCoordinatorOptions) {
+  constructor(options: JobLifecycleOptions) {
     if (!options.workerId.trim()) throw new TypeError('workerId must not be empty.');
     this.#store = options.store;
     this.#workerId = options.workerId;
@@ -78,7 +78,7 @@ export class JobCoordinator {
     this.#ids = options.ids ?? randomIds;
   }
 
-  async createJob(input: CreateCoordinatedJobInput): Promise<CreateJobAndAppendUserMessageResult> {
+  async createJob(input: CreateJobInput): Promise<CreateJobAndAppendUserMessageResult> {
     const nowMs = this.#clock.nowMs();
     const jobId = input.jobId ?? this.#ids.jobId();
     const userMessageId = input.userMessageId ?? this.#ids.messageId();
@@ -157,7 +157,7 @@ export class JobCoordinator {
     if (!job.currentAttemptId || job.leaseOwner !== this.#workerId) {
       throw new RuntimeError(
         'lease_lost',
-        `Job ${JSON.stringify(job.id)} is not owned by this coordinator.`,
+        `Job ${JSON.stringify(job.id)} is not owned by this Job lifecycle instance.`,
         { details: { jobId: job.id, workerId: this.#workerId } }
       );
     }
@@ -206,7 +206,7 @@ export class JobCoordinator {
     }
   }
 
-  async retryJob(input: RetryCoordinatedJobInput): Promise<RetryCoordinatedJobResult> {
+  async retryJob(input: RetryJobInput): Promise<RetryJobResult> {
     const source = await this.#store.getJob(input.failedJobId);
     if (!source) {
       throw new RuntimeError(
@@ -278,7 +278,7 @@ export class JobCoordinator {
   }
 
   async #resolveIdempotentCreate(
-    input: CreateCoordinatedJobInput
+    input: CreateJobInput
   ): Promise<CreateJobAndAppendUserMessageResult> {
     const [session, job, messages] = await Promise.all([
       this.#store.getSession(input.sessionId),
@@ -308,11 +308,11 @@ export class JobCoordinator {
   }
 }
 
-const systemClock: RuntimeClock = {
+const systemClock: JobLifecycleClock = {
   nowMs: () => Date.now(),
 };
 
-const randomIds: RuntimeIdGenerator = {
+const randomIds: JobLifecycleIds = {
   jobId: () => `job_${randomUUID()}`,
   messageId: () => `message_${randomUUID()}`,
   attemptId: () => `attempt_${randomUUID()}`,

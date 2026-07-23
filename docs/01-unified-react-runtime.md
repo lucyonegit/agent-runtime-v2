@@ -8,7 +8,7 @@
 flowchart TD
     U["UserMessage"] --> O["AgentRuntime / Orchestration"]
     O --> J["创建并领取 Job"]
-    J --> R["ReactExecutionRuntime"]
+    J --> R["ReactExecution"]
     R --> C["加载完整 Job Context"]
     C --> L["AgentLoop"]
     L --> M["LangChain ChatModel"]
@@ -31,17 +31,37 @@ flowchart TD
 
 `src/orchestration` 只负责跨组件生命周期：
 
-- 创建、领取、续租、取消、失败和重试 Job。
-- 安排执行，不实现模型循环。
-- 用户回答 HITL 后决定是否恢复 Job。
-- 组合 Context 查询服务和 SessionView。
+- `AgentRuntime` 是 HTTP 使用的应用入口，只处理 Session/Job 用户命令和 SSE 发布。
+- `JobLifecycle` 将创建、开始、续期、取消、失败、Retry、Resume 映射为原子存储命令。
+- `JobExecutionManager` 管理恢复扫描、活动执行、AbortController、所有权续期，并组合 Runtime。
+- `ContextInspectionService` 是独立的只读调试查询，不参与正式 Job 执行。
+
+依赖方向固定为：
+
+```mermaid
+flowchart LR
+    HTTP["HTTP / Server"] --> AR["AgentRuntime"]
+    AR --> JL["JobLifecycle"]
+    AR --> JEM["JobExecutionManager"]
+    JEM --> JL
+    JEM --> RE["ReactExecution"]
+    RE --> AL["AgentLoop"]
+    CIS["ContextInspectionService"] --> CS["ReActContextService"]
+```
+
+`runtime` 不依赖 `orchestration`。`ReactExecution` 只通过
+`JobExecutionStatePort` 请求查询、失败和取消 Job，具体实现由编排层注入。
+
+Server 是 composition root：它只创建一个 `JobLifecycle` 实例，并将同一个
+实例同时注入 `AgentRuntime` 与 `JobExecutionManager`。前者用它执行用户命令，
+后者用它维护后台执行状态；两者不会各自维护一套 Job 生命周期配置。
 
 ### Runtime
 
 `src/runtime` 负责一次 Job 的执行机制：
 
-- `ReactExecutionRuntime` 装配模型、工具、审计、Context 和 AgentLoop。
-- `AgentRunner` 消费 LoopEvent，并保证事件先持久化再继续执行。
+- `ReactExecution` 装配模型、工具、审计、Context 和 AgentLoop。
+- `executeDurableAgentLoop` 消费 LoopEvent，并保证事件先持久化再继续执行。
 - `RuntimeEventWriter` 提交消息、工具结果、HITL 和 final，再发布 SSE。
 - `AuditedChatModel` 包装 LangChain Runnable，记录每次真实模型输入和结果。
 
