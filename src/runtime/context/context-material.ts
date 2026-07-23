@@ -1,6 +1,9 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import type { AgentContextSummaryType } from '../../domain/index.js';
+import type {
+  AgentContextSummaryType,
+  AgentPromptManifest,
+} from '../../domain/index.js';
 import type { MessageGroup } from './message-group-builder.js';
 
 type ContextSegment =
@@ -68,6 +71,8 @@ export interface ContextModelBudget {
   name: string;
   maxContextTokens: number;
   reservedOutputTokens: number;
+  /** Provider/deployment input ceiling after reserving this call's output. */
+  inputTokenLimit?: number;
   /** P95(actual / estimated) learned from completed calls for this model. */
   tokenCalibrationFactor?: number;
   /** Fixed framing/tool-schema error observed in historical calls. */
@@ -88,6 +93,7 @@ export interface ContextMaterial {
     purpose: string;
     contextRulesVersion: string;
     systemPromptVersion: string;
+    prompt?: AgentPromptManifest;
   };
   blockedDiagnostics?: Array<{
     messageId: string;
@@ -101,8 +107,6 @@ export interface ContextMaterial {
     minimumRecentGroups?: number;
     /** Goal and other protocol-critical messages which must remain raw. */
     protectedMessageIds?: string[];
-    /** Start compacting before the selection reaches the hard model limit. */
-    compactAtRatio?: number;
     candidateMessageIds?: string[];
   };
 }

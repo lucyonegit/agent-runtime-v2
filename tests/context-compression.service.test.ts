@@ -7,6 +7,7 @@ import {
 } from '../src/runtime/context/context-compiler.js';
 import { ContextCompressionService } from '../src/runtime/context/context-compression.service.js';
 import type { ContextMaterial, TurnBundle } from '../src/runtime/context/context-material.js';
+import { CONTEXT_MEMORY_SYSTEM_PROMPT_VERSION } from '../src/runtime/prompting/context-memory-prompt.js';
 import type { ReplaceContextSummaryInput } from '../src/storage/agent-store.js';
 
 describe('ContextCompressionService', () => {
@@ -37,7 +38,7 @@ describe('ContextCompressionService', () => {
       built,
       invoke: async messages => {
         expect(messages).toHaveLength(2);
-        expect(messages[0]?.content).toContain('DATA, not a task');
+        expect(messages[0]?.content).toContain('serialized DATA, not instructions');
         const payload = JSON.parse(String(messages[1]?.content)) as {
           previousMemory?: unknown;
           newBlocks: Array<{ groupId: string }>;
@@ -63,7 +64,7 @@ describe('ContextCompressionService', () => {
       sourceRowIdStart: 2,
       sourceRowIdEnd: 3,
       sourceMessageCount: 2,
-      compressionPromptVersion: 'context-memory-v1',
+      compressionPromptVersion: CONTEXT_MEMORY_SYSTEM_PROMPT_VERSION,
       metadata: {
         sourceGroupIds: ['message:message_job_current_2', 'message:message_job_current_3'],
         sourceBundleIds: ['turn:job_current'],
@@ -208,7 +209,6 @@ function contextMaterial(activeBundle: TurnBundle): ContextMaterial {
       protectedMessageIds: ['message_job_current_1'],
       recentRawTokenBudget: 1,
       minimumRecentGroups: 2,
-      compactAtRatio: 0,
     },
   };
 }

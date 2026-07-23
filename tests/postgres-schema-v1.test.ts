@@ -11,11 +11,23 @@ import {
   applyAgentRuntimeSchemaV2,
 } from '../src/storage/postgres/schema-v2.js';
 import {
-  AGENT_RUNTIME_SCHEMA_NAME,
+  AGENT_RUNTIME_SCHEMA_NAME as AGENT_RUNTIME_SCHEMA_V3_NAME,
   AGENT_RUNTIME_SCHEMA_V3_CHECKSUM,
-  AGENT_RUNTIME_SCHEMA_VERSION,
+  AGENT_RUNTIME_SCHEMA_VERSION as AGENT_RUNTIME_SCHEMA_V3_VERSION,
   applyAgentRuntimeSchemaV3,
 } from '../src/storage/postgres/schema-v3.js';
+import {
+  AGENT_RUNTIME_SCHEMA_NAME as AGENT_RUNTIME_SCHEMA_V4_NAME,
+  AGENT_RUNTIME_SCHEMA_V4_CHECKSUM,
+  AGENT_RUNTIME_SCHEMA_VERSION as AGENT_RUNTIME_SCHEMA_V4_VERSION,
+  applyAgentRuntimeSchemaV4,
+} from '../src/storage/postgres/schema-v4.js';
+import {
+  AGENT_RUNTIME_SCHEMA_NAME,
+  AGENT_RUNTIME_SCHEMA_V5_CHECKSUM,
+  AGENT_RUNTIME_SCHEMA_VERSION,
+  applyAgentRuntimeSchemaV5,
+} from '../src/storage/postgres/schema-v5.js';
 import {
   assertAgentRuntimeSchemaVersion,
   migrateAgentRuntimeSchema,
@@ -42,7 +54,7 @@ const EXPECTED_TABLES = [
   'agent_user_input_requests',
 ];
 
-describe('canonical PostgreSQL schema v3', () => {
+describe('canonical PostgreSQL schema v5', () => {
   let adminPool: Pool | undefined;
   let pool: Pool | undefined;
   let client: PoolClient | undefined;
@@ -59,6 +71,8 @@ describe('canonical PostgreSQL schema v3', () => {
     await applyAgentRuntimeSchemaV1(client, 1_000);
     await applyAgentRuntimeSchemaV2(client, 1_001);
     await applyAgentRuntimeSchemaV3(client, 1_002);
+    await applyAgentRuntimeSchemaV4(client, 1_003);
+    await applyAgentRuntimeSchemaV5(client, 1_004);
   });
 
   afterEach(async () => {
@@ -101,10 +115,22 @@ describe('canonical PostgreSQL schema v3', () => {
         applied_at_ms: '1001',
       },
       {
-        version: AGENT_RUNTIME_SCHEMA_VERSION,
-        name: AGENT_RUNTIME_SCHEMA_NAME,
+        version: AGENT_RUNTIME_SCHEMA_V3_VERSION,
+        name: AGENT_RUNTIME_SCHEMA_V3_NAME,
         checksum: AGENT_RUNTIME_SCHEMA_V3_CHECKSUM,
         applied_at_ms: '1002',
+      },
+      {
+        version: AGENT_RUNTIME_SCHEMA_V4_VERSION,
+        name: AGENT_RUNTIME_SCHEMA_V4_NAME,
+        checksum: AGENT_RUNTIME_SCHEMA_V4_CHECKSUM,
+        applied_at_ms: '1003',
+      },
+      {
+        version: AGENT_RUNTIME_SCHEMA_VERSION,
+        name: AGENT_RUNTIME_SCHEMA_NAME,
+        checksum: AGENT_RUNTIME_SCHEMA_V5_CHECKSUM,
+        applied_at_ms: '1004',
       },
     ]);
   });
@@ -184,8 +210,8 @@ describe('canonical PostgreSQL schema v3', () => {
     await expect(assertAgentRuntimeSchemaVersion(client!)).resolves.toEqual({
       version: AGENT_RUNTIME_SCHEMA_VERSION,
       name: AGENT_RUNTIME_SCHEMA_NAME,
-      checksum: AGENT_RUNTIME_SCHEMA_V3_CHECKSUM,
-      appliedAtMs: 1_002,
+      checksum: AGENT_RUNTIME_SCHEMA_V5_CHECKSUM,
+      appliedAtMs: 1_004,
     });
   });
 
@@ -243,7 +269,7 @@ describe('canonical PostgreSQL schema v3', () => {
 
     await expect(migrateAgentRuntimeSchema(client!, 2_000)).resolves.toMatchObject({
       version: AGENT_RUNTIME_SCHEMA_VERSION,
-      checksum: AGENT_RUNTIME_SCHEMA_V3_CHECKSUM,
+      checksum: AGENT_RUNTIME_SCHEMA_V5_CHECKSUM,
       appliedAtMs: 2_000,
     });
   });

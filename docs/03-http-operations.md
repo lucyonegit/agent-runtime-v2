@@ -17,6 +17,9 @@
 | `GET` | `/sessions/:sessionId/context-preview` | 预览下一轮 conversation Context |
 | `GET` | `/jobs/:jobId/context-preview` | 预览 Job Context |
 | `GET` | `/model-calls/:id/context` | 读取历史调用的精确输入 |
+| `GET` | `/managed-processes/:processId` | 查询常驻服务状态 |
+| `GET` | `/managed-processes/:processId/logs` | 读取常驻服务最近日志 |
+| `POST` | `/managed-processes/:processId/stop` | 安全停止常驻服务 |
 
 DELETE 请求不发送 JSON body；客户端只有在 body 存在时才设置 `content-type: application/json`。
 
@@ -27,17 +30,17 @@ Server 入口使用 `dotenv/config`。主要变量：
 ```text
 DATABASE_URL=postgresql://...
 DASHSCOPE_API_KEY=...
-OPENAI_MODEL=qwen-max
+OPENAI_MODEL=qwen3.7-max
 OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-HOST=127.0.0.1
-PORT=3000
+AGENT_SERVER_HOST=127.0.0.1
+AGENT_SERVER_PORT=3000
 ```
 
 `.env` 必须被 Git 忽略，日志和调试接口不得输出 API Key。
 
 ## 3. Schema
 
-正常启动只执行只读 schema guard，不自动迁移或重置。当前 schema version 为 3，名字为 `explicit-job-recovery`；v1 是 `unified-job-react-canonical`，v2 增加 durable ReAct checkpoint，v3 增加显式 `recovery_required` 状态。
+正常启动只执行只读 schema guard，不自动迁移或重置。当前 schema version 为 5，名字为 `local-workspace-process-supervision`；v1 是 `unified-job-react-canonical`，v2 增加 durable ReAct checkpoint，v3 增加显式 `recovery_required` 状态，v4 是曾引入进程表的历史迁移，v5 删除该表并改为 OS 发现、本地 spec 与内存 registry。
 
 开发环境显式重置：
 
@@ -82,9 +85,12 @@ npm run build
 9. Session 删除返回 204，且不发送空 JSON body。
 10. 服务中断后过期 Job 只进入 `recovery_required`，不会自动执行；用户调用 Resume 后按 Checkpoint 继续。
 11. read_only/idempotent 工具可从 interrupted 重跑；side_effecting 工具中断后进入 unknown 并阻止盲目重放。
+12. start_process 自动分配未占用端口，只有 TCP ready 后才返回 running；Runtime 重启后通过进程命令行标记和本地 ownershipToken 发现存活 supervisor，不重复执行命令。
+13. 同一 Session 的前端刷新后，SessionView 的实时 managedProcesses overlay 与 SSE 的 managed_process.upserted 最终收敛一致；Stop 操作会在发送信号前重新核验身份。
 
 ## 6. 当前边界
 
 - Runtime 暂不支持模型流式生成 tool-call JSON 参数时实时展示文件 content delta；工具调用只有在参数组装完成后才能持久化并执行。
 - Session Context 压缩保留业务摘要和当前 Job bundle；不是 provider checkpoint。
 - Plan 是用户可见的 durable progress，不是 DAG 调度器。需要真正并行/分布式 DAG 时应新增独立执行模型，而不是重新把 StepRun 塞回 ReAct 内部。
+- start_process 目前按本机 supervisor/进程组监管，只适用于单机 Runtime；它不会把本机 PID 假装成跨节点 durable state。多节点部署需要替换为容器或外部进程调度后端。

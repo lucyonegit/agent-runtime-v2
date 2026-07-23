@@ -10,6 +10,7 @@ import type { RuntimeEventPublisher } from '../../runtime/runtime-event-writer.j
 import type { RuntimeTool } from '../../runtime/tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { ExecutionContextProvider } from './execution-context-provider.js';
+import { buildStableEnvironmentContext } from '../../runtime/prompting/job-agent-prompt.js';
 
 export interface JobExecutionOrchestratorOptions {
   store: AgentStore;
@@ -22,6 +23,7 @@ export interface JobExecutionOrchestratorOptions {
   sandboxRoot?: string;
   maxContextTokens?: number;
   reservedOutputTokens?: number;
+  inputTokenLimit?: number;
   maxIterations?: number;
   maxToolCalls?: number;
   executionDeadlineMs?: number;
@@ -29,6 +31,8 @@ export interface JobExecutionOrchestratorOptions {
   jobHeartbeatMs?: number;
   jobSystemPrompt: string;
   systemPromptVersion: string;
+  promptId: string;
+  promptVersion: number;
 }
 
 /**
@@ -48,9 +52,14 @@ export class JobExecutionOrchestrator implements JobExecutionService {
   readonly #contexts: ExecutionContextProvider;
 
   constructor(options: JobExecutionOrchestratorOptions) {
+    const maxContextTokens = options.maxContextTokens ?? 128_000;
+    const reservedOutputTokens = options.reservedOutputTokens ?? 4_096;
+    const inputTokenLimit = options.inputTokenLimit
+      ?? maxContextTokens - reservedOutputTokens;
     this.#options = {
-      maxContextTokens: 128_000,
-      reservedOutputTokens: 4_096,
+      maxContextTokens,
+      reservedOutputTokens,
+      inputTokenLimit,
       maxIterations: 24,
       maxToolCalls: 48,
       executionDeadlineMs: 15 * 60_000,
@@ -66,13 +75,20 @@ export class JobExecutionOrchestrator implements JobExecutionService {
       name: this.#options.modelName,
       maxContextTokens: this.#options.maxContextTokens,
       reservedOutputTokens: this.#options.reservedOutputTokens,
+      inputTokenLimit: this.#options.inputTokenLimit,
     };
     const executionContext = new ExecutionContextLoader({
       store: this.#options.store,
       systemPrompt: this.#options.jobSystemPrompt,
       systemPromptVersion: this.#options.systemPromptVersion,
+      promptId: this.#options.promptId,
+      promptVersion: this.#options.promptVersion,
       model: modelBudget,
       toolSchemas: this.#options.tools.map(tool => tool.tool),
+      stableContext: sessionId => buildStableEnvironmentContext({
+        sandboxRoot: this.#options.sandboxRoot ?? '.agent-sandbox',
+        sessionId,
+      }),
     });
     this.#react = new ReactExecutionRuntime({
       store: this.#options.store,

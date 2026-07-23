@@ -21,6 +21,8 @@ import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store
 import { applyAgentRuntimeSchemaV1 } from '../src/storage/postgres/schema-v1.js';
 import { applyAgentRuntimeSchemaV2 } from '../src/storage/postgres/schema-v2.js';
 import { applyAgentRuntimeSchemaV3 } from '../src/storage/postgres/schema-v3.js';
+import { applyAgentRuntimeSchemaV4 } from '../src/storage/postgres/schema-v4.js';
+import { applyAgentRuntimeSchemaV5 } from '../src/storage/postgres/schema-v5.js';
 import type {
   RuntimeTool,
   RuntimeToolContext,
@@ -48,6 +50,8 @@ describe('PostgresAgentStore Job transactions', () => {
       await applyAgentRuntimeSchemaV1(client, 1_000);
       await applyAgentRuntimeSchemaV2(client, 1_001);
       await applyAgentRuntimeSchemaV3(client, 1_002);
+      await applyAgentRuntimeSchemaV4(client, 1_003);
+      await applyAgentRuntimeSchemaV5(client, 1_004);
     } finally {
       client.release();
     }
@@ -606,7 +610,34 @@ describe('PostgresAgentStore Job transactions', () => {
       'message.upserted',
       'job.upserted',
     ]);
-    const directView = await new SessionView(store, { nowMs: () => 50 }).load('session_direct');
+    const directView = await new SessionView(
+      store,
+      { nowMs: () => 50 },
+      {
+        async listSessionProcesses(sessionId) {
+          return [{
+            id: 'process_live',
+            sessionId,
+            jobId: 'job_direct',
+            toolInvocationId: 'runtime_invocation_1',
+            name: 'preview',
+            command: 'npm run dev',
+            cwd: 'code/app',
+            status: 'running' as const,
+            pid: 1234,
+            processGroupId: 1234,
+            host: '127.0.0.1',
+            port: 4100,
+            url: 'http://127.0.0.1:4100',
+            logPath: '.runtime/processes/process_live/process.log',
+            version: 0,
+            createdAtMs: 45,
+            startedAtMs: 46,
+            updatedAtMs: 47,
+          }];
+        },
+      }
+    ).load('session_direct');
     expect(directView.artifacts).toEqual([
       expect.objectContaining({
         id: 'artifact_direct_1', logicalPath: 'docs/lookup.md', revision: 1,
@@ -614,8 +645,9 @@ describe('PostgresAgentStore Job transactions', () => {
       }),
     ]);
     expect(directView).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       generatedAtMs: 50,
+      managedProcesses: [{ id: 'process_live', status: 'running', port: 4100 }],
       cursor: { latestMessageRowId: 4 },
       timeline: {
         flat: [

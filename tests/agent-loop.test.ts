@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
-import { AIMessageChunk } from '@langchain/core/messages';
+import { AIMessageChunk, type BaseMessage } from '@langchain/core/messages';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool, type StructuredToolInterface } from '@langchain/core/tools';
 import {
@@ -33,6 +33,40 @@ describe('AgentLoop with LangChain messages', () => {
       },
     ]);
     expect(run.result).toEqual({ type: 'completed', outputId: 'output_1', content: 'hello' });
+  });
+
+  it('discards output stopped by the configured token limit', async () => {
+    const loop = new AgentLoop({
+      model: streamingModel(async function* () {
+        yield chunk('partial answer');
+        yield new AIMessageChunk({
+          content: '',
+          response_metadata: { finish_reason: 'length' },
+        });
+      }),
+    });
+
+    const run = await consume(loop.run(loopInput()));
+
+    expect(run.events).toEqual([
+      {
+        type: LOOP_EVENT_TYPES.ModelOutputDelta,
+        outputId: 'output_1',
+        channel: 'normal',
+        delta: 'partial answer',
+      },
+      {
+        type: LOOP_EVENT_TYPES.ModelOutputRejected,
+        outputId: 'output_1',
+        reason: 'Model output reached its configured token limit and was discarded.',
+      },
+    ]);
+    expect(run.result).toEqual({
+      type: 'failed',
+      code: 'model_output_truncated',
+      message: 'Model output reached its configured token limit and was discarded.',
+      details: { outputTokenLimitReached: true },
+    });
   });
 
   it('rejects a premature final answer and continues in the same ReAct loop', async () => {
@@ -71,6 +105,12 @@ describe('AgentLoop with LangChain messages', () => {
     });
     expect(validateFinalAnswer).toHaveBeenCalledTimes(2);
     expect(Array.isArray(observedInputs[1]) && observedInputs[1].length).toBe(2);
+    if (!Array.isArray(observedInputs[1])) throw new Error('Expected a message list.');
+    const correction = (observedInputs[1] as BaseMessage[])[1];
+    expect(correction?.getType()).toBe('system');
+    expect(correction?.content).toContain(
+      '<runtime_correction code=\"final_answer.rejected\">'
+    );
   });
 
   it('corrects a mixed exclusive-tool batch without failing the Job', async () => {

@@ -5,18 +5,25 @@ import { createBrowserTools } from './browser-tools.js';
 import { createFilesystemTools } from './filesystem-tools.js';
 import { createHitlTools } from './hitl-tools.js';
 import { createShellTools } from './shell-tool.js';
+import { createManagedProcessTools } from './process-tools.js';
+import type { ManagedProcessManager } from './managed-process-manager.js';
+
+export {
+  ManagedProcessManager,
+} from './managed-process-manager.js';
 
 export {
   removeSessionSandbox,
 } from './sandbox.js';
 
-export function createRuntimeTools(): RuntimeTool[] {
+export function createRuntimeTools(options: { managedProcessManager?: ManagedProcessManager } = {}): RuntimeTool[] {
   return [
     ...createHitlTools(),
     ...createBasicTools(),
     ...createArtifactTools(),
     ...createFilesystemTools(),
     ...createShellTools(),
+    ...(options.managedProcessManager ? createManagedProcessTools(options.managedProcessManager) : []),
     ...createBrowserTools(),
   ];
 }

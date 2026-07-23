@@ -1,8 +1,21 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, dirname, extname, join, relative } from 'node:path';
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import type { RuntimeTool } from '../runtime/tool-executor.js';
+import {
+  RuntimeToolExecutionError,
+  type RuntimeTool,
+  type RuntimeToolContext,
+} from '../runtime/tool-executor.js';
+import { estimateTextTokens } from '../runtime/context/token-budget.js';
 import { resolveWorkspacePath, workspaceRoot } from './sandbox.js';
 import {
   jsonToolOutput,
@@ -24,6 +37,60 @@ interface CodeSymbol {
   path: string;
   line: number;
 }
+
+export const FILE_WRITE_MAX_CHARACTERS = 6_000;
+export const FILE_WRITE_MAX_ESTIMATED_TOKENS = 2_000;
+
+export const FILE_WRITE_LIMIT_MESSAGE = [
+  `File content exceeds the single-call limit of ${FILE_WRITE_MAX_CHARACTERS} characters`,
+  `or ${FILE_WRITE_MAX_ESTIMATED_TOKENS} estimated tokens.`,
+  'Split code into smaller files, or use start_file_write followed by append_file_chunk.',
+].join(' ');
+
+interface FileWriteChunk {
+  index: number;
+  size: number;
+  checksum: string;
+}
+
+interface OpenFileWriteManifest {
+  schemaVersion: 1;
+  status: 'open';
+  writeId: string;
+  sessionId: string;
+  path: string;
+  targetExisted: boolean;
+  nextChunkIndex: number;
+  chunks: FileWriteChunk[];
+}
+
+interface CompletedFileWriteManifest {
+  schemaVersion: 1;
+  status: 'completed';
+  writeId: string;
+  sessionId: string;
+  path: string;
+  targetExisted: boolean;
+  nextChunkIndex: number;
+  chunks: FileWriteChunk[];
+  finalizationToolInvocationId: string;
+  result: CompletedFileWriteResult;
+  artifact: ReturnType<typeof createFileArtifactDraft> | undefined;
+}
+
+type FileWriteManifest = OpenFileWriteManifest | CompletedFileWriteManifest;
+
+interface CompletedFileWriteResult {
+  writeId: string;
+  path: string;
+  acceptedChunkIndex: number;
+  status: 'completed';
+  size: number;
+  checksum: string;
+  operation: 'created' | 'updated';
+}
+
+const fileWriteLocks = new Map<string, Promise<void>>();
 
 export function createFilesystemTools(): RuntimeTool[] {
   const listFiles = new DynamicStructuredTool({
@@ -80,7 +147,14 @@ export function createFilesystemTools(): RuntimeTool[] {
 
   const writeFileTool = new DynamicStructuredTool({
     name: 'write_file',
-    description: 'Write a UTF-8 file inside the shared Session workspace. Use code/ for webpages, applications, scripts, and source code; use docs/, artifacts/, downloads/, or tmp/ only when their category matches the requested deliverable.',
+    description: [
+      'Write one complete UTF-8 file inside the shared Session workspace.',
+      `The complete content must not exceed ${FILE_WRITE_MAX_CHARACTERS} characters`,
+      `or ${FILE_WRITE_MAX_ESTIMATED_TOKENS} estimated tokens.`,
+      'Prefer splitting large implementations into smaller modules/files.',
+      'Never truncate content. For one indivisible large file, use start_file_write and append_file_chunk.',
+      'Use code/ for webpages, applications, scripts, and source code; use docs/, artifacts/, downloads/, or tmp/ only when their category matches the requested deliverable.',
+    ].join(' '),
     schema: {
       type: 'object',
       properties: {
@@ -88,7 +162,11 @@ export function createFilesystemTools(): RuntimeTool[] {
           type: 'string',
           description: 'Workspace-relative file path. Webpages and source code must use code/, for example code/index.html.',
         },
-        content: { type: 'string', description: 'Complete file content.' },
+        content: {
+          type: 'string',
+          maxLength: FILE_WRITE_MAX_CHARACTERS,
+          description: `Complete file content. Maximum ${FILE_WRITE_MAX_CHARACTERS} characters; never truncate.`,
+        },
       },
       required: ['path', 'content'],
       additionalProperties: false,
@@ -98,26 +176,19 @@ export function createFilesystemTools(): RuntimeTool[] {
       const values = input as Record<string, unknown>;
       const path = stringArgument(values, 'path');
       const content = stringArgument(values, 'content');
+      assertFileWriteContentLimit(content);
       const context = runtimeContext(config);
       const filePath = await resolveWorkspacePath(context, path);
       const existed = await stat(filePath).then(() => true, () => false);
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, content, 'utf8');
-      const area = artifactArea(path);
-      const size = Buffer.byteLength(content, 'utf8');
-      const checksum = createHash('sha256').update(content).digest('hex');
-      const artifacts = area ? [{
-        kind: 'file' as const,
-        area,
-        title: basename(path),
-        fileName: basename(path),
-        logicalPath: path,
-        storagePath: `.revisions/${context.toolInvocationId}/${path}`,
-        mediaType: mediaTypeForPath(path),
-        size,
-        checksum,
-        metadata: { operation: existed ? 'updated' : 'created' } as Record<string, unknown>,
-      }] : [];
+      const artifact = createFileArtifactDraft({
+        context,
+        path,
+        content,
+        operation: existed ? 'updated' : 'created',
+      });
+      const artifacts = artifact ? [artifact] : [];
       if (artifacts.length > 0) {
         const revisionPath = await resolveWorkspacePath(
           context,
@@ -132,10 +203,113 @@ export function createFilesystemTools(): RuntimeTool[] {
       }
       return jsonToolOutput({
         path,
-        size,
+        size: Buffer.byteLength(content, 'utf8'),
         operation: existed ? 'updated' : 'created',
         ...(artifacts.length > 0 ? { artifacts } : {}),
       });
+    },
+  });
+
+  const startFileWrite = new DynamicStructuredTool({
+    name: 'start_file_write',
+    description: [
+      'Start an atomic, chunked write for one UTF-8 file that cannot fit in write_file.',
+      `Provide the first chunk only, limited to ${FILE_WRITE_MAX_CHARACTERS} characters`,
+      `or ${FILE_WRITE_MAX_ESTIMATED_TOKENS} estimated tokens.`,
+      'The destination file is not changed and no Artifact is created until append_file_chunk is called with finalize=true.',
+      'Call this tool alone, wait for its ToolMessage, then use the returned writeId.',
+    ].join(' '),
+    schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Workspace-relative destination file path.',
+        },
+        content: {
+          type: 'string',
+          maxLength: FILE_WRITE_MAX_CHARACTERS,
+          description: `First file chunk. Maximum ${FILE_WRITE_MAX_CHARACTERS} characters.`,
+        },
+      },
+      required: ['path', 'content'],
+      additionalProperties: false,
+    } as const,
+    responseFormat: 'content_and_artifact',
+    func: async (input, _runManager, config) => {
+      const values = input as Record<string, unknown>;
+      const path = stringArgument(values, 'path');
+      const content = stringArgument(values, 'content');
+      assertFileWriteContentLimit(content);
+      const context = runtimeContext(config);
+      const writeId = createFileWriteId(context.idempotencyKey);
+      return jsonToolOutput(await withFileWriteLock(writeId, async () => (
+        startChunkedFileWrite({ context, writeId, path, content })
+      )));
+    },
+  });
+
+  const appendFileChunk = new DynamicStructuredTool({
+    name: 'append_file_chunk',
+    description: [
+      'Append exactly one sequential chunk to a file write created by start_file_write.',
+      `Each chunk is limited to ${FILE_WRITE_MAX_CHARACTERS} characters`,
+      `or ${FILE_WRITE_MAX_ESTIMATED_TOKENS} estimated tokens.`,
+      'Use the exact nextChunkIndex returned by the previous ToolMessage.',
+      'Set finalize=true only on the last chunk. Finalization atomically replaces the destination and creates one Artifact.',
+      'Call this tool alone and wait for its ToolMessage before sending another chunk.',
+    ].join(' '),
+    schema: {
+      type: 'object',
+      properties: {
+        writeId: {
+          type: 'string',
+          pattern: '^file_write_[a-f0-9]{32}$',
+          description: 'Stable write ID returned by start_file_write.',
+        },
+        chunkIndex: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Exact nextChunkIndex returned by the previous chunk result.',
+        },
+        content: {
+          type: 'string',
+          maxLength: FILE_WRITE_MAX_CHARACTERS,
+          description: `Next file chunk. Maximum ${FILE_WRITE_MAX_CHARACTERS} characters.`,
+        },
+        finalize: {
+          type: 'boolean',
+          description: 'Set true only for the final chunk.',
+        },
+      },
+      required: ['writeId', 'chunkIndex', 'content', 'finalize'],
+      additionalProperties: false,
+    } as const,
+    responseFormat: 'content_and_artifact',
+    func: async (input, _runManager, config) => {
+      const values = input as Record<string, unknown>;
+      const writeId = stringArgument(values, 'writeId');
+      const chunkIndex = numberArgument(values, 'chunkIndex', -1);
+      const content = stringArgument(values, 'content');
+      const finalize = values.finalize === true;
+      assertFileWriteId(writeId);
+      assertFileWriteContentLimit(content);
+      if (!Number.isSafeInteger(chunkIndex) || chunkIndex < 1) {
+        throw new RuntimeToolExecutionError(
+          'file_chunk_index_invalid',
+          'chunkIndex must be a positive integer starting at 1.'
+        );
+      }
+      const context = runtimeContext(config);
+      return jsonToolOutput(await withFileWriteLock(writeId, async () => (
+        appendChunkedFileWrite({
+          context,
+          writeId,
+          chunkIndex,
+          content,
+          finalize,
+        })
+      )));
     },
   });
 
@@ -198,10 +372,458 @@ export function createFilesystemTools(): RuntimeTool[] {
   return [
     { tool: listFiles, sideEffectLevel: 'read_only' },
     { tool: readFileTool, sideEffectLevel: 'read_only' },
-    { tool: writeFileTool, sideEffectLevel: 'idempotent', requiresFreshContext: true },
+    {
+      tool: writeFileTool,
+      sideEffectLevel: 'idempotent',
+      requiresFreshContext: true,
+      argumentLimits: [fileContentArgumentLimit()],
+    },
+    {
+      tool: startFileWrite,
+      sideEffectLevel: 'idempotent',
+      exclusive: true,
+      requiresFreshContext: true,
+      argumentLimits: [fileContentArgumentLimit()],
+    },
+    {
+      tool: appendFileChunk,
+      sideEffectLevel: 'idempotent',
+      exclusive: true,
+      requiresFreshContext: true,
+      argumentLimits: [fileContentArgumentLimit()],
+    },
     { tool: grepFiles, sideEffectLevel: 'read_only' },
     { tool: listSymbols, sideEffectLevel: 'read_only' },
   ];
+}
+
+export function fileContentArgumentLimit() {
+  return {
+    path: 'content',
+    maxCharacters: FILE_WRITE_MAX_CHARACTERS,
+    maxEstimatedTokens: FILE_WRITE_MAX_ESTIMATED_TOKENS,
+    errorCode: 'file_content_too_large',
+    message: FILE_WRITE_LIMIT_MESSAGE,
+  };
+}
+
+export function assertFileWriteContentLimit(content: string): void {
+  const estimatedTokens = estimateTextTokens(content);
+  if (
+    content.length <= FILE_WRITE_MAX_CHARACTERS
+    && estimatedTokens <= FILE_WRITE_MAX_ESTIMATED_TOKENS
+  ) return;
+  throw new RuntimeToolExecutionError(
+    'file_content_too_large',
+    FILE_WRITE_LIMIT_MESSAGE,
+    {
+      characters: content.length,
+      estimatedTokens,
+      maxCharacters: FILE_WRITE_MAX_CHARACTERS,
+      maxEstimatedTokens: FILE_WRITE_MAX_ESTIMATED_TOKENS,
+    }
+  );
+}
+
+function createFileWriteId(idempotencyKey: string): string {
+  return `file_write_${createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 32)}`;
+}
+
+async function startChunkedFileWrite(input: {
+  context: RuntimeToolContext;
+  writeId: string;
+  path: string;
+  content: string;
+}): Promise<Record<string, unknown>> {
+  const directory = await fileWriteDirectory(input.context, input.writeId);
+  const manifestPath = join(directory, 'manifest.json');
+  const existingManifest = await readFileWriteManifest(manifestPath);
+  const chunk = fileWriteChunk(0, input.content);
+  if (existingManifest) {
+    const existingFirstChunk = existingManifest.chunks[0];
+    if (
+      existingManifest.path !== input.path
+      || existingFirstChunk?.checksum !== chunk.checksum
+    ) {
+      throw new RuntimeToolExecutionError(
+        'file_write_conflict',
+        `Chunked file write ${input.writeId} already exists with different content.`
+      );
+    }
+    return openFileWriteResult(existingManifest, 0);
+  }
+
+  const targetPath = await resolveWorkspacePath(input.context, input.path);
+  const targetExisted = await stat(targetPath).then(() => true, () => false);
+  await mkdir(directory, { recursive: true });
+  await writeChunkPart(directory, chunk, input.content);
+  const manifest: OpenFileWriteManifest = {
+    schemaVersion: 1,
+    status: 'open',
+    writeId: input.writeId,
+    sessionId: input.context.sessionId,
+    path: input.path,
+    targetExisted,
+    nextChunkIndex: 1,
+    chunks: [chunk],
+  };
+  await writeFileWriteManifest(manifestPath, manifest, input.context.toolInvocationId);
+  return openFileWriteResult(manifest, 0);
+}
+
+async function appendChunkedFileWrite(input: {
+  context: RuntimeToolContext;
+  writeId: string;
+  chunkIndex: number;
+  content: string;
+  finalize: boolean;
+}): Promise<Record<string, unknown>> {
+  const directory = await fileWriteDirectory(input.context, input.writeId);
+  const manifestPath = join(directory, 'manifest.json');
+  const manifest = await readFileWriteManifest(manifestPath);
+  if (!manifest) {
+    throw new RuntimeToolExecutionError(
+      'file_write_not_found',
+      `Chunked file write ${input.writeId} was not found in this Session workspace.`
+    );
+  }
+  if (manifest.sessionId !== input.context.sessionId) {
+    throw new RuntimeToolExecutionError(
+      'file_write_session_mismatch',
+      `Chunked file write ${input.writeId} belongs to another Session.`
+    );
+  }
+  const chunk = fileWriteChunk(input.chunkIndex, input.content);
+  if (manifest.status === 'completed') {
+    const existing = manifest.chunks.find(candidate => candidate.index === input.chunkIndex);
+    if (
+      !input.finalize
+      || !existing
+      || existing.checksum !== chunk.checksum
+      || input.chunkIndex !== manifest.result.acceptedChunkIndex
+    ) {
+      throw new RuntimeToolExecutionError(
+        'file_write_already_completed',
+        `Chunked file write ${input.writeId} is already completed.`
+      );
+    }
+    return {
+      ...manifest.result,
+      replayed: true,
+      ...(manifest.finalizationToolInvocationId === input.context.toolInvocationId
+        && manifest.artifact
+        ? { artifacts: [manifest.artifact] }
+        : {}),
+    };
+  }
+
+  if (input.chunkIndex > manifest.nextChunkIndex) {
+    throw new RuntimeToolExecutionError(
+      'file_chunk_out_of_order',
+      `Expected chunkIndex ${manifest.nextChunkIndex}, received ${input.chunkIndex}.`,
+      { expectedChunkIndex: manifest.nextChunkIndex, receivedChunkIndex: input.chunkIndex }
+    );
+  }
+  if (input.chunkIndex < manifest.nextChunkIndex) {
+    const existing = manifest.chunks.find(candidate => candidate.index === input.chunkIndex);
+    if (!existing || existing.checksum !== chunk.checksum) {
+      throw new RuntimeToolExecutionError(
+        'file_chunk_conflict',
+        `Chunk ${input.chunkIndex} was already accepted with different content.`
+      );
+    }
+    if (input.finalize) {
+      throw new RuntimeToolExecutionError(
+        'file_chunk_already_accepted',
+        `Chunk ${input.chunkIndex} was already accepted without finalization. Continue at chunkIndex ${manifest.nextChunkIndex}.`
+      );
+    }
+    return openFileWriteResult(manifest, input.chunkIndex, true);
+  }
+
+  await writeChunkPart(directory, chunk, input.content);
+  const chunks = [...manifest.chunks, chunk];
+  if (!input.finalize) {
+    const updated: OpenFileWriteManifest = {
+      ...manifest,
+      nextChunkIndex: input.chunkIndex + 1,
+      chunks,
+    };
+    await writeFileWriteManifest(manifestPath, updated, input.context.toolInvocationId);
+    return openFileWriteResult(updated, input.chunkIndex);
+  }
+
+  const completed = await finalizeChunkedFileWrite({
+    context: input.context,
+    manifest: { ...manifest, chunks },
+    directory,
+    acceptedChunkIndex: input.chunkIndex,
+  });
+  await writeFileWriteManifest(manifestPath, completed, input.context.toolInvocationId);
+  return {
+    ...completed.result,
+    ...(completed.artifact ? { artifacts: [completed.artifact] } : {}),
+  };
+}
+
+async function finalizeChunkedFileWrite(input: {
+  context: RuntimeToolContext;
+  manifest: OpenFileWriteManifest;
+  directory: string;
+  acceptedChunkIndex: number;
+}): Promise<CompletedFileWriteManifest> {
+  for (let index = 0; index <= input.acceptedChunkIndex; index += 1) {
+    if (input.manifest.chunks[index]?.index !== index) {
+      throw new RuntimeToolExecutionError(
+        'file_chunk_missing',
+        `Cannot finalize because chunk ${index} is missing.`
+      );
+    }
+  }
+  const content = Buffer.concat(await Promise.all(
+    input.manifest.chunks.map(chunk => readFile(chunkPartPath(input.directory, chunk.index)))
+  ));
+  const checksum = createHash('sha256').update(content).digest('hex');
+  const targetPath = await resolveWorkspacePath(input.context, input.manifest.path);
+  await mkdir(dirname(targetPath), { recursive: true });
+  const targetTemporaryPath = join(
+    dirname(targetPath),
+    `.${basename(targetPath)}.${input.manifest.writeId}.tmp`
+  );
+  await writeFile(targetTemporaryPath, content);
+  await rename(targetTemporaryPath, targetPath);
+
+  const operation = input.manifest.targetExisted ? 'updated' : 'created';
+  const artifact = createFileArtifactDraft({
+    context: input.context,
+    path: input.manifest.path,
+    content,
+    operation,
+    metadata: {
+      chunked: true,
+      chunkCount: input.manifest.chunks.length,
+      writeId: input.manifest.writeId,
+    },
+  });
+  if (artifact) {
+    const revisionPath = await resolveWorkspacePath(input.context, artifact.storagePath);
+    await mkdir(dirname(revisionPath), { recursive: true });
+    await writeFile(revisionPath, content);
+  }
+  return {
+    ...input.manifest,
+    status: 'completed',
+    nextChunkIndex: input.acceptedChunkIndex + 1,
+    finalizationToolInvocationId: input.context.toolInvocationId,
+    result: {
+      writeId: input.manifest.writeId,
+      path: input.manifest.path,
+      acceptedChunkIndex: input.acceptedChunkIndex,
+      status: 'completed',
+      size: content.byteLength,
+      checksum,
+      operation,
+    },
+    artifact,
+  };
+}
+
+function createFileArtifactDraft(input: {
+  context: RuntimeToolContext;
+  path: string;
+  content: string | Buffer;
+  operation: 'created' | 'updated';
+  metadata?: Record<string, unknown>;
+}) {
+  const area = artifactArea(input.path);
+  if (!area) return undefined;
+  return {
+    kind: 'file' as const,
+    area,
+    title: basename(input.path),
+    fileName: basename(input.path),
+    logicalPath: input.path,
+    storagePath: `.revisions/${input.context.toolInvocationId}/${input.path}`,
+    mediaType: mediaTypeForPath(input.path),
+    size: Buffer.byteLength(input.content),
+    checksum: createHash('sha256').update(input.content).digest('hex'),
+    metadata: {
+      operation: input.operation,
+      snapshot: true,
+      ...input.metadata,
+    } as Record<string, unknown>,
+  };
+}
+
+function fileWriteChunk(index: number, content: string): FileWriteChunk {
+  return {
+    index,
+    size: Buffer.byteLength(content, 'utf8'),
+    checksum: createHash('sha256').update(content).digest('hex'),
+  };
+}
+
+function openFileWriteResult(
+  manifest: FileWriteManifest,
+  acceptedChunkIndex: number,
+  replayed = false
+): Record<string, unknown> {
+  if (manifest.status === 'completed') return { ...manifest.result, replayed };
+  return {
+    writeId: manifest.writeId,
+    path: manifest.path,
+    acceptedChunkIndex,
+    nextChunkIndex: manifest.nextChunkIndex,
+    bufferedBytes: manifest.chunks.reduce((total, chunk) => total + chunk.size, 0),
+    status: 'open',
+    ...(replayed ? { replayed: true } : {}),
+  };
+}
+
+async function fileWriteDirectory(
+  context: RuntimeToolContext,
+  writeId: string
+): Promise<string> {
+  assertFileWriteId(writeId);
+  return resolveWorkspacePath(context, `.runtime/file-writes/${writeId}`);
+}
+
+function chunkPartPath(directory: string, index: number): string {
+  return join(directory, `${String(index).padStart(6, '0')}.part`);
+}
+
+async function writeChunkPart(
+  directory: string,
+  chunk: FileWriteChunk,
+  content: string
+): Promise<void> {
+  await mkdir(directory, { recursive: true });
+  const path = chunkPartPath(directory, chunk.index);
+  try {
+    await writeFile(path, content, { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    if (!isFileExistsError(error)) throw error;
+    const existing = await readFile(path);
+    const checksum = createHash('sha256').update(existing).digest('hex');
+    if (checksum !== chunk.checksum) {
+      throw new RuntimeToolExecutionError(
+        'file_chunk_conflict',
+        `Chunk ${chunk.index} already exists with different content.`
+      );
+    }
+  }
+}
+
+async function readFileWriteManifest(path: string): Promise<FileWriteManifest | undefined> {
+  const content = await readFile(path, 'utf8').catch(error => {
+    if (isFileNotFoundError(error)) return undefined;
+    throw error;
+  });
+  if (content === undefined) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    throw new RuntimeToolExecutionError(
+      'file_write_state_invalid',
+      `Chunked file write state is invalid: ${path}`
+    );
+  }
+  if (!isFileWriteManifest(value)) {
+    throw new RuntimeToolExecutionError(
+      'file_write_state_invalid',
+      `Chunked file write state has an unsupported structure: ${path}`
+    );
+  }
+  return value;
+}
+
+async function writeFileWriteManifest(
+  path: string,
+  manifest: FileWriteManifest,
+  toolInvocationId: string
+): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const temporaryPath = `${path}.${toolInvocationId}.tmp`;
+  try {
+    await writeFile(temporaryPath, JSON.stringify(manifest), 'utf8');
+    await rename(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
+function isFileWriteManifest(value: unknown): value is FileWriteManifest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const manifest = value as Partial<FileWriteManifest>;
+  const commonIsValid = manifest.schemaVersion === 1
+    && (manifest.status === 'open' || manifest.status === 'completed')
+    && typeof manifest.writeId === 'string'
+    && typeof manifest.sessionId === 'string'
+    && typeof manifest.path === 'string'
+    && typeof manifest.targetExisted === 'boolean'
+    && Number.isSafeInteger(manifest.nextChunkIndex)
+    && Array.isArray(manifest.chunks)
+    && manifest.chunks.every(chunk => (
+      chunk
+      && Number.isSafeInteger(chunk.index)
+      && typeof chunk.size === 'number'
+      && typeof chunk.checksum === 'string'
+    ));
+  if (!commonIsValid) return false;
+  if (manifest.status === 'open') return true;
+  const completed = manifest as Partial<CompletedFileWriteManifest>;
+  return typeof completed.finalizationToolInvocationId === 'string'
+    && isCompletedFileWriteResult(completed.result);
+}
+
+function isCompletedFileWriteResult(value: unknown): value is CompletedFileWriteResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const result = value as Partial<CompletedFileWriteResult>;
+  return typeof result.writeId === 'string'
+    && typeof result.path === 'string'
+    && Number.isSafeInteger(result.acceptedChunkIndex)
+    && result.status === 'completed'
+    && typeof result.size === 'number'
+    && Number.isSafeInteger(result.size)
+    && typeof result.checksum === 'string'
+    && (result.operation === 'created' || result.operation === 'updated');
+}
+
+function assertFileWriteId(writeId: string): void {
+  if (/^file_write_[a-f0-9]{32}$/.test(writeId)) return;
+  throw new RuntimeToolExecutionError(
+    'file_write_id_invalid',
+    'writeId must be the value returned by start_file_write.'
+  );
+}
+
+async function withFileWriteLock<T>(
+  writeId: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  const previous = fileWriteLocks.get(writeId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const queued = previous.then(() => current);
+  fileWriteLocks.set(writeId, queued);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (fileWriteLocks.get(writeId) === queued) fileWriteLocks.delete(writeId);
+  }
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === 'EEXIST');
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT');
 }
 
 async function collectFiles(root: string, workspace: string, recursive: boolean): Promise<FileEntry[]> {

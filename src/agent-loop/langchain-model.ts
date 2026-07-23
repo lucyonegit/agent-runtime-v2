@@ -23,6 +23,7 @@ export interface LangChainModelTurn {
   toolCalls: AgentToolCall[];
   errors: LangChainToolCallError[];
   usage?: UsageMetadata;
+  finishReason?: string;
 }
 
 export function readLangChainModelTurn(
@@ -41,7 +42,15 @@ export function readLangChainModelTurn(
     toolCalls: [...toolCalls, ...errors.map(error => error.call)],
     errors,
     ...(message.usage_metadata ? { usage: message.usage_metadata } : {}),
+    ...(finishReason(message.response_metadata) ? {
+      finishReason: finishReason(message.response_metadata),
+    } : {}),
   };
+}
+
+function finishReason(metadata: Record<string, unknown>): string | undefined {
+  const value = metadata.finish_reason ?? metadata.stop_reason;
+  return typeof value === 'string' && value ? value : undefined;
 }
 
 function requireToolCallId(call: ToolCall, fallbackId: string): AgentToolCall {

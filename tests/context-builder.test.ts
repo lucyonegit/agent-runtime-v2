@@ -96,8 +96,36 @@ describe('TokenBudget', () => {
         mustKeep: false, priority: 80, recency: 3, originalOrder: 2,
       },
     ], { maxContextTokens: 100, reservedOutputTokens: 10 });
-    expect(selection.selected.map(item => item.id)).toEqual(['must_keep', 'small_recent']);
-    expect(selection.dropped.map(item => item.id)).toEqual(['whole_tool_exchange']);
+    expect(selection.selected.map(item => item.id)).toEqual([
+      'must_keep',
+      'whole_tool_exchange',
+    ]);
+    expect(selection.dropped.map(item => item.id)).toEqual(['small_recent']);
+  });
+
+  it('uses the provider input limit as the only selection ceiling', () => {
+    const selection = new TokenBudget().select([
+      {
+        id: 'must_keep', value: 'must_keep', estimatedTokens: 20,
+        mustKeep: true, priority: 100, recency: 0, originalOrder: 0,
+      },
+      {
+        id: 'optional', value: 'optional', estimatedTokens: 35,
+        mustKeep: false, priority: 90, recency: 1, originalOrder: 1,
+      },
+    ], {
+      maxContextTokens: 100,
+      reservedOutputTokens: 10,
+      inputTokenLimit: 80,
+    });
+
+    expect(selection.hardInputLimit).toBe(80);
+    expect(selection.selected.map(item => item.id)).toEqual(['must_keep', 'optional']);
+    expect(() => new TokenBudget().select([], {
+      maxContextTokens: 100,
+      reservedOutputTokens: 10,
+      inputTokenLimit: 91,
+    })).toThrow(ContextOverflowError);
   });
 });
 
@@ -471,7 +499,6 @@ function buildContext(input: CompilerFixtureInput) {
     },
     compression: {
       disabled: false,
-      compactAtRatio: 0.55,
     },
   });
 }

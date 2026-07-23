@@ -14,7 +14,6 @@ export interface TokenBudgetSelection<T> {
   estimatedInputTokens: number;
   predictedInputTokens: number;
   hardInputLimit: number;
-  safeInputLimit: number;
   candidateTokens: number;
   predictedCandidateTokens: number;
 }
@@ -22,6 +21,7 @@ export interface TokenBudgetSelection<T> {
 interface CalibratedModelBudget {
   maxContextTokens: number;
   reservedOutputTokens: number;
+  inputTokenLimit?: number;
   tokenCalibrationFactor?: number;
   tokenErrorReserve?: number;
 }
@@ -40,11 +40,7 @@ export class TokenBudget {
     items: TokenBudgetItem<T>[],
     model: CalibratedModelBudget
   ): TokenBudgetSelection<T> {
-    const hardInputLimit = model.maxContextTokens - model.reservedOutputTokens;
-    if (hardInputLimit <= 0) {
-      throw new ContextOverflowError('Reserved output tokens consume the entire model context.');
-    }
-    const safeInputLimit = Math.floor(hardInputLimit * 0.9);
+    const hardInputLimit = resolveInputTokenLimit(model);
     const mustKeepItems = items.filter(item => item.mustKeep);
     const calibrationFactor = validFactor(model.tokenCalibrationFactor);
     const errorReserve = validReserve(model.tokenErrorReserve);
@@ -66,7 +62,7 @@ export class TokenBudget {
       ));
     for (const item of optional) {
       const predicted = predictTokens(item.estimatedTokens, calibrationFactor);
-      if (selectedPredictedTokens + predicted > safeInputLimit) continue;
+      if (selectedPredictedTokens + predicted > hardInputLimit) continue;
       selected.push(item);
       selectedPredictedTokens += predicted;
     }
@@ -77,7 +73,6 @@ export class TokenBudget {
       estimatedInputTokens: sumTokens(selected),
       predictedInputTokens: selectedPredictedTokens,
       hardInputLimit,
-      safeInputLimit,
       candidateTokens: sumTokens(items),
       predictedCandidateTokens: sumPredictedTokens(items, calibrationFactor) + errorReserve,
     };
@@ -88,11 +83,7 @@ export class TokenBudget {
     model: CalibratedModelBudget,
     tailItemIds: ReadonlySet<string>
   ): TokenBudgetSelection<T> {
-    const hardInputLimit = model.maxContextTokens - model.reservedOutputTokens;
-    if (hardInputLimit <= 0) {
-      throw new ContextOverflowError('Reserved output tokens consume the entire model context.');
-    }
-    const safeInputLimit = Math.floor(hardInputLimit * 0.9);
+    const hardInputLimit = resolveInputTokenLimit(model);
     const mustKeepItems = items.filter(item => item.mustKeep);
     const calibrationFactor = validFactor(model.tokenCalibrationFactor);
     const errorReserve = validReserve(model.tokenErrorReserve);
@@ -114,7 +105,7 @@ export class TokenBudget {
       ));
     for (const item of optionalNonTail) {
       const predicted = predictTokens(item.estimatedTokens, calibrationFactor);
-      if (selectedPredictedTokens + predicted > safeInputLimit) continue;
+      if (selectedPredictedTokens + predicted > hardInputLimit) continue;
       selected.push(item);
       selectedPredictedTokens += predicted;
     }
@@ -124,7 +115,7 @@ export class TokenBudget {
       .sort((left, right) => right.originalOrder - left.originalOrder);
     for (const item of optionalTail) {
       const predicted = predictTokens(item.estimatedTokens, calibrationFactor);
-      if (selectedPredictedTokens + predicted > safeInputLimit) break;
+      if (selectedPredictedTokens + predicted > hardInputLimit) break;
       selected.push(item);
       selectedPredictedTokens += predicted;
     }
@@ -135,11 +126,28 @@ export class TokenBudget {
       estimatedInputTokens: sumTokens(selected),
       predictedInputTokens: selectedPredictedTokens,
       hardInputLimit,
-      safeInputLimit,
       candidateTokens: sumTokens(items),
       predictedCandidateTokens: sumPredictedTokens(items, calibrationFactor) + errorReserve,
     };
   }
+}
+
+export function resolveInputTokenLimit(model: CalibratedModelBudget): number {
+  const contextAvailableForInput = model.maxContextTokens - model.reservedOutputTokens;
+  if (contextAvailableForInput <= 0) {
+    throw new ContextOverflowError('Reserved output tokens consume the entire model context.');
+  }
+  const hardInputLimit = model.inputTokenLimit ?? contextAvailableForInput;
+  if (!Number.isSafeInteger(hardInputLimit) || hardInputLimit <= 0) {
+    throw new ContextOverflowError('Input token limit must be a positive safe integer.');
+  }
+  if (hardInputLimit > contextAvailableForInput) {
+    throw new ContextOverflowError(
+      `Input token limit ${hardInputLimit} plus reserved output `
+      + `${model.reservedOutputTokens} exceeds model context ${model.maxContextTokens}.`
+    );
+  }
+  return hardInputLimit;
 }
 
 export function estimateTextTokens(value: string): number {

@@ -16,6 +16,8 @@ import {
 
 export const CONTEXT_RULES_VERSION = 'unified-react-context-v2';
 export const TOKEN_ESTIMATOR_VERSION = 'cjk-aware-v2';
+export const CONTEXT_COMPRESSION_START_RATIO = 0.55;
+export const CONTEXT_COMPRESSION_REQUIRED_RATIO = 0.75;
 
 export type ContextPressureLevel = 'normal' | 'watch' | 'compact' | 'mandatory' | 'critical';
 
@@ -31,7 +33,8 @@ export interface CompiledContext {
   summaryIds: string[];
   mustKeepMessageIds: string[];
   compressibleMessageIds: string[];
-  compressionRecommended: boolean;
+  shouldCompress: boolean;
+  mustCompress: boolean;
   annotations: CompiledContextAnnotation[];
   blockedDiagnostics: NonNullable<ContextMaterial['blockedDiagnostics']>;
 }
@@ -108,7 +111,7 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     material.groups.filter(item => item.mustKeep).map(item => item.group.id)
   );
   for (const summary of material.summaries) {
-    const summaryText = summary.compressionPromptVersion === 'context-memory-v1'
+    const summaryText = summary.summaryType === 'rolling'
       ? `Context memory (durable, compressed):\n${summary.summary}`
       : `Context summary:\n${summary.summary}`;
     items.push({
@@ -295,10 +298,15 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     ...material.fixedPrefix,
     toolSchemaChecksum,
   }));
+  const inputPressure = compressionDecision(
+    selection.predictedCandidateTokens,
+    selection.hardInputLimit
+  );
   const inputManifest: AgentContextInputManifest = {
     purpose: material.audit.purpose,
     contextRulesVersion: material.audit.contextRulesVersion,
     systemPromptVersion: material.audit.systemPromptVersion,
+    ...(material.audit.prompt ? { prompt: material.audit.prompt } : {}),
     messageGroupIds: groupIds,
     summaryIds,
     ...(material.bundles ? { selectedBundleIds: bundleIds } : {}),
@@ -329,15 +337,9 @@ export function compileContext(material: ContextMaterial): CompiledContext {
       predictedInputTokens: selection.predictedInputTokens,
       predictedCandidateTokens: selection.predictedCandidateTokens,
       hardInputLimit: selection.hardInputLimit,
-      pressureLevel: pressureLevel(
-        selection.predictedCandidateTokens,
-        selection.hardInputLimit,
-        material.compression.compactAtRatio
-      ),
+      pressureLevel: inputPressure.pressureLevel,
     },
   };
-
-  const currentPressure = inputManifest.tokenPrediction!.pressureLevel;
 
   return {
     messages: formattedMessages,
@@ -346,29 +348,41 @@ export function compileContext(material: ContextMaterial): CompiledContext {
     predictedInputTokens: selection.predictedInputTokens,
     predictedCandidateTokens: selection.predictedCandidateTokens,
     hardInputLimit: selection.hardInputLimit,
-    pressureLevel: currentPressure,
+    pressureLevel: inputPressure.pressureLevel,
     contextRulesVersion: material.audit.contextRulesVersion,
     summaryIds,
     mustKeepMessageIds,
     compressibleMessageIds,
-    compressionRecommended: !material.compression.disabled
-      && ['compact', 'mandatory', 'critical'].includes(currentPressure),
+    shouldCompress: !material.compression.disabled && inputPressure.shouldCompress,
+    mustCompress: !material.compression.disabled && inputPressure.mustCompress,
     annotations,
     blockedDiagnostics: material.blockedDiagnostics ?? [],
   };
 }
 
-function pressureLevel(
+function compressionDecision(
   predictedTokens: number,
-  hardInputLimit: number,
-  compactAtRatio = 0.55
-): ContextPressureLevel {
-  const ratio = hardInputLimit > 0 ? predictedTokens / hardInputLimit : 1;
-  if (ratio >= 0.9) return 'critical';
-  if (ratio >= 0.75) return 'mandatory';
-  if (ratio >= compactAtRatio) return 'compact';
-  if (ratio >= 0.4) return 'watch';
-  return 'normal';
+  inputTokenLimit: number
+): {
+  shouldCompress: boolean;
+  mustCompress: boolean;
+  pressureLevel: ContextPressureLevel;
+} {
+  const ratio = inputTokenLimit > 0 ? predictedTokens / inputTokenLimit : 1;
+  const pressureLevel = ratio >= 0.9
+    ? 'critical'
+    : ratio >= CONTEXT_COMPRESSION_REQUIRED_RATIO
+      ? 'mandatory'
+      : ratio >= CONTEXT_COMPRESSION_START_RATIO
+        ? 'compact'
+        : ratio >= 0.4
+          ? 'watch'
+          : 'normal';
+  return {
+    shouldCompress: ratio >= CONTEXT_COMPRESSION_START_RATIO,
+    mustCompress: ratio >= CONTEXT_COMPRESSION_REQUIRED_RATIO,
+    pressureLevel,
+  };
 }
 
 function sha256(value: string): string {

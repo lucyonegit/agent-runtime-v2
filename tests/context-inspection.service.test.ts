@@ -37,12 +37,20 @@ describe('ContextInspectionService', () => {
       id: 'later_message', rowId: 2, role: 'assistant',
       messageType: 'assistant_message', content: 'added after the inspected call',
     }));
-    const exact = await service.inspect({ kind: 'model_call', modelCallId: modelCall.id });
+    const upgradedService = inspection(
+      store({ messages, jobs, getModelCall: () => modelCall }),
+      { systemPrompt: 'new system prompt', systemPromptVersion: 'system-v2' }
+    );
+    const exact = await upgradedService.inspect({
+      kind: 'model_call',
+      modelCallId: modelCall.id,
+    });
     expect(exact.verification).toEqual({ status: 'exact', checksumMatched: true });
     expect(exact.built.inputManifest.messageGroupIds).toEqual(['message:goal_1']);
+    expect(exact.built.messages.map(item => item.content)).toEqual(['system', 'hello']);
 
     modelCall = { ...modelCall, inputChecksum: 'not-the-recorded-input' };
-    await expect(service.inspect({ kind: 'model_call', modelCallId: modelCall.id }))
+    await expect(upgradedService.inspect({ kind: 'model_call', modelCallId: modelCall.id }))
       .rejects.toMatchObject({ code: 'context_snapshot_unreconstructable' });
   });
 
@@ -71,20 +79,27 @@ describe('ContextInspectionService', () => {
     const exact = await service.inspect({ kind: 'model_call', modelCallId: modelCall.id });
 
     expect(exact.built.inputManifest.summaryIds).toEqual([summary.id]);
-    expect(exact.built.messages.map(item => item.content)).toContain('Context summary:\ncompressed');
+    expect(exact.built.messages.map(item => item.content))
+      .toContain('Context memory (durable, compressed):\ncompressed');
   });
 
 });
 
-function inspection(store_: ContextInspectionStore): ContextInspectionService {
+function inspection(
+  store_: ContextInspectionStore,
+  prompts: { systemPrompt: string; systemPromptVersion: string } = {
+    systemPrompt: 'system',
+    systemPromptVersion: 'system-v1',
+  }
+): ContextInspectionService {
   return new ContextInspectionService({
     store: store_,
     tools: [],
     model: {
       provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500,
     },
-    systemPrompt: 'system',
-    systemPromptVersion: 'system-v1',
+    systemPrompt: prompts.systemPrompt,
+    systemPromptVersion: prompts.systemPromptVersion,
     clock: { nowMs: () => 100 },
   });
 }

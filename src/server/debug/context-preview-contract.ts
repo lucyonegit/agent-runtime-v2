@@ -1,4 +1,7 @@
-import type { AgentContextInputManifest } from '../../domain/index.js';
+import type {
+  AgentContextInputManifest,
+  AgentPromptManifest,
+} from '../../domain/index.js';
 import type { CompiledContextAnnotation } from '../../runtime/context/context-material.js';
 
 export interface ContextPreviewMessage {
@@ -33,14 +36,19 @@ export interface ContextPreviewV1 {
   };
   contextRulesVersion: string;
   systemPromptVersion: string;
+  prompt?: AgentPromptManifest;
   estimatedInputTokens: number;
   predictedInputTokens: number;
   predictedCandidateTokens: number;
   pressureLevel: 'normal' | 'watch' | 'compact' | 'mandatory' | 'critical';
-  compressionRecommended: boolean;
+  shouldCompress: boolean;
+  mustCompress: boolean;
   limits: {
     maxContextTokens: number;
     reservedOutputTokens: number;
+    contextWindowTokens: number;
+    outputTokenLimit: number;
+    inputTokenLimit: number;
   };
   manifest: AgentContextInputManifest;
   selection: {

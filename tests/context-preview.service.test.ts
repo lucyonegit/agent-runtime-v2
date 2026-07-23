@@ -7,9 +7,12 @@ import type {
 } from '../src/domain/index.js';
 import { CONTEXT_RULES_VERSION } from '../src/runtime/context/context-compiler.js';
 import {
-  JOB_EXECUTION_SYSTEM_PROMPT,
-  RUNTIME_SYSTEM_PROMPT_VERSION,
-} from '../src/server/runtime/runtime-context-config.js';
+  buildStableEnvironmentContext,
+  JOB_AGENT_PROMPT_ID,
+  JOB_AGENT_PROMPT_VERSION,
+  JOB_AGENT_SYSTEM_PROMPT,
+  JOB_AGENT_SYSTEM_PROMPT_VERSION,
+} from '../src/runtime/prompting/job-agent-prompt.js';
 import {
   ContextPreviewService,
   type ContextPreviewStore,
@@ -30,24 +33,42 @@ describe('ContextPreviewService', () => {
       query: { kind: 'next_turn', sessionId: 'session_1' },
       verification: { status: 'reconstructed' },
       contextRulesVersion: CONTEXT_RULES_VERSION,
-      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
+      systemPromptVersion: JOB_AGENT_SYSTEM_PROMPT_VERSION,
       limits: { maxContextTokens: 4_000, reservedOutputTokens: 200 },
+    });
+    expect(preview.prompt).toMatchObject({
+      id: JOB_AGENT_PROMPT_ID,
+      version: JOB_AGENT_PROMPT_VERSION,
+      components: [
+        { id: 'job-agent-policy', cacheScope: 'stable' },
+        { id: 'job-agent-environment', cacheScope: 'stable' },
+      ],
+    });
+    const stableEnvironment = buildStableEnvironmentContext({
+      sandboxRoot: '.agent-sandbox',
+      sessionId: 'session_1',
     });
     expect(preview.messages).toEqual([
       {
         index: 0,
         type: 'system',
-        content: JOB_EXECUTION_SYSTEM_PROMPT,
+        content: JOB_AGENT_SYSTEM_PROMPT,
         source: { groupId: 'must_keep:system' },
       },
       {
-        index: 1, type: 'human', content: '查资料',
+        index: 1,
+        type: 'system',
+        content: stableEnvironment,
+        source: { groupId: 'must_keep:stable' },
+      },
+      {
+        index: 2, type: 'human', content: '查资料',
         source: {
           groupId: 'message:user_1', bundleId: 'turn:job_1', sourceMessageId: 'user_1',
         },
       },
       {
-        index: 2,
+        index: 3,
         type: 'ai',
         content: '',
         source: {
@@ -56,7 +77,7 @@ describe('ContextPreviewService', () => {
         toolCalls: [{ id: 'call_search', name: 'web_search', args: { query: 'runtime' } }],
       },
       {
-        index: 3,
+        index: 4,
         type: 'tool',
         content: 'search result',
         name: 'web_search',
@@ -73,7 +94,7 @@ describe('ContextPreviewService', () => {
         },
       },
       {
-        index: 4, type: 'ai', content: '完成',
+        index: 5, type: 'ai', content: '完成',
         source: {
           groupId: 'message:final_1', bundleId: 'turn:job_1', sourceMessageId: 'final_1',
         },

@@ -11,13 +11,15 @@ import {
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
 import { ContextPreviewService } from '../debug/context-preview.service.js';
 import { RuntimeEventBus } from '../runtime/runtime-event-bus.js';
+import { ManagedProcessManager } from '../../tools/index.js';
 
 @Controller()
 export class AgentController {
   constructor(
     private readonly runtime: AgentRuntime,
     private readonly events: RuntimeEventBus,
-    private readonly contextPreview: ContextPreviewService
+    private readonly contextPreview: ContextPreviewService,
+    private readonly managedProcesses: ManagedProcessManager
   ) {}
 
   @Post('sessions')
@@ -99,6 +101,21 @@ export class AgentController {
   ) {
     assertNonEmpty(body?.clientAnswerId, 'clientAnswerId');
     return this.runtime.answerUserInputRequest({ requestId, ...body });
+  }
+
+  @Get('managed-processes/:processId')
+  getManagedProcess(@Param('processId') processId: string) {
+    return this.managedProcesses.getProcess(processId);
+  }
+
+  @Get('managed-processes/:processId/logs')
+  async getManagedProcessLogs(@Param('processId') processId: string) {
+    return { processId, logs: await this.managedProcesses.readLogs(processId) };
+  }
+
+  @Post('managed-processes/:processId/stop')
+  stopManagedProcess(@Param('processId') processId: string) {
+    return this.managedProcesses.stopProcess(processId);
   }
 
   @Sse('sessions/:sessionId/events')

@@ -6,9 +6,12 @@ import {
 } from '../../orchestration/context-inspection.service.js';
 import type { RuntimeTool } from '../../runtime/tool-executor.js';
 import {
-  JOB_EXECUTION_SYSTEM_PROMPT,
-  RUNTIME_SYSTEM_PROMPT_VERSION,
-} from '../runtime/runtime-context-config.js';
+  buildStableEnvironmentContext,
+  JOB_AGENT_PROMPT_ID,
+  JOB_AGENT_PROMPT_VERSION,
+  JOB_AGENT_SYSTEM_PROMPT,
+  JOB_AGENT_SYSTEM_PROMPT_VERSION,
+} from '../../runtime/prompting/job-agent-prompt.js';
 import type { ContextPreviewMessage, ContextPreviewV1 } from './context-preview-contract.js';
 
 export type ContextPreviewStore = ContextInspectionStore;
@@ -20,6 +23,8 @@ export interface ContextPreviewServiceOptions {
   modelName: string;
   maxContextTokens: number;
   reservedOutputTokens: number;
+  inputTokenLimit?: number;
+  sandboxRoot?: string;
   clock?: { nowMs(): number };
 }
 
@@ -35,9 +40,16 @@ export class ContextPreviewService {
         name: options.modelName,
         maxContextTokens: options.maxContextTokens,
         reservedOutputTokens: options.reservedOutputTokens,
+        inputTokenLimit: options.inputTokenLimit,
       },
-      systemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
-      systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
+      systemPrompt: JOB_AGENT_SYSTEM_PROMPT,
+      systemPromptVersion: JOB_AGENT_SYSTEM_PROMPT_VERSION,
+      promptId: JOB_AGENT_PROMPT_ID,
+      promptVersion: JOB_AGENT_PROMPT_VERSION,
+      stableContext: sessionId => buildStableEnvironmentContext({
+        sandboxRoot: options.sandboxRoot ?? '.agent-sandbox',
+        sessionId,
+      }),
       clock: options.clock,
     });
   }
@@ -68,14 +80,21 @@ export class ContextPreviewService {
         : {}),
       contextRulesVersion: snapshot.built.contextRulesVersion,
       systemPromptVersion: snapshot.systemPromptVersion,
+      ...(snapshot.built.inputManifest.prompt
+        ? { prompt: snapshot.built.inputManifest.prompt }
+        : {}),
       estimatedInputTokens: snapshot.built.estimatedInputTokens,
       predictedInputTokens: snapshot.built.predictedInputTokens,
       predictedCandidateTokens: snapshot.built.predictedCandidateTokens,
       pressureLevel: snapshot.built.pressureLevel,
-      compressionRecommended: snapshot.built.compressionRecommended,
+      shouldCompress: snapshot.built.shouldCompress,
+      mustCompress: snapshot.built.mustCompress,
       limits: {
         maxContextTokens: snapshot.maxContextTokens,
         reservedOutputTokens: snapshot.reservedOutputTokens,
+        contextWindowTokens: snapshot.maxContextTokens,
+        outputTokenLimit: snapshot.reservedOutputTokens,
+        inputTokenLimit: snapshot.built.hardInputLimit,
       },
       manifest: snapshot.built.inputManifest,
       selection: {

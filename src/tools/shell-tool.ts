@@ -14,6 +14,7 @@ import {
   runtimeContext,
   stringArgument,
 } from './tool-utils.js';
+import { buildWorkspaceProcessEnv, stringRecord } from './process-environment.js';
 
 const SHELL_PATH = '/bin/zsh';
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -39,10 +40,12 @@ export function createShellTools(): RuntimeTool[] {
   const runShell = new DynamicStructuredTool({
     name: 'run_shell',
     description: [
-      'Run a non-interactive command with the same host permissions, network access, filesystem access, and environment variables as the Runtime process.',
+      'Run a finite, non-interactive command with the same host permissions, network access, and filesystem access as the Runtime process.',
       'Use it for dependency installation, project scaffolding, builds, tests, scripts, and host filesystem operations.',
+      'Do not use it for persistent servers such as npm start, npm run dev, vite, or next dev; use start_process instead.',
       'Relative cwd values start from the current Session workspace; absolute paths and parent-directory paths are allowed.',
-      'Commands are still subject to the requested timeout, output limits, and Job cancellation.',
+      'Runtime-only HOST, PORT, database, and model-provider variables are removed; pass child variables explicitly with env.',
+      'Commands are subject to the requested timeout, output limits, and Job cancellation.',
       'Never print or return secrets from the inherited environment.',
     ].join(' '),
     schema: {
@@ -66,6 +69,11 @@ export function createShellTools(): RuntimeTool[] {
           default: DEFAULT_TIMEOUT_MS,
           description: `Execution timeout in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS}.`,
         },
+        env: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Environment variables explicitly supplied to the command.',
+        },
       },
       required: ['command'],
       additionalProperties: false,
@@ -77,11 +85,13 @@ export function createShellTools(): RuntimeTool[] {
       if (!command.trim()) throw new Error('Shell command is required.');
       const cwd = stringArgument(args, 'cwd', '.').trim() || '.';
       const timeoutMs = normalizeTimeout(numberArgument(args, 'timeoutMs', DEFAULT_TIMEOUT_MS));
+      const env = stringRecord(args.env, 'env');
       const result = await executeHostShell({
         context: runtimeContext(config),
         command,
         cwd,
         timeoutMs,
+        env,
       });
       assertSuccessfulShellResult(result);
       return jsonToolOutput(result);
@@ -101,6 +111,7 @@ export async function executeHostShell(input: {
   command: string;
   cwd?: string;
   timeoutMs?: number;
+  env?: Record<string, string>;
 }): Promise<ShellExecutionResult> {
   const root = await realpath(await workspaceRoot(input.context));
   const cwdInput = input.cwd?.trim() || '.';
@@ -120,7 +131,7 @@ export async function executeHostShell(input: {
     input.command,
   ], {
     cwd,
-    env: process.env,
+    env: buildWorkspaceProcessEnv(input.env),
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });

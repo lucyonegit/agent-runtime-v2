@@ -10,10 +10,26 @@ export type AgentModelCallStatus = 'started' | 'completed' | 'failed' | 'cancell
 export type AgentModelOutputDisposition = 'pending' | 'accepted' | 'rejected';
 export type AgentModelUsageSource = 'provider' | 'estimated' | 'mixed' | 'unavailable';
 
+export interface AgentPromptComponentManifest {
+  id: string;
+  version: number;
+  cacheScope: 'stable' | 'dynamic';
+  checksum: string;
+  estimatedTokens: number;
+}
+
+export interface AgentPromptManifest {
+  id: string;
+  version: number;
+  checksum: string;
+  components: AgentPromptComponentManifest[];
+}
+
 export interface AgentContextInputManifest {
   purpose: string;
   contextRulesVersion: string;
   systemPromptVersion: string;
+  prompt?: AgentPromptManifest;
   messageGroupIds: string[];
   summaryIds: string[];
   selectedBundleIds?: string[];

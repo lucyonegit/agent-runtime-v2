@@ -11,15 +11,18 @@ import { AgentHttpModule } from './http/agent-http.module.js';
 import { AGENT_CORS_OPTIONS } from './http/cors-options.js';
 import { RuntimeExceptionFilter } from './http/runtime-exception.filter.js';
 import { ContextPreviewService } from './debug/context-preview.service.js';
-import { removeSessionSandbox } from '../tools/index.js';
+import { ManagedProcessManager, removeSessionSandbox } from '../tools/index.js';
 import { createDefaultTools } from './runtime/default-tools.js';
 import { createLangChainChatModel } from './runtime/langchain-model-provider.js';
 import { resolveModelRuntimeConfig } from './runtime/model-config.js';
+import { resolveModelTokenLimits } from './runtime/model-token-limits.js';
 import { RuntimeEventBus } from './runtime/runtime-event-bus.js';
 import {
-  JOB_EXECUTION_SYSTEM_PROMPT,
-  RUNTIME_SYSTEM_PROMPT_VERSION,
-} from './runtime/runtime-context-config.js';
+  JOB_AGENT_PROMPT_ID,
+  JOB_AGENT_PROMPT_VERSION,
+  JOB_AGENT_SYSTEM_PROMPT,
+  JOB_AGENT_SYSTEM_PROMPT_VERSION,
+} from '../runtime/prompting/job-agent-prompt.js';
 
 const databaseUrl = requiredEnv('DATABASE_URL');
 const workerId = process.env.AGENT_RUNTIME_WORKER_ID ?? `worker_${process.pid}`;
@@ -34,15 +37,24 @@ try {
 const store = new PostgresAgentStore(pool);
 const events = new RuntimeEventBus();
 const modelConfig = resolveModelRuntimeConfig(process.env);
+const modelTokenLimits = resolveModelTokenLimits(modelConfig, process.env);
 const sandboxRoot = process.env.AGENT_SANDBOX_ROOT ?? '.agent-sandbox';
+const managedProcesses = new ManagedProcessManager(
+  events,
+  { nowMs: () => Date.now() },
+  sandboxRoot
+);
 const jobLeaseMs = numberEnv('JOB_LEASE_MS', 30_000);
 const jobHeartbeatMs = numberEnv('JOB_HEARTBEAT_MS', Math.max(1_000, Math.floor(jobLeaseMs / 3)));
 const jobRecoveryScanMs = numberEnv('JOB_RECOVERY_SCAN_MS', 5_000);
-const maxContextTokens = numberEnv('MODEL_MAX_CONTEXT_TOKENS', 128_000);
-const reservedOutputTokens = numberEnv('MODEL_RESERVED_OUTPUT_TOKENS', 4_096);
-const model = createLangChainChatModel(modelConfig, reservedOutputTokens);
+const model = createLangChainChatModel(modelConfig, modelTokenLimits.outputTokenLimit);
 if (jobHeartbeatMs >= jobLeaseMs) throw new Error('JOB_HEARTBEAT_MS must be shorter than JOB_LEASE_MS.');
-const tools = createDefaultTools({ store, workerId, publisher: events });
+const tools = createDefaultTools({
+  store,
+  workerId,
+  publisher: events,
+  managedProcessManager: managedProcesses,
+});
 const executor = new JobExecutionOrchestrator({
   store,
   workerId,
@@ -52,20 +64,25 @@ const executor = new JobExecutionOrchestrator({
   modelName: modelConfig.modelName,
   tools,
   sandboxRoot,
-  maxContextTokens,
-  reservedOutputTokens,
+  maxContextTokens: modelTokenLimits.contextWindowTokens,
+  reservedOutputTokens: modelTokenLimits.outputTokenLimit,
+  inputTokenLimit: modelTokenLimits.inputTokenLimit,
   jobLeaseMs,
   jobHeartbeatMs,
-  jobSystemPrompt: JOB_EXECUTION_SYSTEM_PROMPT,
-  systemPromptVersion: RUNTIME_SYSTEM_PROMPT_VERSION,
+  jobSystemPrompt: JOB_AGENT_SYSTEM_PROMPT,
+  systemPromptVersion: JOB_AGENT_SYSTEM_PROMPT_VERSION,
+  promptId: JOB_AGENT_PROMPT_ID,
+  promptVersion: JOB_AGENT_PROMPT_VERSION,
 });
 const contextPreview = new ContextPreviewService({
   store,
   tools,
   provider: modelConfig.provider,
   modelName: modelConfig.modelName,
-  maxContextTokens,
-  reservedOutputTokens,
+  maxContextTokens: modelTokenLimits.contextWindowTokens,
+  reservedOutputTokens: modelTokenLimits.outputTokenLimit,
+  inputTokenLimit: modelTokenLimits.inputTokenLimit,
+  sandboxRoot,
 });
 const runtime = new AgentRuntime({
   store,
@@ -74,23 +91,27 @@ const runtime = new AgentRuntime({
   executor,
   jobLeaseMs,
   recoveryIntervalMs: jobRecoveryScanMs,
+  processReader: managedProcesses,
+  beforeDeleteSession: sessionId => managedProcesses.stopSessionProcesses(sessionId),
   removeSessionWorkspace: sessionId => removeSessionSandbox({ sandboxRoot, sessionId }),
 });
+await managedProcesses.start();
 await runtime.start();
 const app = await NestFactory.create<NestFastifyApplication>(
-  AgentHttpModule.forRoot(runtime, events, contextPreview),
+  AgentHttpModule.forRoot(runtime, events, contextPreview, managedProcesses),
   new FastifyAdapter(),
   { logger: ['error', 'warn', 'log'] }
 );
 app.useGlobalFilters(new RuntimeExceptionFilter());
 app.enableCors(AGENT_CORS_OPTIONS);
 app.enableShutdownHooks();
-const port = numberEnv('PORT', 3000);
-await app.listen(port, process.env.HOST ?? '127.0.0.1');
+const port = numberEnv('AGENT_SERVER_PORT', 3000);
+await app.listen(port, process.env.AGENT_SERVER_HOST ?? '127.0.0.1');
 
 let shutdownPromise: Promise<void> | undefined;
 const shutdown = () => shutdownPromise ??= (async () => {
   await runtime.stop();
+  managedProcesses.shutdown();
   await app.close();
   await pool.end();
 })();

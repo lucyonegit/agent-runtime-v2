@@ -8,6 +8,7 @@ export type LoopFailureCode =
   | 'model_protocol_error'
   | 'invalid_plan_state'
   | 'model_error'
+  | 'model_output_truncated'
   | 'context_overflow';
 
 export type LoopResult =

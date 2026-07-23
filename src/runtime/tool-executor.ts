@@ -17,6 +17,7 @@ import {
   type ToolExecutorPort,
 } from '../agent-loop/agent-loop.js';
 import type { AgentStore } from '../storage/agent-store.js';
+import { estimateTextTokens } from './context/token-budget.js';
 import { mapStoreError } from './runtime-errors.js';
 import { checksumToolArguments } from './transaction-commands.js';
 
@@ -42,6 +43,15 @@ export interface RuntimeTool {
    */
   requiresFreshContext?: boolean;
   sensitiveArgumentPaths?: string[];
+  argumentLimits?: RuntimeToolArgumentLimit[];
+}
+
+export interface RuntimeToolArgumentLimit {
+  path: string;
+  maxCharacters?: number;
+  maxEstimatedTokens?: number;
+  errorCode: string;
+  message: string;
 }
 
 export interface RuntimeUserInputArtifact {
@@ -125,6 +135,11 @@ export class ToolExecutor implements ToolExecutorPort {
         `Started ToolInvocation ${JSON.stringify(invocation.id)} does not match the runtime tool contract.`
       );
     }
+    const argumentLimitFailure = validateArgumentLimits(
+      request.call.args,
+      runtimeTool.argumentLimits
+    );
+    if (argumentLimitFailure) return argumentLimitFailure;
 
     const context: RuntimeToolContext = {
       sessionId: request.target.sessionId,
@@ -236,4 +251,48 @@ function isArtifactDraft(value: unknown): value is AgentArtifactDraft {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+function validateArgumentLimits(
+  arguments_: Record<string, unknown>,
+  limits: RuntimeToolArgumentLimit[] | undefined
+): Extract<ToolExecutionResult, { type: 'failed' }> | undefined {
+  for (const limit of limits ?? []) {
+    const value = readArgumentPath(arguments_, limit.path);
+    if (typeof value !== 'string') continue;
+    const estimatedTokens = estimateTextTokens(value);
+    if (
+      (limit.maxCharacters !== undefined && value.length > limit.maxCharacters)
+      || (
+        limit.maxEstimatedTokens !== undefined
+        && estimatedTokens > limit.maxEstimatedTokens
+      )
+    ) {
+      return {
+        type: 'failed',
+        code: limit.errorCode,
+        message: limit.message,
+        details: {
+          argumentPath: limit.path,
+          characters: value.length,
+          estimatedTokens,
+          maxCharacters: limit.maxCharacters,
+          maxEstimatedTokens: limit.maxEstimatedTokens,
+        },
+      };
+    }
+  }
+  return undefined;
+}
+
+function readArgumentPath(
+  arguments_: Record<string, unknown>,
+  path: string
+): unknown {
+  let current: unknown = arguments_;
+  for (const segment of path.split('.')) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
 }

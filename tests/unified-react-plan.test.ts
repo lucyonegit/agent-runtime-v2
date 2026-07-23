@@ -149,7 +149,7 @@ describe('unified ReAct planning', () => {
     const built = compileContext(await loader.load(job(), 'Create a report'));
     const runtimeState = String(built.messages.at(-1)?.content);
 
-    expect(runtimeState).toContain('Durable runtime state (authoritative)');
+    expect(runtimeState).toContain('Durable runtime state (authoritative, schemaVersion=1)');
     expect(runtimeState).toContain('"version":3');
     expect(runtimeState).toContain('"status":"in_progress"');
   });
@@ -206,6 +206,25 @@ describe('unified ReAct planning', () => {
     const built = await provider.buildJobContext(job(), 'Create a report');
 
     expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(compress).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks the model call when required compression cannot change the context', async () => {
+    const required = material(true);
+    required.model.tokenErrorReserve = 700;
+    const load = vi.fn().mockResolvedValue(required);
+    const compress = vi.fn(async () => false);
+    const provider = new ExecutionContextProvider({
+      store: {} as AgentStore,
+      modelName: 'model',
+      executionContext: { load },
+      compressionModels: { create: () => ({ invoke: async () => ({ text: 'summary' }) }) },
+      contextCompression: { compress },
+    });
+
+    await expect(provider.buildJobContext(job(), 'Create a report'))
+      .rejects.toMatchObject({ code: 'context_overflow' });
     expect(load).toHaveBeenCalledTimes(1);
     expect(compress).toHaveBeenCalledTimes(1);
   });
@@ -340,7 +359,7 @@ function planStep(input: Partial<AgentPlanStep> & Pick<AgentPlanStep, 'id' | 'ke
   };
 }
 
-function material(compressionRecommended: boolean): ContextMaterial {
+function material(shouldCompress: boolean): ContextMaterial {
   const message = goalMessage();
   const group = { id: 'message:goal_1', type: 'single' as const, messages: [message] as [AgentMessage] };
   const bundle: TurnBundle = {
@@ -355,15 +374,27 @@ function material(compressionRecommended: boolean): ContextMaterial {
     bundles: [{ bundle, segment: 'current_job', mustKeep: true, priority: 1_000 }],
     summaries: [],
     toolSchemas: [],
-    model: { provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500 },
+    model: shouldCompress
+      ? {
+          provider: 'test',
+          name: 'model',
+          maxContextTokens: 1_000,
+          reservedOutputTokens: 100,
+          tokenErrorReserve: 500,
+        }
+      : {
+          provider: 'test',
+          name: 'model',
+          maxContextTokens: 10_000,
+          reservedOutputTokens: 500,
+        },
     audit: {
       purpose: 'job_execution',
       contextRulesVersion: CONTEXT_RULES_VERSION,
       systemPromptVersion: 'system-v1',
     },
     compression: {
-      disabled: !compressionRecommended,
-      compactAtRatio: compressionRecommended ? 0 : 1,
+      disabled: !shouldCompress,
     },
   };
 }

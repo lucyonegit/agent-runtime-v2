@@ -83,6 +83,7 @@ describe('canonical runtime domain', () => {
       'user_input.upserted',
       'model_usage.updated',
       'artifact.upserted',
+      'managed_process.upserted',
     ]);
   });
 });

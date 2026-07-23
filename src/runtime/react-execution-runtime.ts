@@ -215,6 +215,7 @@ export class ReactExecutionRuntime {
     if (!freshContextCall || !prerequisiteSibling) return { type: 'accept' as const };
     return {
       type: 'retry' as const,
+      code: 'tool_batch.requires_fresh_context',
       feedback: [
         `Runtime validation rejected the previous tool batch because ${JSON.stringify(freshContextCall.name)} cannot share a model turn with prerequisite tool ${JSON.stringify(prerequisiteSibling.name)}.`,
         `The rejected batch was not persisted or executed: ${JSON.stringify(toolCalls.map(call => call.name))}.`,
@@ -244,6 +245,7 @@ export class ReactExecutionRuntime {
       }));
       return {
         type: 'retry' as const,
+        code: 'final.plan_incomplete',
         feedback: [
           'Runtime validation rejected the previous answer because the durable plan is still active.',
           'Do not answer the user yet. Call update_plan alone with the complete plan.',

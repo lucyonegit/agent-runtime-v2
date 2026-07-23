@@ -7,6 +7,10 @@ import { CONTEXT_RULES_VERSION } from '../context/context-compiler.js';
 import type { ContextMaterial, ContextModelBudget } from '../context/context-material.js';
 import { messagesInGroup } from '../context/message-group-builder.js';
 import {
+  buildDurableRuntimeStatePrompt,
+  createJobPromptManifest,
+} from '../prompting/job-agent-prompt.js';
+import {
   SessionContextLoader,
   assertNoBlockedGroups,
   type SessionContextStore,
@@ -21,7 +25,9 @@ export interface ExecutionContextLoaderOptions {
   systemPromptVersion: string;
   model: ContextModelBudget;
   toolSchemas: StructuredToolInterface[];
-  stableContext?: () => string | undefined;
+  promptId?: string;
+  promptVersion?: number;
+  stableContext?: (sessionId: string) => string | undefined;
   recentRawTokenBudget?: number;
   minimumRecentGroups?: number;
 }
@@ -45,7 +51,8 @@ export class ExecutionContextLoader {
     ]);
     assertNoBlockedGroups(facts.blocked, blocked => blocked.callMessage.jobId === job.id);
     const goalId = jobGoalMessageId(job);
-    const stableContext = this.options.stableContext?.();
+    const stableContext = this.options.stableContext?.(job.sessionId);
+    const trailingMessages = buildDurableRuntimeStateMessages(facts, job);
     const fixedMessages = [{
       id: 'must_keep:system',
       message: new SystemMessage(this.options.systemPrompt),
@@ -77,7 +84,7 @@ export class ExecutionContextLoader {
     });
     return {
       fixedMessages,
-      trailingMessages: buildDurableRuntimeStateMessages(facts, job),
+      trailingMessages,
       // Only truly stable data belongs in the reusable provider prefix.
       fixedPrefix: { systemPrompt: this.options.systemPrompt, stableContext },
       groups: groupMaterial,
@@ -111,6 +118,15 @@ export class ExecutionContextLoader {
         purpose: 'job_execution',
         contextRulesVersion,
         systemPromptVersion: this.options.systemPromptVersion,
+        ...(this.options.promptId && this.options.promptVersion !== undefined ? {
+          prompt: createJobPromptManifest({
+            systemPrompt: this.options.systemPrompt,
+            promptId: this.options.promptId,
+            promptVersion: this.options.promptVersion,
+            stableContext,
+            runtimeStateMessages: trailingMessages.map(message => message.text),
+          }),
+        } : {}),
       },
       blockedDiagnostics: facts.blocked.map(item => ({
         messageId: item.callMessage.id,
@@ -122,7 +138,6 @@ export class ExecutionContextLoader {
         recentRawTokenBudget: this.options.recentRawTokenBudget ?? 24_000,
         minimumRecentGroups: this.options.minimumRecentGroups ?? 2,
         protectedMessageIds: goalId ? [goalId] : [],
-        compactAtRatio: 0.55,
       },
     };
   }
@@ -182,7 +197,7 @@ export function buildDurableRuntimeStateMessages(
     artifacts: latestArtifacts,
     pendingUserInputRequests: pendingInputRequests,
   };
-  const text = `Durable runtime state (authoritative):\n${JSON.stringify(state)}`;
+  const text = buildDurableRuntimeStatePrompt(state);
   return [{ id: 'must_keep:runtime_state', message: new SystemMessage(text), text }];
 }
 

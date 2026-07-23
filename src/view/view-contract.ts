@@ -2,6 +2,7 @@ import type {
   AgentArtifact,
   AgentJob,
   AgentMessage,
+  AgentManagedProcess,
   AgentModelUsageStats,
   AgentPlan,
   AgentPlanStep,
@@ -24,7 +25,7 @@ export type FlatTimelineItem =
     };
 
 export interface SessionViewV1 {
-  schemaVersion: 3;
+  schemaVersion: 4;
   generatedAtMs: number;
   session: AgentSession;
   jobs: AgentJob[];
@@ -33,6 +34,7 @@ export interface SessionViewV1 {
   messages: AgentMessage[];
   toolInvocations: AgentToolInvocation[];
   artifacts: AgentArtifact[];
+  managedProcesses: AgentManagedProcess[];
   userInputRequests: AgentUserInputRequest[];
   modelUsage?: AgentModelUsageStats;
   timeline: {

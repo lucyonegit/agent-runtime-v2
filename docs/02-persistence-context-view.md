@@ -36,6 +36,8 @@ erDiagram
 
 没有 `agent_step_runs`。PlanStep 是进度事实，不是独立执行/重试边界。
 
+常驻开发服务也没有业务表。`start_process` 的 ToolInvocation/ToolResult 保留完整审计；PID、进程组、端口和 liveness 来自本机 OS。每个进程在 Session workspace 内有权限受限的本地 spec 和日志，Runtime 用命令行身份标记 + ownershipToken 发现并验证存活 supervisor。它们是本地运行资源，不是可跨机器恢复的业务事实。
+
 ## 2. 消息时序
 
 每个稳定事实先写数据库再发布 SSE。正常工具回路为：
@@ -106,11 +108,11 @@ PostgreSQL `jsonb` 会规范化对象键顺序，所以 checksum 不能直接依
 
 ## 5. SessionView
 
-SessionView 是数据库事实的确定性投影，不保存第二份前端专用状态：
+SessionView 是数据库业务事实的确定性投影，并在读取时合并本机实时进程 overlay；它不保存第二份前端专用状态：
 
 ```ts
 interface AgentSessionView {
-  schemaVersion: 3;
+  schemaVersion: 4;
   session: AgentSession;
   jobs: AgentJob[];
   messages: AgentMessage[];
@@ -118,6 +120,7 @@ interface AgentSessionView {
   planSteps: AgentPlanStep[];
   toolInvocations: AgentToolInvocation[];
   artifacts: AgentArtifact[];
+  managedProcesses: AgentManagedProcess[];
   userInputRequests: AgentUserInputRequest[];
   modelUsage?: AgentModelUsageStats;
   timeline: { flat: FlatTimelineItem[] };
@@ -140,6 +143,7 @@ SSE 只传事实增量：
 - `user_input.upserted`
 - `model_usage.updated`
 - `artifact.upserted`
+- `managed_process.upserted`
 
 前端 reducer 的规则：
 
@@ -149,4 +153,4 @@ SSE 只传事实增量：
 4. versioned entity 只接受同版本或更高版本。
 5. 断线或刷新直接重新加载 SessionView；`normalize(view)` 与 SSE reducer 使用同一 flat timeline 规则。
 
-最终一致性的唯一来源是 SessionView，SSE 丢失不会破坏业务事实。
+前端的权威重载入口是 SessionView。它组合 PostgreSQL 业务事实与本机实时 `managedProcesses[]` overlay；SSE 丢失不会破坏业务事实，进程 overlay 也会在下一次 OS 扫描或刷新时纠正。

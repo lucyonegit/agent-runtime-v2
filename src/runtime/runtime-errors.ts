@@ -7,6 +7,7 @@ export type RuntimeErrorCode =
   | 'deadline_exceeded'
   | 'aborted'
   | 'model_error'
+  | 'model_output_truncated'
   | 'invalid_tool_arguments'
   | 'tool_not_found'
   | 'tool_failed'
@@ -93,5 +94,7 @@ export function mapStoreError(error: unknown): RuntimeError {
 }
 
 function defaultRetryable(code: RuntimeErrorCode): boolean {
-  return code === 'model_error' || code === 'storage_error';
+  return code === 'model_error'
+    || code === 'model_output_truncated'
+    || code === 'storage_error';
 }

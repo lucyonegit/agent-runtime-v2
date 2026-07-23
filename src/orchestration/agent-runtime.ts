@@ -4,7 +4,7 @@ import { JobCoordinator } from './lifecycle/job-coordinator.js';
 import type { RuntimeEventPublisher } from '../runtime/runtime-event-writer.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { RuntimeError } from '../runtime/runtime-errors.js';
-import { SessionView } from '../view/session-view.js';
+import { SessionView, type SessionProcessReader } from '../view/session-view.js';
 import { projectSensitiveAnswers } from '../view/session-view.js';
 
 export interface JobExecutionService {
@@ -21,7 +21,9 @@ export interface AgentRuntimeOptions {
   recoveryBatchSize?: number;
   publisher: RuntimeEventPublisher;
   executor: JobExecutionService;
+  processReader?: SessionProcessReader;
   removeSessionWorkspace?: (sessionId: string) => Promise<void>;
+  beforeDeleteSession?: (sessionId: string) => Promise<void>;
   clock?: { nowMs(): number };
   ids?: {
     sessionId(): string;
@@ -36,6 +38,7 @@ export class AgentRuntime {
   readonly #publisher: RuntimeEventPublisher;
   readonly #executor: JobExecutionService;
   readonly #removeSessionWorkspace?: (sessionId: string) => Promise<void>;
+  readonly #beforeDeleteSession?: (sessionId: string) => Promise<void>;
   readonly #clock: { nowMs(): number };
   readonly #ids: NonNullable<AgentRuntimeOptions['ids']>;
   readonly #coordinator: JobCoordinator;
@@ -51,6 +54,7 @@ export class AgentRuntime {
     this.#publisher = options.publisher;
     this.#executor = options.executor;
     this.#removeSessionWorkspace = options.removeSessionWorkspace;
+    this.#beforeDeleteSession = options.beforeDeleteSession;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
     this.#ids = options.ids ?? randomRuntimeIds;
     this.#recoveryIntervalMs = options.recoveryIntervalMs ?? 5_000;
@@ -75,7 +79,7 @@ export class AgentRuntime {
         attemptId: this.#ids.attemptId,
       },
     });
-    this.#view = new SessionView(options.store, this.#clock);
+    this.#view = new SessionView(options.store, this.#clock, options.processReader);
   }
 
   async createSession(input: { title?: string }) {
@@ -114,6 +118,7 @@ export class AgentRuntime {
   }
 
   async deleteSession(sessionId: string) {
+    await this.#beforeDeleteSession?.(sessionId);
     const deleted = await this.#store.deleteSession(sessionId);
     if (deleted) await this.#removeSessionWorkspace?.(sessionId);
     return deleted;

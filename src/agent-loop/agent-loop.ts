@@ -1,7 +1,7 @@
 import {
   AIMessage,
   AIMessageChunk,
-  HumanMessage,
+  SystemMessage,
   ToolMessage,
   type BaseMessage,
   type UsageMetadata,
@@ -54,7 +54,7 @@ export interface AgentLoopInput {
 
 type ToolCallsValidation =
   | { type: 'accept' }
-  | { type: 'retry'; feedback: string };
+  | { type: 'retry'; code?: string; feedback: string };
 
 type ToolCallsValidator = (candidate: {
   outputId: string;
@@ -64,7 +64,7 @@ type ToolCallsValidator = (candidate: {
 
 type FinalAnswerValidation =
   | { type: 'accept' }
-  | { type: 'retry'; feedback: string }
+  | { type: 'retry'; code?: string; feedback: string }
   | { type: 'fail'; code: 'invalid_plan_state'; message: string; details?: unknown };
 
 type FinalAnswerValidator = (candidate: {
@@ -110,6 +110,7 @@ interface ModelTurn {
   toolCalls: AgentToolCall[];
   assemblyErrors: LangChainToolCallError[];
   usage?: UsageMetadata;
+  finishReason?: string;
 }
 
 type ToolOutcome =
@@ -209,6 +210,21 @@ export class AgentLoop {
         return this.#modelFailure(error, input.limits.signal);
       }
 
+      if (turn.finishReason === 'length') {
+        const reason = 'Model output reached its configured token limit and was discarded.';
+        yield {
+          type: LOOP_EVENT_TYPES.ModelOutputRejected,
+          outputId: turn.outputId,
+          reason,
+        };
+        return {
+          type: 'failed',
+          code: 'model_output_truncated',
+          message: reason,
+          details: { outputTokenLimitReached: true },
+        };
+      }
+
       if (turn.toolCalls.length === 0) {
         if (!turn.content.trim()) {
           return {
@@ -236,7 +252,10 @@ export class AgentLoop {
           }
           correctionMessages = [
             new AIMessage(turn.content),
-            new HumanMessage(validation.feedback),
+            runtimeCorrectionMessage(
+              validation.code ?? 'final_answer.rejected',
+              validation.feedback
+            ),
           ];
           continue;
         }
@@ -265,7 +284,10 @@ export class AgentLoop {
         };
         correctionMessages = [
           new AIMessage(turn.content || 'I attempted an invalid tool batch.'),
-          new HumanMessage(toolCallsValidation.feedback),
+          runtimeCorrectionMessage(
+            toolCallsValidation.code ?? 'tool_batch.rejected',
+            toolCallsValidation.feedback
+          ),
         ];
         continue;
       }
@@ -284,7 +306,7 @@ export class AgentLoop {
         };
         correctionMessages = [
           new AIMessage(turn.content || 'I attempted an invalid mixed tool batch.'),
-          new HumanMessage(feedback),
+          runtimeCorrectionMessage('tool_batch.exclusive', feedback),
         ];
         continue;
       }
@@ -413,6 +435,7 @@ export class AgentLoop {
       toolCalls: turn.toolCalls,
       assemblyErrors: turn.errors,
       usage: turn.usage,
+      finishReason: turn.finishReason,
     };
   }
 
@@ -510,6 +533,14 @@ export class AgentLoop {
   }
 }
 
+function runtimeCorrectionMessage(code: string, feedback: string): SystemMessage {
+  return new SystemMessage([
+    `<runtime_correction code=${JSON.stringify(code)}>`,
+    feedback,
+    '</runtime_correction>',
+  ].join('\n'));
+}
+
 function modelRunnableConfig(outputId: string, signal: AbortSignal | undefined) {
   return {
     signal,
@@ -540,6 +571,7 @@ function modelTurn(response: AIMessageChunk, outputId: string): ModelTurn {
     toolCalls: turn.toolCalls,
     assemblyErrors: turn.errors,
     usage: turn.usage,
+    finishReason: turn.finishReason,
   };
 }
 

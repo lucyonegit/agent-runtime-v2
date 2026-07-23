@@ -1,14 +1,24 @@
 import { AgentStoreError, type AgentStore } from '../storage/agent-store.js';
 import { TimelineBuilder } from './timeline-builder.js';
 import type { SessionViewV1 } from './view-contract.js';
-import type { AgentMessage, AgentToolInvocation, AgentUserInputRequest } from '../domain/index.js';
+import type {
+  AgentManagedProcess,
+  AgentMessage,
+  AgentToolInvocation,
+  AgentUserInputRequest,
+} from '../domain/index.js';
+
+export interface SessionProcessReader {
+  listSessionProcesses(sessionId: string): Promise<AgentManagedProcess[]>;
+}
 
 export class SessionView {
   readonly #timeline = new TimelineBuilder();
 
   constructor(
     private readonly store: AgentStore,
-    private readonly clock: { nowMs(): number } = { nowMs: () => Date.now() }
+    private readonly clock: { nowMs(): number } = { nowMs: () => Date.now() },
+    private readonly processReader?: SessionProcessReader
   ) {}
 
   async load(sessionId: string): Promise<SessionViewV1> {
@@ -23,6 +33,7 @@ export class SessionView {
       allMessages,
       toolInvocations,
       artifacts,
+      managedProcesses,
       userInputRequests,
       modelUsage,
     ] = await Promise.all([
@@ -32,6 +43,7 @@ export class SessionView {
       this.store.listSessionMessages(sessionId),
       this.store.listSessionToolInvocations(sessionId),
       this.store.listSessionArtifacts(sessionId),
+      this.processReader?.listSessionProcesses(sessionId) ?? Promise.resolve([]),
       this.store.listSessionUserInputRequests(sessionId),
       this.store.getModelUsageStats(sessionId),
     ]);
@@ -44,7 +56,7 @@ export class SessionView {
       artifacts,
     });
     return {
-      schemaVersion: 3,
+      schemaVersion: 4,
       generatedAtMs: this.clock.nowMs(),
       session,
       jobs,
@@ -53,6 +65,7 @@ export class SessionView {
       messages,
       toolInvocations: projected.invocations,
       artifacts,
+      managedProcesses,
       userInputRequests: projected.requests,
       ...(modelUsage ? { modelUsage } : {}),
       timeline,

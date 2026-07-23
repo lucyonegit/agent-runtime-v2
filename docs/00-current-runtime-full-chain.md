@@ -1,10 +1,9 @@
 # Agent Runtime v2 当前实现全链路
 
 > 文档性质：当前代码事实说明，不是目标架构提案。  
-> 核对日期：2026-07-21。  
-> Git 基线：cb295b6，并包含当前工作区尚未提交的 Shell 工具权限与超时调整。  
-> 数据库 schema：version 3，名称 explicit-job-recovery。  
-> Runtime 协议版本：unified-react-plan-tool-v4。  
+> 核对日期：2026-07-23。
+> 数据库 schema：version 5，名称 local-workspace-process-supervision。
+> Runtime 协议版本：unified-react-plan-tool-v5。
 > Context 规则版本：unified-react-context-v2。
 
 本文从一次 HTTP 请求进入系统开始，沿着 Session、Job、Job Attempt、Context、LangChain 模型调用、ReAct 循环、Plan、工具、HITL、Checkpoint、PostgreSQL、SSE 和前端 View 一直追踪到最终回复。所有结论均以当前代码为准。
@@ -191,6 +190,7 @@ sequenceDiagram
     participant P as Node process
     participant ENV as dotenv / env
     participant DB as PostgreSQL
+    participant PS as Local process supervisor
     participant RT as AgentRuntime
     participant HTTP as NestJS/Fastify
 
@@ -199,6 +199,7 @@ sequenceDiagram
     P->>DB: assertAgentRuntimeSchemaVersion
     Note over P,DB: 只读校验，不自动 migrate/reset
     P->>P: 创建 Store/EventBus/Model/Tools
+    P->>PS: 扫描带 Runtime 身份标记的存活进程
     P->>P: 创建 Orchestrator/ContextPreview/AgentRuntime
     P->>RT: start()
     RT->>RT: 启动 recovery scan
@@ -219,26 +220,29 @@ sequenceDiagram
 3. OPENAI_BASE_URL 和 OPENAI_MODEL 可覆盖默认值。
 4. ChatOpenAI 当前 temperature = 0，streaming = true。
 
-### 4.2 系统提示词如何约束统一 ReAct
+### 4.2 Prompt 治理如何约束统一 ReAct
 
-JOB_EXECUTION_SYSTEM_PROMPT 不只是角色描述，它是当前执行协议的一部分：
+`JOB_AGENT_SYSTEM_PROMPT` 是稳定的跨工具执行策略，不再重复每个工具的局部说明：
 
 - 简单、本地、单动作请求直接回答，不创建 Plan；
 - 多步骤、研究加综合、多 Artifact 或需要检查点的任务先调用 update_plan；
-- update_plan 必须单独调用，并发送完整当前计划；
-- 工作未结束时必须恰好一个 in_progress Step；
-- 每次推进 Step 前先用 update_plan 更新 durable progress；
 - 有 pending/in_progress Step 时禁止 final；
 - 搜索摘要只用于发现，依赖来源的结论必须打开网页验证；
 - 同一模型响应中的工具是 siblings，不能假设后一个看到前一个结果；
 - 搜索/读取与写入不能放在同一个工具批次；
-- 网页、应用、脚本、源码必须用 write_file 写到 code/；
-- 普通报告使用 write_article；
-- 依赖安装、构建、测试与脚本使用 run_shell；
-- 不能伪造 Plan evidenceMessageIds 或 artifactIds；
 - final 只能陈述实际存在的 durable outcome 与 Artifact。
 
-提示词版本 unified-react-plan-tool-v4 会进入 ModelCall manifest。提示词变化应升级版本，否则历史审计无法判断两次运行是否遵循同一协议。
+`update_plan` 的完整计划、稳定 Step key、唯一 `in_progress` 等局部规则由工具 Schema 描述并由 Runtime 校验；`write_file`、`write_article`、`run_shell`、`start_process` 的适用范围同样由各自工具契约负责。Runtime 拒绝非法输出时使用带错误码的内部 `SystemMessage`，不会伪装成用户消息。
+
+正式输入还包含一段稳定环境信息，描述 Session workspace、`code/docs/artifacts/downloads/tmp` 目录、平台、Shell 和时区。当前时间不放入稳定前缀，避免每轮破坏 Provider 缓存。
+
+Prompt 版本 `job-agent-v6` 以及以下组件会进入 ModelCall manifest：
+
+- `job-agent-policy`：稳定；
+- `job-agent-environment`：Session 内稳定；
+- `durable-runtime-state`：动态。
+
+每个组件都记录版本、cacheScope、checksum 和 estimatedTokens。完整 Prompt checksum 用于比较两次调用是否遵循相同输入协议；历史 ModelCall 的精确预览依赖持久化 `inputMessages + inputChecksum`，不要求当前部署仍使用相同 Prompt。
 
 ### 4.3 主要环境变量
 
@@ -249,16 +253,16 @@ JOB_EXECUTION_SYSTEM_PROMPT 不只是角色描述，它是当前执行协议的�
 | OPENAI_API_KEY | 无 | OpenAI-compatible key |
 | OPENAI_BASE_URL | provider 默认值 | 自定义兼容接口 |
 | OPENAI_MODEL | qwen-plus 或 gpt-4.1-mini | 模型名 |
+| AGENT_SERVER_HOST | 127.0.0.1 | Runtime HTTP 监听地址 |
+| AGENT_SERVER_PORT | 3000 | Runtime HTTP 监听端口 |
 | AGENT_RUNTIME_WORKER_ID | worker_进程号 | 租约 owner |
 | AGENT_SANDBOX_ROOT | .agent-sandbox | Session 工作区根 |
 | JOB_LEASE_MS | 30000 | Job 租约时长 |
 | JOB_HEARTBEAT_MS | 约租约三分之一，最少 1000 | 心跳间隔 |
 | JOB_RECOVERY_SCAN_MS | 5000 | 过期 Job 扫描 |
-| MODEL_MAX_CONTEXT_TOKENS | 128000 | Context 硬上限 |
-| MODEL_RESERVED_OUTPUT_TOKENS | 4096 | 为输出预留 |
-| HOST | 127.0.0.1 | HTTP 监听地址 |
-| PORT | 3000 | HTTP 端口 |
-
+| MODEL_CONTEXT_WINDOW_TOKENS | 按模型能力表 | 覆盖模型上下文窗口 |
+| MODEL_OUTPUT_TOKEN_LIMIT | 4096 | 覆盖单次输出上限，并传给 LangChain `maxTokens` |
+| MODEL_INPUT_TOKEN_LIMIT | `context - output` | 覆盖输入硬上限 |
 JOB_HEARTBEAT_MS 必须短于 JOB_LEASE_MS，否则启动直接失败。
 
 ### 4.4 关闭
@@ -267,11 +271,12 @@ SIGINT 或 SIGTERM 时：
 
 1. AgentRuntime.stop 关闭恢复扫描；
 2. JobExecutionOrchestrator.shutdown abort 所有本进程执行；
-3. 等待活动 Promise 收敛；
-4. 关闭 HTTP；
-5. 关闭数据库 Pool。
+3. ManagedProcessManager 关闭本地发现轮询，但不终止独立开发服务；
+4. 等待活动 Promise 收敛；
+5. 关闭 HTTP；
+6. 关闭数据库 Pool。
 
-进程被强杀时不会执行以上清理，恢复依赖租约过期与人工 Resume。
+Runtime 被强杀时不会执行以上清理。Job 恢复依赖租约过期与人工 Resume；已启动的独立开发服务继续运行，新 Runtime 通过命令行身份标记与本地 ownership token 重新发现它。
 
 ---
 
@@ -665,6 +670,9 @@ Runtime 每次执行前会比对持久化的 toolName、argumentsChecksum 和 si
 | write_file | idempotent | requiresFreshContext | 写文件并登记 Artifact |
 | write_article | idempotent | requiresFreshContext | 写文档 Artifact |
 | run_shell | side_effecting | exclusive、requiresFreshContext | 执行宿主 Shell |
+| start_process | side_effecting | exclusive、requiresFreshContext | 启动并监管常驻开发服务 |
+| get_process/read_process_logs | read_only | 无 | 查询本机实时进程状态与 workspace 日志 |
+| stop_process | idempotent | exclusive、requiresFreshContext | 按 processId 安全停止常驻服务 |
 | browse_url/web_search | read_only | 无 | 网页读取与搜索 |
 
 ### 13.4 文件与 Shell 权限边界
@@ -675,7 +683,7 @@ Runtime 每次执行前会比对持久化的 toolName、argumentsChecksum 和 si
 
 - 可访问宿主网络；
 - 可读写宿主文件系统；
-- 继承宿主环境变量；
+- 继承普通宿主环境变量，但移除 Runtime 的数据库/API Key、AGENT_RUNTIME_*、AGENT_SERVER_* 以及容易污染应用端口的 HOST/PORT；
 - 不使用 OS sandbox；
 - 默认超时 5 分钟，最大 30 分钟；
 - stdout、stderr 各截断到约 32 KB；
@@ -683,6 +691,10 @@ Runtime 每次执行前会比对持久化的 toolName、argumentsChecksum 和 si
 - 非零退出与超时返回稳定 ToolExecutionError。
 
 因此 sandboxRoot 只是默认 cwd 所在的 Session 工作区，不是 run_shell 的安全沙箱。
+
+常驻服务不由 run_shell 等待。start_process 会在 Session workspace 中写入权限为 0600 的本地启动 spec，创建带 processId、sessionId、ownershipToken 命令行标记的独立 supervisor/进程组，默认从 4100-4999 选择空闲端口，显式注入应用自己的 HOST/PORT，并在 TCP 端口可连接后才返回 running。
+
+PID、进程组、端口与 liveness 不进入 PostgreSQL。Runtime 内存 registry 是当前进程内的实时视图；Runtime 重启后扫描 `ps`，只有命令行标记与 Session workspace 内本地 spec 的 ownershipToken 同时匹配才会接管展示和停止能力。停止前会再次核验身份，避免对 PID 复用后的无关进程发送信号。工具调用及 ToolResult 仍按普通工具协议持久化，因此业务审计不依赖本地进程表。
 
 ---
 
@@ -962,19 +974,24 @@ root Job
 ### 18.6 Token 预算
 
 ~~~text
-hardInputLimit = maxContextTokens - reservedOutputTokens
-safeInputLimit = floor(hardInputLimit * 0.9)
+inputTokenLimit = configuredInputLimit ?? (contextWindowTokens - outputTokenLimit)
+shouldCompress = predictedAllInputTokens >= inputTokenLimit * 0.55
+mustCompress   = predictedAllInputTokens >= inputTokenLimit * 0.75
 ~~~
 
-Token 先使用 CJK-aware estimator，再使用同一 provider/model 最近调用的 P95 误差校准。选择过程：
+`predictedAllInputTokens` 先使用 CJK-aware estimator，再使用同一
+provider/model 最近调用的 P95 误差校准。构建过程：
 
-1. 加入固定 SystemMessage 与 tool schemas；
-2. 计算 mustKeep；
-3. mustKeep 超过 hard limit，直接 ContextOverflow，不静默删除当前目标；
-4. 选择 optional 非 tail 材料；
-5. 从最新历史 Bundle 向前选择连续尾部；
-6. 遇到第一个放不下的历史 Bundle 就停止，避免时间断层；
+1. 加载全部候选输入，包括 SystemMessage、tool schemas、Context Memory 和完整 Bundle；
+2. 预测全部候选输入 Token，所有压缩判断只与 `inputTokenLimit` 比较；
+3. 低于 55% 时直接构建完整 Context；
+4. 55% 到 75% 时尝试压缩；压缩失败仍可使用完整输入，因为它远离硬上限；
+5. 达到 75% 时必须压缩到阈值以下；无候选、失败或四批后仍超阈值均抛出 `context_overflow`；
+6. 禁止通过独立的 90% 选择线静默丢弃历史；
 7. 生成 manifest 与 token breakdown。
+
+Provider 若以 `finish_reason=length` 结束输出，Runtime 会丢弃该轮流式草稿并以
+`model_output_truncated` 结束 Job，禁止把截断正文或不完整 ToolCall 当成成功结果。
 
 ### 18.7 ToolResult 投影
 
@@ -1253,6 +1270,8 @@ append-only 恢复边界。job + sequenceNo 唯一，按 sequenceNo desc 读最�
 | 1 | unified-job-react-canonical | 基础业务事实 |
 | 2 | durable-react-checkpoints | LoopCheckpoint、ToolExecutionAttempt |
 | 3 | explicit-job-recovery | recovery_required 与 active Job 唯一索引 |
+| 4 | managed-workspace-processes | 历史迁移：曾引入常驻进程表 |
+| 5 | local-workspace-process-supervision | 删除进程表；切换为 OS 发现、本地 spec 与内存 registry |
 
 迁移必须显式执行 npm run schema:migrate。正常服务启动不会修改 schema。
 
@@ -1279,7 +1298,7 @@ append-only 恢复边界。job + sequenceNo 唯一，按 sequenceNo desc 读最�
 
 ## 22. SessionView 与 Timeline
 
-当前 SessionView schemaVersion = 3：
+当前 SessionView schemaVersion = 4：
 
 ~~~text
 session
@@ -1289,6 +1308,7 @@ planSteps[]
 messages[]            仅公开 UI 消息
 toolInvocations[]
 artifacts[]
+managedProcesses[]    SessionView 查询时合并的本机实时进程快照
 userInputRequests[]
 modelUsage
 timeline.flat[]
@@ -1346,6 +1366,7 @@ unknown 会附带需要人工确认的 warning。
 8. user_input.upserted
 9. model_usage.updated
 10. artifact.upserted
+11. managed_process.upserted
 
 ### 23.2 前端流程
 
@@ -1395,7 +1416,7 @@ Reducer 规则：
 ### 23.4 权威性与当前缺口
 
 ~~~text
-PostgreSQL facts > SessionView refresh > SSE incremental projection > local delta
+PostgreSQL business facts + OS process snapshot > SessionView refresh > SSE incremental projection > local delta
 ~~~
 
 当前 SSE 是进程内 RxJS Subject：
@@ -1405,6 +1426,8 @@ PostgreSQL facts > SessionView refresh > SSE incremental projection > local delt
 - 服务重启后旧事件消失；
 - 断线恢复依赖重新 GET SessionView；
 - 广播失败依赖刷新纠正。
+
+其中 Job、Message、Plan、ToolInvocation、Artifact 等来自 PostgreSQL；`managedProcesses[]` 是 SessionView 在读取时通过本地进程读取器动态合并的 overlay，不是数据库事实。
 
 前端 AgentApi.subscribeSessionEvents 的事件订阅列表当前漏掉 artifact.upserted，虽然 reducer 已实现 Artifact upsert。Artifact 因而往往要等下一次 reload 才出现。
 

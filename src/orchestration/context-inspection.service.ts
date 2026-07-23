@@ -15,6 +15,7 @@ import { ModelCallContextLoader } from '../runtime/loaders/model-call-context-lo
 import { SessionContextLoader } from '../runtime/loaders/session-context-loader.js';
 import { resolveJobGoalMessage } from '../runtime/job-goal.js';
 import { RuntimeError } from '../runtime/runtime-errors.js';
+import { createJobPromptManifest } from '../runtime/prompting/job-agent-prompt.js';
 
 export type ContextQuery =
   | { kind: 'next_turn'; sessionId: string }
@@ -59,6 +60,9 @@ export interface ContextInspectionServiceOptions {
   model: ContextModelBudget;
   systemPrompt: string;
   systemPromptVersion: string;
+  promptId?: string;
+  promptVersion?: number;
+  stableContext?: (sessionId: string) => string | undefined;
   clock?: { nowMs(): number };
 }
 
@@ -75,8 +79,11 @@ export class ContextInspectionService {
       store: options.store,
       systemPrompt: options.systemPrompt,
       systemPromptVersion: options.systemPromptVersion,
+      promptId: options.promptId,
+      promptVersion: options.promptVersion,
       model: options.model,
       toolSchemas: options.tools,
+      stableContext: options.stableContext,
     });
     this.#modelCalls = new ModelCallContextLoader(options.store);
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
@@ -102,14 +109,24 @@ export class ContextInspectionService {
       this.options.store.listRecentSessionModelCalls(query.sessionId, 100),
     ]);
     assertNoActiveJob(jobs);
-    const material: ContextMaterial = {
-      fixedMessages: [{
+    const stableContext = this.options.stableContext?.(session.id);
+    const fixedMessages: ContextMaterial['fixedMessages'] = [{
         id: 'must_keep:system',
         message: new SystemMessage(this.options.systemPrompt),
         text: this.options.systemPrompt,
-      }],
-      fixedPrefix: { systemPrompt: this.options.systemPrompt },
-      trailingMessages: buildDurableRuntimeStateMessages(facts),
+      }];
+    if (stableContext) {
+      fixedMessages.push({
+        id: 'must_keep:stable',
+        message: new SystemMessage(stableContext),
+        text: stableContext,
+      });
+    }
+    const trailingMessages = buildDurableRuntimeStateMessages(facts);
+    const material: ContextMaterial = {
+      fixedMessages,
+      fixedPrefix: { systemPrompt: this.options.systemPrompt, stableContext },
+      trailingMessages,
       groups: facts.groups.map(group => ({
         group,
         segment: 'session_history',
@@ -129,6 +146,15 @@ export class ContextInspectionService {
         purpose: 'job_execution',
         contextRulesVersion: CONTEXT_RULES_VERSION,
         systemPromptVersion: this.options.systemPromptVersion,
+        ...(this.options.promptId && this.options.promptVersion !== undefined ? {
+          prompt: createJobPromptManifest({
+            systemPrompt: this.options.systemPrompt,
+            promptId: this.options.promptId,
+            promptVersion: this.options.promptVersion,
+            stableContext,
+            runtimeStateMessages: trailingMessages.map(message => message.text),
+          }),
+        } : {}),
       },
       blockedDiagnostics: facts.blocked.map(item => ({
         messageId: item.callMessage.id,
@@ -139,7 +165,6 @@ export class ContextInspectionService {
         disabled: false,
         recentRawTokenBudget: 24_000,
         minimumRecentGroups: 2,
-        compactAtRatio: 0.55,
       },
     };
     const snapshot = this.#snapshot(query, session.id, compileContext(material), {

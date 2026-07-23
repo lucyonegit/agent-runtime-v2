@@ -5,6 +5,7 @@ import {
   type ExceptionFilter,
 } from '@nestjs/common';
 import { RuntimeError } from '../../runtime/runtime-errors.js';
+import { RuntimeToolExecutionError } from '../../runtime/tool-executor.js';
 import { AgentStoreError } from '../../storage/agent-store.js';
 
 interface HttpReply {
@@ -16,7 +17,9 @@ export class RuntimeExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
     const reply = host.switchToHttp().getResponse<HttpReply>();
     const status = httpStatus(exception);
-    const error = exception instanceof RuntimeError || exception instanceof AgentStoreError
+    const error = exception instanceof RuntimeError
+      || exception instanceof RuntimeToolExecutionError
+      || exception instanceof AgentStoreError
       ? exception.code
       : status === HttpStatus.BAD_REQUEST ? 'bad_request' : 'internal_error';
     const message = exception instanceof Error ? exception.message : 'Internal server error.';
@@ -38,6 +41,13 @@ function httpStatus(exception: unknown): number {
       return HttpStatus.CONFLICT;
     }
     if (exception.code === 'invalid_job_state') return HttpStatus.UNPROCESSABLE_ENTITY;
+  }
+  if (exception instanceof RuntimeToolExecutionError) {
+    if (exception.code === 'managed_process_not_found') return HttpStatus.NOT_FOUND;
+    if (exception.code === 'managed_process_conflict' || exception.code === 'process_port_unavailable') {
+      return HttpStatus.CONFLICT;
+    }
+    if (exception.code.startsWith('invalid_')) return HttpStatus.UNPROCESSABLE_ENTITY;
   }
   return HttpStatus.INTERNAL_SERVER_ERROR;
 }

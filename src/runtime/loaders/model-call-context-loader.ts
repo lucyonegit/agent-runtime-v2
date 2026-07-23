@@ -71,6 +71,7 @@ export class ModelCallContextLoader {
         name: call.model,
         maxContextTokens: call.maxContextTokens,
         reservedOutputTokens: call.reservedOutputTokens,
+        inputTokenLimit: call.inputManifest.tokenPrediction?.hardInputLimit,
       },
       audit: {
         purpose: call.inputManifest.purpose,
@@ -111,9 +112,7 @@ export class ModelCallContextLoader {
   private verifyManifest(call: AgentModelCall, built: BuiltContext): void {
     const manifest = built.inputManifest;
     if (
-      manifest.fixedPrefixChecksum !== call.inputManifest.fixedPrefixChecksum
-      || manifest.toolSchemaChecksum !== call.inputManifest.toolSchemaChecksum
-      || JSON.stringify(manifest.messageGroupIds) !== JSON.stringify(call.inputManifest.messageGroupIds)
+      JSON.stringify(manifest.messageGroupIds) !== JSON.stringify(call.inputManifest.messageGroupIds)
       || JSON.stringify(manifest.summaryIds) !== JSON.stringify(call.inputManifest.summaryIds)
       || JSON.stringify(manifest.selectedBundleIds ?? [])
         !== JSON.stringify(call.inputManifest.selectedBundleIds ?? [])
@@ -124,5 +123,9 @@ export class ModelCallContextLoader {
         `ModelCall ${JSON.stringify(call.id)} cannot be reconstructed from its persisted manifest.`
       );
     }
+    // Historical prompt text and Tool schemas may legitimately differ from the
+    // currently deployed Runtime. Exact inspection is backed by the persisted
+    // inputMessages + inputChecksum and the recorded prompt/tool checksums, so
+    // current fixed-prefix equality is neither required nor desirable here.
   }
 }

@@ -10,6 +10,10 @@ import type {
   RuntimeUserInputArtifact,
 } from '../src/runtime/tool-executor.js';
 import { isPrivateAddress, isTextMediaType } from '../src/tools/browser-tools.js';
+import {
+  FILE_WRITE_MAX_CHARACTERS,
+  FILE_WRITE_MAX_ESTIMATED_TOKENS,
+} from '../src/tools/filesystem-tools.js';
 import { createRuntimeTools, removeSessionSandbox } from '../src/tools/index.js';
 import { jsonToolOutput } from '../src/tools/tool-utils.js';
 
@@ -46,6 +50,8 @@ describe('LangChain runtime tools', () => {
       'list_files',
       'read_file',
       'write_file',
+      'start_file_write',
+      'append_file_chunk',
       'grep_files',
       'list_symbols',
       'run_shell',
@@ -54,9 +60,15 @@ describe('LangChain runtime tools', () => {
     ]);
     expect(new Set(tools.map(item => item.tool.name)).size).toBe(tools.length);
     expect(tools.filter(item => item.requiresFreshContext).map(item => item.tool.name))
-      .toEqual(['write_article', 'write_file', 'run_shell']);
+      .toEqual([
+        'write_article',
+        'write_file',
+        'start_file_write',
+        'append_file_chunk',
+        'run_shell',
+      ]);
     expect(tools.filter(item => item.exclusive).map(item => item.tool.name))
-      .toEqual(['run_shell']);
+      .toEqual(['start_file_write', 'append_file_chunk', 'run_shell']);
   });
 
   it('runs basic tools through LangChain ToolCall and returns ToolMessage artifacts', async () => {
@@ -129,6 +141,185 @@ describe('LangChain runtime tools', () => {
       join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'index.html'),
       'utf8'
     )).resolves.toContain('<title>Runtime</title>');
+  });
+
+  it('publishes and enforces the single-call file content limits', async () => {
+    const writeFile = tools.find(item => item.tool.name === 'write_file')!;
+    const writeArticle = tools.find(item => item.tool.name === 'write_article')!;
+    expect(writeFile.tool.description).toContain(`${FILE_WRITE_MAX_CHARACTERS} characters`);
+    expect(JSON.stringify(writeFile.tool.schema)).toContain(
+      `"maxLength":${FILE_WRITE_MAX_CHARACTERS}`
+    );
+    expect(writeFile.argumentLimits).toEqual([expect.objectContaining({
+      path: 'content',
+      maxCharacters: FILE_WRITE_MAX_CHARACTERS,
+      maxEstimatedTokens: FILE_WRITE_MAX_ESTIMATED_TOKENS,
+      errorCode: 'file_content_too_large',
+    })]);
+    expect(JSON.stringify(writeArticle.tool.schema)).toContain(
+      `"maxLength":${FILE_WRITE_MAX_CHARACTERS}`
+    );
+    expect(writeArticle.argumentLimits).toEqual([expect.objectContaining({
+      path: 'content',
+      maxEstimatedTokens: FILE_WRITE_MAX_ESTIMATED_TOKENS,
+    })]);
+
+    await expect(invoke('write_file', {
+      path: 'code/too-large.ts',
+      content: 'x'.repeat(FILE_WRITE_MAX_CHARACTERS + 1),
+    })).rejects.toThrow();
+    await expect(invoke('write_file', {
+      path: 'docs/token-heavy.md',
+      content: '中'.repeat(FILE_WRITE_MAX_ESTIMATED_TOKENS + 1),
+    })).rejects.toMatchObject({ code: 'file_content_too_large' });
+    await expect(invoke('write_article', {
+      title: 'Too long',
+      content: '中'.repeat(FILE_WRITE_MAX_ESTIMATED_TOKENS + 1),
+      format: 'markdown',
+    })).rejects.toMatchObject({ code: 'file_content_too_large' });
+  });
+
+  it('writes one large file in durable chunks and creates an Artifact only on finalize', async () => {
+    const destination = join(
+      sandboxRoot,
+      'sessions',
+      'session_1',
+      'workspace',
+      'code',
+      'large.ts'
+    );
+    const started = await invoke('start_file_write', {
+      path: 'code/large.ts',
+      content: 'export const first = 1;\n',
+    }) as {
+      writeId: string;
+      acceptedChunkIndex: number;
+      nextChunkIndex: number;
+      status: string;
+      artifacts?: unknown[];
+    };
+    expect(started).toMatchObject({
+      writeId: expect.stringMatching(/^file_write_[a-f0-9]{32}$/),
+      acceptedChunkIndex: 0,
+      nextChunkIndex: 1,
+      status: 'open',
+    });
+    expect(started.artifacts).toBeUndefined();
+    await expect(stat(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    context = {
+      ...context,
+      toolInvocationId: 'invocation_2',
+      toolCallId: 'call_2',
+      idempotencyKey: 'idempotency_2',
+    };
+    const appended = await invoke('append_file_chunk', {
+      writeId: started.writeId,
+      chunkIndex: 1,
+      content: 'export const second = 2;\n',
+      finalize: false,
+    }) as {
+      acceptedChunkIndex: number;
+      nextChunkIndex: number;
+      status: string;
+      artifacts?: unknown[];
+    };
+    expect(appended).toMatchObject({
+      acceptedChunkIndex: 1,
+      nextChunkIndex: 2,
+      status: 'open',
+    });
+    expect(appended.artifacts).toBeUndefined();
+    await expect(stat(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    // Staging state is filesystem-backed, so a new Runtime tool instance can continue it.
+    tools = createRuntimeTools();
+    context = {
+      ...context,
+      toolInvocationId: 'invocation_3',
+      toolCallId: 'call_3',
+      idempotencyKey: 'idempotency_3',
+    };
+    const completed = await invoke('append_file_chunk', {
+      writeId: started.writeId,
+      chunkIndex: 2,
+      content: 'export const third = 3;\n',
+      finalize: true,
+    }) as {
+      status: string;
+      acceptedChunkIndex: number;
+      size: number;
+      checksum: string;
+      artifacts: Array<{ storagePath: string; metadata: Record<string, unknown> }>;
+    };
+    expect(completed).toMatchObject({
+      status: 'completed',
+      acceptedChunkIndex: 2,
+      size: expect.any(Number),
+      checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+      artifacts: [expect.objectContaining({
+        storagePath: '.revisions/invocation_3/code/large.ts',
+        metadata: expect.objectContaining({
+          chunked: true,
+          chunkCount: 3,
+          writeId: started.writeId,
+          snapshot: true,
+        }),
+      })],
+    });
+    const expected = [
+      'export const first = 1;\n',
+      'export const second = 2;\n',
+      'export const third = 3;\n',
+    ].join('');
+    await expect(readFile(destination, 'utf8')).resolves.toBe(expected);
+    await expect(readFile(
+      join(
+        sandboxRoot,
+        'sessions',
+        'session_1',
+        'workspace',
+        completed.artifacts[0]!.storagePath
+      ),
+      'utf8'
+    )).resolves.toBe(expected);
+  });
+
+  it('makes accepted file chunks idempotent and rejects conflicts or gaps', async () => {
+    const started = await invoke('start_file_write', {
+      path: 'docs/chunked.md',
+      content: 'zero',
+    }) as { writeId: string };
+    context = {
+      ...context,
+      toolInvocationId: 'invocation_2',
+      toolCallId: 'call_2',
+      idempotencyKey: 'idempotency_2',
+    };
+    await expect(invoke('append_file_chunk', {
+      writeId: started.writeId,
+      chunkIndex: 2,
+      content: 'gap',
+      finalize: false,
+    })).rejects.toMatchObject({ code: 'file_chunk_out_of_order' });
+    await expect(invoke('append_file_chunk', {
+      writeId: started.writeId,
+      chunkIndex: 1,
+      content: 'one',
+      finalize: false,
+    })).resolves.toMatchObject({ nextChunkIndex: 2 });
+    await expect(invoke('append_file_chunk', {
+      writeId: started.writeId,
+      chunkIndex: 1,
+      content: 'one',
+      finalize: false,
+    })).resolves.toMatchObject({ nextChunkIndex: 2, replayed: true });
+    await expect(invoke('append_file_chunk', {
+      writeId: started.writeId,
+      chunkIndex: 1,
+      content: 'different',
+      finalize: false,
+    })).rejects.toMatchObject({ code: 'file_chunk_conflict' });
   });
 
   it('reads, writes, lists, searches and indexes the session workspace', async () => {
@@ -214,7 +405,7 @@ describe('LangChain runtime tools', () => {
     await expect(running).rejects.toMatchObject({ name: 'AbortError' });
   });
 
-  it('inherits Runtime environment, host filesystem permissions, and network access', async () => {
+  it('keeps host filesystem and network access while isolating Runtime-only environment', async () => {
     const outsideDirectory = await mkdtemp(join(tmpdir(), 'agent-runtime-v2-shell-outside-'));
     const outsideFile = join(outsideDirectory, 'host-file.txt');
     await writeFile(outsideFile, 'before', 'utf8');
@@ -235,10 +426,12 @@ describe('LangChain runtime tools', () => {
           `cat '${outsideFile}'`,
           `printf '|'`,
           `/usr/bin/curl --fail --silent 'http://127.0.0.1:${address.port}/'`,
+          `printf '|%s' "$WORKSPACE_EXPLICIT_VALUE"`,
         ].join('; '),
+        env: { WORKSPACE_EXPLICIT_VALUE: 'explicit-value' },
       })).resolves.toMatchObject({
         exitCode: 0,
-        stdout: 'inherited-value|after|network-ok',
+        stdout: '|after|network-ok|explicit-value',
         stderr: '',
       });
       await expect(readFile(outsideFile, 'utf8')).resolves.toBe('after');

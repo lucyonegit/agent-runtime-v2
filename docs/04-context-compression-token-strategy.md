@@ -109,7 +109,7 @@ owner_type           = session
 owner_id             = sessionId
 purpose              = conversation
 summary_type         = rolling
-compression_prompt_version = context-memory-v1
+compression_prompt_version = context-memory-v2
 ```
 
 同一 `owner + purpose + rulesVersion` 只保留一个 active Memory。新版本通过 `replaceContextSummary()` 原子替换旧版本，并通过 `parentSummaryId` 保留审计链。
@@ -202,6 +202,8 @@ AND group is not a protected must-keep group
 - 尚未落库的流式草稿；
 - 当前模型调用所需的临时纠错指令；
 - Durable Runtime State。
+
+临时纠错指令以带稳定错误码的内部 `SystemMessage` 注入当前 ReAct 循环，不作为用户消息持久化。Durable Runtime State 使用版本化 JSON envelope，并通过 Artifact 投影和 Step result/error 预览限制在约 8,000 tokens 内。
 
 不完整 Tool exchange 当前不会进入可见 Groups，并且当前 Job 存在不完整协议时直接拒绝继续构建，而不是压缩或猜测。
 
@@ -402,8 +404,8 @@ predictedTotal  = sum(predicted(item)) + errorReserve
 定义：
 
 ```text
-hardInputLimit = maxContextTokens - reservedOutputTokens
-pressureRatio  = predictedCandidateTokens / hardInputLimit
+inputTokenLimit = configuredInputLimit ?? (contextWindowTokens - outputTokenLimit)
+pressureRatio   = predictedCandidateTokens / inputTokenLimit
 ```
 
 默认等级：
@@ -420,24 +422,58 @@ pressureRatio  = predictedCandidateTokens / hardInputLimit
 
 ## 13. 预算选择
 
-模型预算：
+模型限制由 `src/server/runtime/model-token-limits.ts` 的内置能力表解析，并允许部署环境覆盖：
 
 ```text
-C = maxContextTokens
-O = reservedOutputTokens
-H = C - O
-S = floor(H * 0.90)
+C = contextWindowTokens
+O = outputTokenLimit
+I = inputTokenLimit ?? (C - O)
 ```
 
-`reservedOutputTokens` 现在同时传给 `ChatOpenAI.maxTokens`，因此 Runtime 预算和 Provider 输出上限一致。
+约束为 `0 < I <= C - O`。不再设置独立的 `inputSelectionLimit`：
+55%/75% 压缩状态机是唯一的输入容量控制，不能在压缩前通过另一条
+90% 选择线静默丢弃历史。`outputTokenLimit` 同时传给
+`ChatOpenAI.maxTokens`，因此 Runtime 输入预算和 Provider 输出上限使用同一份配置。
+默认输出固定为 4,096 Token；大文档和代码应通过文件工具落盘，而不是扩大单条回复。
+
+内置表目前覆盖运行时实际使用和默认支持的 Qwen Max、Qwen Plus、Qwen 3.x
+以及 GPT-4.1、GPT-4o 系列。未知模型不会套用猜测值：必须设置
+`MODEL_CONTEXT_WINDOW_TOKENS`，或先把模型加入能力表。可覆盖变量：
+
+```text
+MODEL_CONTEXT_WINDOW_TOKENS
+MODEL_OUTPUT_TOKEN_LIMIT
+MODEL_INPUT_TOKEN_LIMIT
+```
+
+模型能力基线来自官方模型目录：
+
+- [阿里云百炼文本生成模型](https://help.aliyun.com/zh/model-studio/text-generation-model)
+- [OpenAI GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini)
+- [OpenAI GPT-4o](https://developers.openai.com/api/docs/models/gpt-4o)
+
+主要内置值：
+
+| 模型族 | Context window | Runtime output limit | 派生 input limit |
+| --- | ---: | ---: | ---: |
+| qwen-max | 32,768 | 4,096 | 28,672 |
+| qwen-plus | 1,000,000 | 4,096 | 995,904 |
+| qwen3.7-max / qwen3.7-plus | 1,000,000 | 4,096 | 995,904 |
+| qwen3-max | 262,144 | 4,096 | 258,048 |
+| GPT-4.1 / mini / nano | 1,047,576 | 4,096 | 1,043,480 |
+| GPT-4o / mini | 128,000 | 4,096 | 123,904 |
 
 选择过程使用 calibrated predicted tokens，而调试清单仍保留 raw estimate：
 
 1. 所有 must-keep 项先进入；
-2. must-keep 超过 `H` 直接抛 `ContextOverflowError`；
+2. must-keep 超过 `I` 直接抛 `ContextOverflowError`；
 3. 其他项按优先级和新鲜度选择；
 4. TurnBundle 的可选尾部保持连续，避免选中更老轮次却跳过较新轮次；
-5. 总预测输入不超过 `S`。
+5. 总预测输入不超过 `S`，任何输入都不得超过 `I`。
+
+如果 Provider 返回 `finish_reason=length`，该轮 delta 会通过
+`message.discarded` 撤销，Job 以 `model_output_truncated` 失败；Runtime 不会把被截断的
+正文或半截 ToolCall JSON 当成最终结果。
 
 ## 14. ToolResult 投影
 

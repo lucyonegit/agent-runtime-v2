@@ -1,5 +1,6 @@
 import type { AgentJob } from './job.js';
 import type { AgentMessage, AgentMessageChannel } from './message.js';
+import type { AgentManagedProcess } from './managed-process.js';
 import type { AgentModelUsageStats } from './model-call.js';
 import type { AgentPlan, AgentPlanStep } from './plan.js';
 import type { AgentToolInvocation } from './tool-invocation.js';
@@ -14,6 +15,7 @@ export const AGENT_REALTIME_ENTITY_EVENT_TYPES = [
   'user_input.upserted',
   'model_usage.updated',
   'artifact.upserted',
+  'managed_process.upserted',
 ] as const;
 
 export type AgentRealtimeEvent =
@@ -45,5 +47,6 @@ export type AgentRealtimeEvent =
   | { type: 'tool_invocation.upserted'; sessionId: string; invocation: AgentToolInvocation }
   | { type: 'user_input.upserted'; sessionId: string; request: AgentUserInputRequest }
   | { type: 'model_usage.updated'; sessionId: string; stats: AgentModelUsageStats }
-  | { type: 'artifact.upserted'; sessionId: string; artifact: AgentArtifact };
+  | { type: 'artifact.upserted'; sessionId: string; artifact: AgentArtifact }
+  | { type: 'managed_process.upserted'; sessionId: string; process: AgentManagedProcess };
 import type { AgentArtifact } from './artifact.js';
