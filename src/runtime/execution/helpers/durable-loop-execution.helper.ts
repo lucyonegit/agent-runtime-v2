@@ -43,19 +43,8 @@ export async function executeDurableAgentLoop(
     type: typeof LOOP_EVENT_TYPES.ToolInputRequired;
   }>> = [];
   const iterator = loop.run({
-    messages: input.messages,
+    ...input.loopInput,
     target,
-    tools: input.tools,
-    toolExecutor: input.toolExecutor,
-    outputIdFactory: input.outputIdFactory,
-    limits: input.limits,
-    prepareMessages: input.prepareMessages,
-    exclusiveToolNames: input.exclusiveToolNames,
-    validateToolCalls: input.validateToolCalls,
-    validateFinalAnswer: input.validateFinalAnswer,
-    initialIterationNo: input.initialIterationNo,
-    initialExecutedToolCalls: input.initialExecutedToolCalls,
-    resumeToolCalls: input.resumeToolCalls,
   });
 
   while (true) {

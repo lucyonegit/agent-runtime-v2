@@ -171,7 +171,7 @@ export interface ReActContextMaterialOptions {
   toolSchemas: StructuredToolInterface[];
   promptId?: string;
   promptVersion?: number;
-  stableContext?: (sessionId: string) => string | undefined;
+  getStableContext?: (sessionId: string) => string | undefined;
   recentRawTokenBudget?: number;
   minimumRecentGroups?: number;
 }

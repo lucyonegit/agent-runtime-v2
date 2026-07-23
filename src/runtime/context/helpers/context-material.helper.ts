@@ -135,7 +135,7 @@ function buildContextMaterial(
   }
 ): ContextMaterial {
   const { facts, job } = input;
-  const stableContext = options.stableContext?.(input.sessionId);
+  const stableContext = options.getStableContext?.(input.sessionId);
   const fixedMessages: ContextMaterial['fixedMessages'] = [{
     id: 'must_keep:system',
     message: new SystemMessage(options.systemPrompt),

@@ -11,7 +11,6 @@ import type { AgentArtifactDraft, AgentToolCall } from '../../domain/index.js';
 import {
   LOOP_EVENT_TYPES,
   type LoopEvent,
-  type LoopMessageChannel,
   type ToolUserInputRequest,
 } from './loop-events.js';
 import type { LoopResult } from './loop-result.js';
@@ -34,40 +33,52 @@ export interface AgentLoopLimits {
   signal?: AbortSignal;
 }
 
-export interface AgentLoopInput {
-  messages: BaseMessage[];
-  target: AgentLoopTarget;
-  tools: StructuredToolInterface[];
-  toolExecutor: ToolExecutorPort;
-  outputIdFactory: () => string;
-  limits: AgentLoopLimits;
-  deltaChannel?: LoopMessageChannel;
-  prepareMessages?: (iteration: number) => Promise<BaseMessage[]>;
-  exclusiveToolNames?: ReadonlySet<string>;
-  validateToolCalls?: ToolCallsValidator;
-  validateFinalAnswer?: FinalAnswerValidator;
-  /** Durable counters and pending calls restored from the latest checkpoint. */
-  initialIterationNo?: number;
-  initialExecutedToolCalls?: number;
-  resumeToolCalls?: AgentToolCall[];
+export interface AgentLoopContext {
+  loadMessages(iteration: number): Promise<BaseMessage[]>;
 }
 
-type ToolCallsValidation =
+export interface AgentLoopToolRuntime {
+  definitions: StructuredToolInterface[];
+  executor: ToolExecutorPort;
+  exclusiveNames?: ReadonlySet<string>;
+}
+
+export interface AgentLoopPolicy {
+  validateToolCalls?: ToolCallsValidator;
+  validateFinalAnswer?: FinalAnswerValidator;
+}
+
+export interface AgentLoopResumeState {
+  iterationNo: number;
+  executedToolCalls: number;
+  pendingToolCalls: AgentToolCall[];
+}
+
+export interface AgentLoopInput {
+  target: AgentLoopTarget;
+  context: AgentLoopContext;
+  tools: AgentLoopToolRuntime;
+  policy?: AgentLoopPolicy;
+  limits: AgentLoopLimits;
+  resume?: AgentLoopResumeState;
+}
+
+export type ToolCallsValidation =
   | { type: 'accept' }
   | { type: 'retry'; code?: string; feedback: string };
 
-type ToolCallsValidator = (candidate: {
+export type ToolCallsValidator = (candidate: {
   outputId: string;
   content: string;
   toolCalls: AgentToolCall[];
 }) => Promise<ToolCallsValidation>;
 
-type FinalAnswerValidation =
+export type FinalAnswerValidation =
   | { type: 'accept' }
   | { type: 'retry'; code?: string; feedback: string }
   | { type: 'fail'; code: 'invalid_plan_state'; message: string; details?: unknown };
 
-type FinalAnswerValidator = (candidate: {
+export type FinalAnswerValidator = (candidate: {
   outputId: string;
   content: string;
 }) => Promise<FinalAnswerValidation>;
@@ -100,6 +111,7 @@ export class FatalToolExecutionError extends Error {
 
 export interface AgentLoopOptions {
   model: LangChainChatRunnable;
+  createOutputId: () => string;
   streaming?: boolean;
   clock?: { nowMs(): number };
 }
@@ -132,25 +144,26 @@ type ToolOutcome =
 
 export class AgentLoop {
   readonly #model: LangChainChatRunnable;
+  readonly #createOutputId: () => string;
   readonly #streaming: boolean;
   readonly #clock: { nowMs(): number };
 
   constructor(options: AgentLoopOptions) {
     this.#model = options.model;
+    this.#createOutputId = options.createOutputId;
     this.#streaming = options.streaming ?? true;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
   }
 
   async *run(input: AgentLoopInput): AsyncGenerator<LoopEvent, LoopResult> {
     assertLimits(input.limits);
-    let messages = [...input.messages];
     let correctionMessages: BaseMessage[] = [];
-    const definitions = new Map(input.tools.map(tool => [tool.name, tool]));
-    let executedToolCalls = input.initialExecutedToolCalls ?? 0;
+    const definitions = new Map(input.tools.definitions.map(tool => [tool.name, tool]));
+    let executedToolCalls = input.resume?.executedToolCalls ?? 0;
 
-    if (input.resumeToolCalls?.length) {
+    if (input.resume?.pendingToolCalls.length) {
       const inputRequests: Extract<ToolOutcome, { type: 'input' }>[] = [];
-      for (const call of input.resumeToolCalls) {
+      for (const call of input.resume.pendingToolCalls) {
         const preflight = this.#terminalPreflight(input.limits);
         if (preflight) return preflight;
         let outcome: ToolOutcome;
@@ -178,23 +191,22 @@ export class AgentLoop {
     }
 
     for (
-      let iteration = input.initialIterationNo ?? 0;
+      let iteration = input.resume?.iterationNo ?? 0;
       iteration < input.limits.maxIterations;
       iteration += 1
     ) {
       const preflight = this.#terminalPreflight(input.limits);
       if (preflight) return preflight;
 
-      if (input.prepareMessages) {
-        try {
-          messages = [...await input.prepareMessages(iteration)];
-        } catch (error) {
-          return {
-            type: 'failed',
-            code: 'context_build_error',
-            message: error instanceof Error ? error.message : 'Failed to build model context.',
-          };
-        }
+      let messages: BaseMessage[];
+      try {
+        messages = [...await input.context.loadMessages(iteration)];
+      } catch (error) {
+        return {
+          type: 'failed',
+          code: 'context_build_error',
+          message: error instanceof Error ? error.message : 'Failed to build model context.',
+        };
       }
       if (correctionMessages.length > 0) {
         messages.push(...correctionMessages);
@@ -233,8 +245,11 @@ export class AgentLoop {
             message: 'Model returned neither text nor tool calls.',
           };
         }
-        const validation = input.validateFinalAnswer
-          ? await input.validateFinalAnswer({ outputId: turn.outputId, content: turn.content })
+        const validation = input.policy?.validateFinalAnswer
+          ? await input.policy.validateFinalAnswer({
+              outputId: turn.outputId,
+              content: turn.content,
+            })
           : { type: 'accept' as const };
         if (validation.type !== 'accept') {
           yield {
@@ -269,8 +284,8 @@ export class AgentLoop {
         return { type: 'completed', outputId: turn.outputId, content: turn.content };
       }
 
-      const toolCallsValidation = input.validateToolCalls
-        ? await input.validateToolCalls({
+      const toolCallsValidation = input.policy?.validateToolCalls
+        ? await input.policy.validateToolCalls({
             outputId: turn.outputId,
             content: turn.content,
             toolCalls: turn.toolCalls,
@@ -292,7 +307,9 @@ export class AgentLoop {
         continue;
       }
 
-      const exclusiveCalls = turn.toolCalls.filter(call => input.exclusiveToolNames?.has(call.name));
+      const exclusiveCalls = turn.toolCalls.filter(call => (
+        input.tools.exclusiveNames?.has(call.name)
+      ));
       if (exclusiveCalls.length > 0 && turn.toolCalls.length !== 1) {
         const feedback = [
           `Runtime validation rejected the previous tool batch because exclusive tool ${JSON.stringify(exclusiveCalls[0]!.name)} must be called alone.`,
@@ -400,7 +417,7 @@ export class AgentLoop {
   }
 
   async #readModelTurn(input: AgentLoopInput, messages: BaseMessage[]): Promise<ModelTurn> {
-    const outputId = input.outputIdFactory();
+    const outputId = this.#createOutputId();
     const response = await this.#model.invoke(messages, modelRunnableConfig(outputId, input.limits.signal));
     return modelTurn(response, outputId);
   }
@@ -409,7 +426,7 @@ export class AgentLoop {
     input: AgentLoopInput,
     messages: BaseMessage[]
   ): AsyncGenerator<LoopEvent, ModelTurn> {
-    const outputId = input.outputIdFactory();
+    const outputId = this.#createOutputId();
     let content = '';
     let combined: AIMessageChunk | undefined;
     const stream = await this.#model.stream(messages, modelRunnableConfig(outputId, input.limits.signal));
@@ -423,7 +440,7 @@ export class AgentLoop {
         yield {
           type: LOOP_EVENT_TYPES.ModelOutputDelta,
           outputId,
-          channel: input.deltaChannel ?? 'normal',
+          channel: 'normal',
           delta,
         };
       }
@@ -447,7 +464,7 @@ export class AgentLoop {
     const startedAtMs = this.#clock.nowMs();
     let result: ToolExecutionResult;
     try {
-      result = await input.toolExecutor.execute({
+      result = await input.tools.executor.execute({
         call,
         definition,
         target: input.target,

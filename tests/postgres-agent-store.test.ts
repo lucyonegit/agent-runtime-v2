@@ -16,6 +16,8 @@ import { ToolExecutor } from '../src/runtime/execution/tool-executor.js';
 import type { JobExecutionStatePort } from '../src/runtime/execution/types/react-execution.types.js';
 import { AgentLoop } from '../src/runtime/loop/agent-loop.js';
 import { RuntimeEventWriter } from '../src/runtime/events/runtime-event-writer.js';
+import { ContextFormatter } from '../src/runtime/context/helpers/context-formatter.helper.js';
+import { MessageGroupBuilder } from '../src/runtime/context/helpers/message-group.helper.js';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
 import {
   checksumToolArguments,
@@ -542,6 +544,7 @@ describe('PostgresAgentStore Job transactions', () => {
       clock: { nowMs: () => 35 },
     });
     let modelCalls = 0;
+    let outputNo = 1;
     const loop = new AgentLoop({
       streaming: false,
       model: new TestChatRunnable(async input => {
@@ -556,6 +559,7 @@ describe('PostgresAgentStore Job transactions', () => {
           expect(inputMessages(input)).toHaveLength(2);
           return new AIMessageChunk('final direct answer');
         }),
+      createOutputId: () => `runtime_output_${outputNo++}`,
       clock: { nowMs: () => 35 },
     });
     const published: AgentRealtimeEvent[] = [];
@@ -575,19 +579,22 @@ describe('PostgresAgentStore Job transactions', () => {
       },
       clock: { nowMs: () => 36 },
     });
-    let outputNo = 1;
-
     const result = await executeDurableAgentLoop({
       loop,
       writer,
       jobState: jobExecutionState(store, 'worker_direct', 36),
       input: {
         job: startedJob,
-        messages: [],
-        tools: [definition],
-        toolExecutor,
-        outputIdFactory: () => `runtime_output_${outputNo++}`,
-        limits: { maxIterations: 4, maxToolCalls: 4, deadlineMs: 90 },
+        loopInput: {
+          context: {
+            loadMessages: () => loadPersistedToolMessages(store, startedJob.sessionId),
+          },
+          tools: {
+            definitions: [definition],
+            executor: toolExecutor,
+          },
+          limits: { maxIterations: 4, maxToolCalls: 4, deadlineMs: 90 },
+        },
       },
     });
 
@@ -718,6 +725,7 @@ describe('PostgresAgentStore Job transactions', () => {
         workerId: 'worker_invalid_tool_args',
         nowMs: 34,
       }),
+      createOutputId: () => `invalid_tool_output_${modelCalls + 1}`,
       clock: { nowMs: () => 35 },
     });
     let messageNo = 1;
@@ -743,16 +751,21 @@ describe('PostgresAgentStore Job transactions', () => {
       ...execution,
       input: {
         job: startedJob,
-        messages: [],
-        tools: [runtimeLookup.tool],
-        toolExecutor: new ToolExecutor({
-          store,
-          workerId: 'worker_invalid_tool_args',
-          tools: [runtimeLookup],
-          clock: { nowMs: () => 35 },
-        }),
-        outputIdFactory: () => `invalid_tool_output_${modelCalls + 1}`,
-        limits: { maxIterations: 3, maxToolCalls: 3, deadlineMs: 90 },
+        loopInput: {
+          context: {
+            loadMessages: () => loadPersistedToolMessages(store, startedJob.sessionId),
+          },
+          tools: {
+            definitions: [runtimeLookup.tool],
+            executor: new ToolExecutor({
+              store,
+              workerId: 'worker_invalid_tool_args',
+              tools: [runtimeLookup],
+              clock: { nowMs: () => 35 },
+            }),
+          },
+          limits: { maxIterations: 3, maxToolCalls: 3, deadlineMs: 90 },
+        },
       },
     });
 
@@ -815,25 +828,37 @@ describe('PostgresAgentStore Job transactions', () => {
       )),
       nowMs: 34,
     });
+    let outputNo = 0;
     const execution = {
-      loop: new AgentLoop({ model, streaming: false, clock: { nowMs: () => 35 } }),
+      loop: new AgentLoop({
+        model,
+        createOutputId: () => `output_disposition_${++outputNo}`,
+        streaming: false,
+        clock: { nowMs: () => 35 },
+      }),
       writer: new RuntimeEventWriter({
         store, workerId: 'worker_disposition', tools: [], requireModelCallAudit: true,
         clock: { nowMs: () => 36 },
       }),
       jobState: jobExecutionState(store, 'worker_disposition', 36),
     };
-    let outputNo = 0;
     const result = await executeDurableAgentLoop({
       ...execution,
       input: {
-        job: startedJob, messages: [], tools: [],
-        toolExecutor: { execute: async () => ({ type: 'completed', content: 'unused' }) },
-        outputIdFactory: () => `output_disposition_${++outputNo}`,
-        validateFinalAnswer: async candidate => candidate.content === 'premature'
-          ? { type: 'retry', feedback: 'Complete the durable work first.' }
-          : { type: 'accept' },
-        limits: { maxIterations: 3, maxToolCalls: 1, deadlineMs: 90 },
+        job: startedJob,
+        loopInput: {
+          context: { loadMessages: async () => [] },
+          tools: {
+            definitions: [],
+            executor: { execute: async () => ({ type: 'completed', content: 'unused' }) },
+          },
+          policy: {
+            validateFinalAnswer: async candidate => candidate.content === 'premature'
+              ? { type: 'retry', feedback: 'Complete the durable work first.' }
+              : { type: 'accept' },
+          },
+          limits: { maxIterations: 3, maxToolCalls: 1, deadlineMs: 90 },
+        },
       },
     });
 
@@ -909,6 +934,7 @@ describe('PostgresAgentStore Job transactions', () => {
           })),
           nowMs: 35,
         }),
+        createOutputId: () => 'hitl_output_1',
         clock: { nowMs: () => 35 },
       }),
       writer,
@@ -918,11 +944,16 @@ describe('PostgresAgentStore Job transactions', () => {
       ...waitingExecution,
       input: {
         job: startedJob,
-        messages: [],
-        tools: [definition],
-        toolExecutor,
-        outputIdFactory: () => 'hitl_output_1',
-        limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+        loopInput: {
+          context: {
+            loadMessages: () => loadPersistedToolMessages(store, startedJob.sessionId),
+          },
+          tools: {
+            definitions: [definition],
+            executor: toolExecutor,
+          },
+          limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+        },
       },
     });
     expect(waiting).toMatchObject({
@@ -956,6 +987,7 @@ describe('PostgresAgentStore Job transactions', () => {
           delegate: new TestChatRunnable(async () => new AIMessageChunk('resumed final answer')),
           nowMs: 41,
         }),
+        createOutputId: () => 'hitl_output_2',
         clock: { nowMs: () => 41 },
       }),
       writer,
@@ -965,11 +997,16 @@ describe('PostgresAgentStore Job transactions', () => {
       ...resumeExecution,
       input: {
         job: answered.job,
-        messages: [],
-        tools: [definition],
-        toolExecutor,
-        outputIdFactory: () => 'hitl_output_2',
-        limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+        loopInput: {
+          context: {
+            loadMessages: () => loadPersistedToolMessages(store, answered.job.sessionId),
+          },
+          tools: {
+            definitions: [definition],
+            executor: toolExecutor,
+          },
+          limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 90 },
+        },
       },
     });
     expect(resumed).toMatchObject({
@@ -1563,6 +1600,22 @@ function inputMessages(input: BaseLanguageModelInput): BaseMessage[] {
   if (Array.isArray(input)) return input.map(coerceMessageLikeToMessage);
   if (typeof input === 'string') return [coerceMessageLikeToMessage(['human', input])];
   return input.toChatMessages();
+}
+
+async function loadPersistedToolMessages(
+  store: PostgresAgentStore,
+  sessionId: string
+): Promise<BaseMessage[]> {
+  const [messages, invocations] = await Promise.all([
+    store.listSessionMessages(sessionId),
+    store.listSessionToolInvocations(sessionId),
+  ]);
+  const formatter = new ContextFormatter();
+  return new MessageGroupBuilder()
+    .build(messages, invocations)
+    .groups
+    .filter(group => group.type === 'tool_exchange')
+    .flatMap(group => formatter.formatGroup(group));
 }
 
 function auditedTestModel(input: {

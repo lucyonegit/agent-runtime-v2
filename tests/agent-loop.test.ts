@@ -1,15 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
-import { AIMessageChunk, type BaseMessage } from '@langchain/core/messages';
+import {
+  AIMessage,
+  AIMessageChunk,
+  ToolMessage,
+  type BaseMessage,
+} from '@langchain/core/messages';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool, type StructuredToolInterface } from '@langchain/core/tools';
 import {
-  AgentLoop,
+  AgentLoop as RuntimeAgentLoop,
   type AgentLoopInput,
+  type AgentLoopOptions,
+  type AgentLoopResumeState,
   type ToolExecutorPort,
 } from '../src/runtime/loop/agent-loop.js';
 import { LOOP_EVENT_TYPES, type LoopEvent } from '../src/runtime/loop/loop-events.js';
 import type { LoopResult } from '../src/runtime/loop/loop-result.js';
+
+class AgentLoop extends RuntimeAgentLoop {
+  constructor(
+    options: Omit<AgentLoopOptions, 'createOutputId'> & {
+      createOutputId?: () => string;
+    }
+  ) {
+    let outputNo = 0;
+    super({
+      ...options,
+      createOutputId: options.createOutputId ?? (() => `output_${++outputNo}`),
+    });
+  }
+}
 
 describe('AgentLoop with LangChain messages', () => {
   it('streams AIMessageChunks and returns an explicit completed result', async () => {
@@ -84,7 +105,9 @@ describe('AgentLoop with LangChain messages', () => {
       ? { type: 'retry' as const, feedback: 'Complete the durable plan first.' }
       : { type: 'accept' as const });
 
-    const run = await consume(loop.run(loopInput({ validateFinalAnswer })));
+    const run = await consume(loop.run(loopInput({
+      policy: { validateFinalAnswer },
+    })));
 
     expect(run.events).toEqual([
       {
@@ -136,9 +159,11 @@ describe('AgentLoop with LangChain messages', () => {
     });
 
     const run = await consume(loop.run(loopInput({
-      tools: [toolDefinition('lookup'), toolDefinition('update_plan')],
-      exclusiveToolNames: new Set(['update_plan']),
-      toolExecutor: { execute },
+      tools: {
+        definitions: [toolDefinition('lookup'), toolDefinition('update_plan')],
+        exclusiveNames: new Set(['update_plan']),
+        executor: { execute },
+      },
     })));
 
     expect(run.events.map(event => event.type)).toEqual([
@@ -173,16 +198,20 @@ describe('AgentLoop with LangChain messages', () => {
         return chunk('finished');
       }),
     });
-    const validateToolCalls = vi.fn<NonNullable<AgentLoopInput['validateToolCalls']>>(async ({ toolCalls }) => (
+    const validateToolCalls = vi.fn<
+      NonNullable<NonNullable<AgentLoopInput['policy']>['validateToolCalls']>
+    >(async ({ toolCalls }) => (
       toolCalls.some(call => call.name === 'write_article') && toolCalls.length > 1
         ? { type: 'retry' as const, feedback: 'Search first, then write in a later turn.' }
         : { type: 'accept' as const }
     ));
 
     const run = await consume(loop.run(loopInput({
-      tools: [toolDefinition('web_search'), toolDefinition('write_article')],
-      validateToolCalls,
-      toolExecutor: { execute },
+      tools: {
+        definitions: [toolDefinition('web_search'), toolDefinition('write_article')],
+        executor: { execute },
+      },
+      policy: { validateToolCalls },
     })));
 
     expect(run.events.map(event => event.type)).toEqual([
@@ -207,7 +236,7 @@ describe('AgentLoop with LangChain messages', () => {
         ? toolChunk([{ id: 'call_1', name: 'lookup', args: { q: 'docs' } }])
         : chunk('done')),
     });
-    const iterator = loop.run(loopInput({ toolExecutor: { execute } }));
+    const iterator = loop.run(loopInput({ tools: { executor: { execute } } }));
 
     expect(await iterator.next()).toMatchObject({
       done: false,
@@ -239,10 +268,12 @@ describe('AgentLoop with LangChain messages', () => {
         : chunk('done')),
     });
     const iterator = loop.run(loopInput({
-      toolExecutor: {
-        execute: async ({ call }) => {
-          executed.push(call.id);
-          return { type: 'completed', content: call.id };
+      tools: {
+        executor: {
+          execute: async ({ call }) => {
+            executed.push(call.id);
+            return { type: 'completed', content: call.id };
+          },
         },
       },
     }));
@@ -265,17 +296,27 @@ describe('AgentLoop with LangChain messages', () => {
       }),
     });
     const run = await consume(loop.run(loopInput({
-      initialIterationNo: 3,
-      initialExecutedToolCalls: 4,
-      resumeToolCalls: [{ id: 'call_resume_5', name: 'lookup', args: { q: 'checkpoint' } }],
-      prepareMessages: async iteration => {
-        order.push(`context:${iteration}`);
-        return [];
+      resume: {
+        iterationNo: 3,
+        executedToolCalls: 4,
+        pendingToolCalls: [{
+          id: 'call_resume_5',
+          name: 'lookup',
+          args: { q: 'checkpoint' },
+        }],
       },
-      toolExecutor: {
-        execute: async ({ call }) => {
-          order.push(`tool:${call.id}`);
-          return { type: 'completed', content: 'recovered result' };
+      context: {
+        loadMessages: async iteration => {
+          order.push(`context:${iteration}`);
+          return [];
+        },
+      },
+      tools: {
+        executor: {
+          execute: async ({ call }) => {
+            order.push(`tool:${call.id}`);
+            return { type: 'completed', content: 'recovered result' };
+          },
         },
       },
     })));
@@ -291,6 +332,7 @@ describe('AgentLoop with LangChain messages', () => {
   it('uses AIMessageChunk.concat to assemble streamed tool calls', async () => {
     let calls = 0;
     const observedMessageCounts: number[] = [];
+    let persistedMessages: BaseMessage[] = [];
     const loop = new AgentLoop({
       model: streamingModel(async function* (input) {
         calls += 1;
@@ -310,10 +352,31 @@ describe('AgentLoop with LangChain messages', () => {
       }),
     });
     const run = await consume(loop.run(loopInput({
-      toolExecutor: {
-        execute: async request => ({
-          type: 'completed', content: `lookup:${request.call.args.query}`,
-        }),
+      context: {
+        loadMessages: async () => persistedMessages,
+      },
+      tools: {
+        executor: {
+          execute: async request => {
+            const content = `lookup:${request.call.args.query}`;
+            persistedMessages = [
+              new AIMessage({
+                content: '',
+                tool_calls: [{
+                  id: request.call.id,
+                  name: request.call.name,
+                  args: request.call.args,
+                  type: 'tool_call',
+                }],
+              }),
+              new ToolMessage({
+                tool_call_id: request.call.id,
+                content,
+              }),
+            ];
+            return { type: 'completed', content };
+          },
+        },
       },
     })));
 
@@ -345,7 +408,9 @@ describe('AgentLoop with LangChain messages', () => {
         yield chunk('recovered');
       }),
     });
-    const run = await consume(loop.run(loopInput({ toolExecutor: { execute } })));
+    const run = await consume(loop.run(loopInput({
+      tools: { executor: { execute } },
+    })));
 
     expect(run.events[0]).toMatchObject({
       type: LOOP_EVENT_TYPES.ModelOutputCompleted,
@@ -371,16 +436,18 @@ describe('AgentLoop with LangChain messages', () => {
       ])),
     });
     const run = await consume(loop.run(loopInput({
-      toolExecutor: {
-        execute: async ({ call }) => call.name === 'lookup'
-          ? { type: 'completed', content: 'lookup result' }
-          : {
-              type: 'requires_user_input',
-              request: {
-                source: 'tool', answerMode: 'as_tool_result',
-                prompt: `answer ${call.name}`, inputSchema: { type: 'text' },
+      tools: {
+        executor: {
+          execute: async ({ call }) => call.name === 'lookup'
+            ? { type: 'completed', content: 'lookup result' }
+            : {
+                type: 'requires_user_input',
+                request: {
+                  source: 'tool', answerMode: 'as_tool_result',
+                  prompt: `answer ${call.name}`, inputSchema: { type: 'text' },
+                },
               },
-            },
+        },
       },
     })));
 
@@ -408,11 +475,13 @@ describe('AgentLoop with LangChain messages', () => {
         : chunk('finished')),
     });
     const run = await consume(loop.run(loopInput({
-      toolExecutor: {
-        execute: async ({ call }) => {
-          executed.push(call.id);
-          if (call.id === 'call_fail') throw new Error('boom');
-          return { type: 'completed', content: 'ok' };
+      tools: {
+        executor: {
+          execute: async ({ call }) => {
+            executed.push(call.id);
+            if (call.id === 'call_fail') throw new Error('boom');
+            return { type: 'completed', content: 'ok' };
+          },
         },
       },
     })));
@@ -437,7 +506,9 @@ describe('AgentLoop with LangChain messages', () => {
     });
     expect((await consume(iterative.run(loopInput({
       limits: { maxIterations: 1, maxToolCalls: 10 },
-      toolExecutor: { execute: async () => ({ type: 'completed', content: 'ok' }) },
+      tools: {
+        executor: { execute: async () => ({ type: 'completed', content: 'ok' }) },
+      },
     })))).result).toMatchObject({ type: 'failed', code: 'max_iterations' });
 
     const limited = new AgentLoop({
@@ -484,7 +555,7 @@ describe('AgentLoop with LangChain messages', () => {
 
     const run = consume(loop.run(loopInput({
       limits: { maxIterations: 2, maxToolCalls: 2, signal: controller.signal },
-      toolExecutor: { execute },
+      tools: { executor: { execute } },
     })));
     await toolStarted;
     controller.abort();
@@ -554,20 +625,50 @@ function toolChunk(toolCalls: Array<{ id?: string; name: string; args: Record<st
   });
 }
 
-function loopInput(overrides: Partial<AgentLoopInput> = {}): AgentLoopInput {
-  let outputNo = 0;
+type AgentLoopInputOverrides = Partial<
+  Omit<AgentLoopInput, 'context' | 'tools' | 'policy' | 'resume'>
+> & {
+  context?: Partial<AgentLoopInput['context']>;
+  tools?: Partial<AgentLoopInput['tools']>;
+  policy?: AgentLoopInput['policy'];
+  resume?: Partial<AgentLoopResumeState>;
+};
+
+function loopInput(overrides: AgentLoopInputOverrides = {}): AgentLoopInput {
+  const {
+    context,
+    tools,
+    policy,
+    resume,
+    ...topLevel
+  } = overrides;
+  const defaultExecutor: ToolExecutorPort = {
+    execute: async ({ call }) => ({
+      type: 'failed', code: 'tool_not_found', message: `Tool not found: ${call.name}`,
+    }),
+  };
   return {
-    messages: [],
     target: { sessionId: 'session_1', jobId: 'job_1', attemptId: 'attempt_1' },
-    tools: [toolDefinition('lookup'), toolDefinition('one'), toolDefinition('two')],
-    toolExecutor: {
-      execute: async ({ call }) => ({
-        type: 'failed', code: 'tool_not_found', message: `Tool not found: ${call.name}`,
-      }),
+    context: {
+      loadMessages: async () => [],
+      ...context,
     },
-    outputIdFactory: () => `output_${++outputNo}`,
+    tools: {
+      definitions: [toolDefinition('lookup'), toolDefinition('one'), toolDefinition('two')],
+      executor: defaultExecutor,
+      ...tools,
+    },
     limits: { maxIterations: 8, maxToolCalls: 16 },
-    ...overrides,
+    ...topLevel,
+    ...(policy ? { policy } : {}),
+    ...(resume ? {
+      resume: {
+        iterationNo: 0,
+        executedToolCalls: 0,
+        pendingToolCalls: [],
+        ...resume,
+      },
+    } : {}),
   };
 }
 

@@ -465,7 +465,7 @@ stateDiagram-v2
 
 ### 9.2 每轮都会重新加载 Context
 
-AgentLoop 的 prepareMessages 不是只在 Job 开始时调用一次。每次模型调用前都会从数据库重新加载，因为上一轮 ToolMessage、Plan、HITL 回答或 ContextSummary 都可能刚刚变化。
+AgentLoop 的 `context.loadMessages(iteration)` 不是只在 Job 开始时调用一次。每次模型调用前都会从数据库重新加载，因为上一轮 ToolMessage、Plan、HITL 回答或 ContextSummary 都可能刚刚变化。
 
 ### 9.3 Plan 最终约束
 
@@ -484,6 +484,19 @@ AgentLoop 的 prepareMessages 不是只在 Job 开始时调用一次。每次模
 
 AgentLoop 只认识 BaseMessage、LangChain 可流式模型、RuntimeTool、循环事件和执行限制。它不知道 PostgreSQL、SessionView、NestJS。
 
+它的运行输入按职责收口为六组，其中 `resume` 只在恢复执行时出现：
+
+| 输入 | 责任 |
+| --- | --- |
+| `target` | 当前 Session、Job、Attempt 标识 |
+| `context` | 在每次模型调用前加载最新的 LangChain Message 列表 |
+| `tools` | 工具定义、工具执行端口和独占工具集合 |
+| `policy` | 工具批次与最终回答的可选业务校验 |
+| `limits` | 迭代、工具次数、截止时间与取消信号 |
+| `resume` | 可选的 Checkpoint 计数器和待恢复工具调用 |
+
+`createOutputId` 属于 AgentLoop 实例配置，而不是每次 `run()` 的业务输入。这样执行层只提供会变化的运行材料，模型和 ID 生成策略在构造时固定。
+
 ### 10.1 伪代码
 
 ~~~text
@@ -491,7 +504,7 @@ for iteration from checkpoint.iterationNo to maxIterations:
   assert not aborted
   assert deadline not exceeded
 
-  messages = await prepareMessages()
+  messages = await context.loadMessages(iteration)
   messages += transient correction messages
 
   stream model(messages)

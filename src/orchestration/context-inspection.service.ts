@@ -59,7 +59,7 @@ export interface ContextInspectionServiceOptions {
   systemPromptVersion: string;
   promptId?: string;
   promptVersion?: number;
-  stableContext?: (sessionId: string) => string | undefined;
+  getStableContext?: (sessionId: string) => string | undefined;
   clock?: { nowMs(): number };
 }
 
@@ -77,7 +77,7 @@ export class ContextInspectionService {
       promptVersion: options.promptVersion,
       model: options.model,
       toolSchemas: options.tools,
-      stableContext: options.stableContext,
+      getStableContext: options.getStableContext,
     });
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
   }

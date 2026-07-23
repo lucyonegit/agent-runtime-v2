@@ -52,12 +52,15 @@ export class ReactExecution {
     signal?: AbortSignal;
   }): Promise<ReactJobExecutionResult> {
     const checkpoint = await this.options.store.getLatestLoopCheckpoint(input.job.id);
-    const resumeToolCalls = await this.#loadPendingToolCalls(input.job, checkpoint?.callMessageId);
-    let current = checkpoint?.phase === 'tool_batch'
-      ? undefined
-      : await input.loadContext();
+    const pendingToolCalls = await this.#loadPendingToolCalls(input.job, checkpoint?.callMessageId);
+    let current: BuiltContext | undefined;
     const toolExecutor = this.#toolExecutor();
     const tools = toolExecutor.tools();
+    const resume = checkpoint ? {
+      iterationNo: checkpoint.iterationNo,
+      executedToolCalls: checkpoint.executedToolCalls,
+      pendingToolCalls,
+    } : undefined;
     return executeDurableAgentLoop({
       loop: new AgentLoop({
         model: this.#auditedModel(
@@ -70,29 +73,34 @@ export class ReactExecution {
           'job.react',
           tools
         ),
+        createOutputId,
         streaming: true,
       }),
       writer: this.#writer(),
       jobState: this.options.jobState,
       input: {
         job: input.job,
-        messages: current?.messages ?? [],
-        prepareMessages: async () => {
-          current = await input.loadContext();
-          return current.messages;
+        loopInput: {
+          context: {
+            loadMessages: async () => {
+              current = await input.loadContext();
+              return current.messages;
+            },
+          },
+          tools: {
+            definitions: tools,
+            executor: toolExecutor,
+            exclusiveNames: new Set(
+              this.options.tools.filter(tool => tool.exclusive).map(tool => tool.tool.name)
+            ),
+          },
+          policy: {
+            validateToolCalls: candidate => this.#validateToolCalls(candidate.toolCalls),
+            validateFinalAnswer: () => this.#validateFinalAnswer(input.job.id),
+          },
+          limits: this.#limits(input.job, input.signal),
+          ...(resume ? { resume } : {}),
         },
-        tools,
-        exclusiveToolNames: new Set(
-          this.options.tools.filter(tool => tool.exclusive).map(tool => tool.tool.name)
-        ),
-        validateToolCalls: candidate => this.#validateToolCalls(candidate.toolCalls),
-        validateFinalAnswer: () => this.#validateFinalAnswer(input.job.id),
-        toolExecutor,
-        outputIdFactory: outputId,
-        limits: this.#limits(input.job, input.signal),
-        initialIterationNo: checkpoint?.iterationNo ?? 0,
-        initialExecutedToolCalls: checkpoint?.executedToolCalls ?? 0,
-        resumeToolCalls,
       },
     });
   }
@@ -264,6 +272,6 @@ export class ReactExecution {
   }
 }
 
-function outputId(): string {
+function createOutputId(): string {
   return `output_${randomUUID()}`;
 }

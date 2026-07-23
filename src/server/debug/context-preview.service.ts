@@ -46,7 +46,7 @@ export class ContextPreviewService {
       systemPromptVersion: JOB_AGENT_SYSTEM_PROMPT_VERSION,
       promptId: JOB_AGENT_PROMPT_ID,
       promptVersion: JOB_AGENT_PROMPT_VERSION,
-      stableContext: sessionId => buildStableEnvironmentContext({
+      getStableContext: sessionId => buildStableEnvironmentContext({
         sandboxRoot: options.sandboxRoot ?? '.agent-sandbox',
         sessionId,
       }),

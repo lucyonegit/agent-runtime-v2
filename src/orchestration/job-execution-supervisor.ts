@@ -144,7 +144,7 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
       promptVersion: this.#options.promptVersion,
       model: modelBudget,
       toolSchemas: this.#options.tools.map(tool => tool.tool),
-      stableContext: sessionId => buildStableEnvironmentContext({
+      getStableContext: sessionId => buildStableEnvironmentContext({
         sandboxRoot: this.#options.sandboxRoot ?? '.agent-sandbox',
         sessionId,
       }),
