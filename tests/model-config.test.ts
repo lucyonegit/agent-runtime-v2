@@ -1,43 +1,48 @@
 import { describe, expect, it } from 'vitest';
 import {
   DASHSCOPE_OPENAI_BASE_URL,
-  resolveModelRuntimeConfig,
-} from '../src/server/runtime/model-config.js';
+} from '../src/config/model-config.js';
+import { loadRuntimeConfig } from '../src/config/runtime-config.js';
 
-describe('resolveModelRuntimeConfig', () => {
+describe('loadRuntimeConfig model resolution', () => {
   it('uses DashScope defaults and gives its key precedence', () => {
-    expect(resolveModelRuntimeConfig({
+    const config = loadRuntimeConfig({ env: {
+      DATABASE_URL: 'postgres://runtime',
       DASHSCOPE_API_KEY: 'dash-key',
       OPENAI_API_KEY: 'openai-key',
-    })).toEqual({
+    } });
+    expect(config.model).toMatchObject({
       apiKey: 'dash-key',
       baseURL: DASHSCOPE_OPENAI_BASE_URL,
-      modelName: 'qwen-plus',
+      modelName: 'qwen3.7-max',
       provider: 'dashscope',
     });
   });
 
   it('allows explicit compatible endpoint and model overrides', () => {
-    expect(resolveModelRuntimeConfig({
+    const config = loadRuntimeConfig({ env: {
+      DATABASE_URL: 'postgres://runtime',
       DASHSCOPE_API_KEY: 'dash-key',
       OPENAI_BASE_URL: 'https://workspace.example/v1',
       OPENAI_MODEL: 'qwen-custom',
-    })).toMatchObject({
+      MODEL_CONTEXT_WINDOW_TOKENS: '64000',
+    } });
+    expect(config.model).toMatchObject({
       baseURL: 'https://workspace.example/v1',
       modelName: 'qwen-custom',
       provider: 'dashscope',
     });
   });
 
-  it('preserves the OpenAI-compatible fallback and missing-key startup', () => {
-    expect(resolveModelRuntimeConfig({ OPENAI_API_KEY: 'openai-key' })).toEqual({
+  it('selects the OpenAI-compatible provider when only its key is supplied', () => {
+    const config = loadRuntimeConfig({ env: {
+      DATABASE_URL: 'postgres://runtime',
+      OPENAI_API_KEY: 'openai-key',
+      OPENAI_MODEL: 'gpt-4.1-mini',
+    } });
+    expect(config.model).toMatchObject({
       apiKey: 'openai-key',
-      baseURL: undefined,
       modelName: 'gpt-4.1-mini',
-      provider: 'openai-compatible',
-    });
-    expect(resolveModelRuntimeConfig({})).toMatchObject({
-      apiKey: undefined,
       provider: 'openai-compatible',
     });
   });

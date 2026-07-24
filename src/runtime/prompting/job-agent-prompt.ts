@@ -1,4 +1,6 @@
 import { resolve } from 'node:path';
+import { DEFAULT_CONTEXT_CONFIG } from '../../config/context-config.js';
+import { DEFAULT_TOOLS_CONFIG } from '../../config/tools-config.js';
 import type { AgentPromptManifest } from '../../domain/index.js';
 import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
 import { createPromptManifest } from './prompt-registry.js';
@@ -13,7 +15,8 @@ export const JOB_AGENT_ENVIRONMENT_COMPONENT_VERSION = 1;
 export const RUNTIME_STATE_COMPONENT_ID = 'durable-runtime-state';
 export const RUNTIME_STATE_COMPONENT_VERSION = 1;
 export const RUNTIME_STATE_SCHEMA_VERSION = 1;
-export const RUNTIME_STATE_MAX_TOKENS = 8_000;
+export const RUNTIME_STATE_MAX_TOKENS =
+  DEFAULT_CONTEXT_CONFIG.projection.runtimeStateMaximumTokens;
 
 export const JOB_AGENT_SYSTEM_PROMPT = `You are a reliable tool-using agent. Complete the user's actual goal and report only outcomes that are durably verified.
 
@@ -43,6 +46,7 @@ Conversation and evidence:
 export function buildStableEnvironmentContext(input: {
   sandboxRoot: string;
   sessionId: string;
+  shellPath?: string;
 }): string {
   const workspaceRoot = resolve(
     input.sandboxRoot,
@@ -56,7 +60,9 @@ export function buildStableEnvironmentContext(input: {
     `- Session workspace root: ${workspaceRoot}`,
     '- Workspace areas: code/, docs/, artifacts/, downloads/, tmp/.',
     '- Use workspace-relative paths with file and artifact tools unless a tool explicitly permits absolute paths.',
-    `- Host platform: ${process.platform}/${process.arch}. Default shell: /bin/zsh. Time zone: ${timeZone}.`,
+    `- Host platform: ${process.platform}/${process.arch}. Default shell: ${
+      input.shellPath ?? DEFAULT_TOOLS_CONFIG.shell.executable
+    }. Time zone: ${timeZone}.`,
     '- Current wall-clock time is intentionally not embedded in this stable prefix; use the time tool when exact current time is required.',
   ].join('\n');
 }

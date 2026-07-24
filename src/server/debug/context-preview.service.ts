@@ -1,4 +1,5 @@
 import { isAIMessage, isToolMessage, type BaseMessage } from '@langchain/core/messages';
+import type { ContextConfig } from '../../config/context-config.js';
 import {
   ContextInspectionService,
   type ContextQuery,
@@ -25,6 +26,8 @@ export interface ContextPreviewServiceOptions {
   reservedOutputTokens: number;
   inputTokenLimit?: number;
   sandboxRoot?: string;
+  shellPath?: string;
+  contextConfig?: ContextConfig;
   clock?: { nowMs(): number };
 }
 
@@ -49,7 +52,9 @@ export class ContextPreviewService {
       getStableContext: sessionId => buildStableEnvironmentContext({
         sandboxRoot: options.sandboxRoot ?? '.agent-sandbox',
         sessionId,
+        shellPath: options.shellPath,
       }),
+      contextConfig: options.contextConfig,
       clock: options.clock,
     });
   }

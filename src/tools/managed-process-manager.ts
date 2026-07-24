@@ -3,6 +3,10 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { chmod, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { createConnection, createServer } from 'node:net';
+import {
+  DEFAULT_TOOLS_CONFIG,
+  type ToolsConfig,
+} from '../config/tools-config.js';
 import type { AgentManagedProcess } from '../domain/index.js';
 import type { RuntimeEventPublisher } from '../runtime/events/runtime-event-writer.js';
 import {
@@ -13,15 +17,6 @@ import { buildWorkspaceProcessEnv } from './helpers/process-environment.helper.j
 import { WORKSPACE_PROCESS_SUPERVISOR_SOURCE } from './helpers/process-supervisor-script.helper.js';
 import { workspaceRoot } from './helpers/workspace-path.helper.js';
 
-const DEFAULT_HOST = '127.0.0.1';
-const PORT_RANGE_START = 4_100;
-const PORT_RANGE_END = 4_999;
-const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
-const MAX_STARTUP_TIMEOUT_MS = 300_000;
-const STOP_GRACE_MS = 1_500;
-const READINESS_POLL_MS = 100;
-const DISCOVERY_POLL_MS = 1_000;
-const MAX_LOG_BYTES = 64 * 1024;
 const PROCESS_SPEC_VERSION = 1;
 
 interface StartManagedProcessInput {
@@ -81,7 +76,8 @@ export class ManagedProcessManager {
   constructor(
     private readonly publisher?: RuntimeEventPublisher,
     private readonly clock: { nowMs(): number } = { nowMs: () => Date.now() },
-    private readonly sandboxRoot = resolve(process.cwd(), '.agent-sandbox')
+    private readonly sandboxRoot = resolve(process.cwd(), '.agent-sandbox'),
+    private readonly toolsConfig: ToolsConfig = DEFAULT_TOOLS_CONFIG
   ) {}
 
   async start(): Promise<void> {
@@ -91,7 +87,7 @@ export class ManagedProcessManager {
       void this.#refreshFromOperatingSystem().catch(() => {
         // A later scan can recover from a transient ps/filesystem failure.
       });
-    }, DISCOVERY_POLL_MS);
+    }, this.toolsConfig.managedProcesses.discoveryPollMs);
     this.#discoveryTimer.unref();
   }
 
@@ -106,8 +102,8 @@ export class ManagedProcessManager {
     const rawCommand = input.command.trim();
     if (!name) throw new TypeError('Managed process name is required.');
     if (!rawCommand) throw new TypeError('Managed process command is required.');
-    const host = input.host?.trim() || DEFAULT_HOST;
-    if (!['127.0.0.1', 'localhost'].includes(host)) {
+    const host = input.host?.trim() || this.toolsConfig.managedProcesses.defaultHost;
+    if (!this.toolsConfig.managedProcesses.allowedHosts.includes(host)) {
       throw new RuntimeToolExecutionError(
         'invalid_process_host',
         'Managed development servers must bind to 127.0.0.1 or localhost.'
@@ -133,7 +129,7 @@ export class ManagedProcessManager {
     }
 
     const port = input.port === undefined || input.port === 'auto'
-      ? await findAvailablePort(host)
+      ? await findAvailablePort(host, this.toolsConfig.managedProcesses)
       : normalizePort(input.port);
     if (!await isPortAvailable(host, port)) {
       throw new RuntimeToolExecutionError(
@@ -217,7 +213,10 @@ export class ManagedProcessManager {
         `--agent-runtime-spec=${specPath}`,
       ], {
         cwd,
-        env: buildWorkspaceProcessEnv(environmentOverrides),
+        env: buildWorkspaceProcessEnv(
+          environmentOverrides,
+          this.toolsConfig.environment
+        ),
         detached: true,
         stdio: 'ignore',
       });
@@ -248,10 +247,19 @@ export class ManagedProcessManager {
     });
     await this.#publish(record);
     const exit = childExit(child);
-    const startupTimeoutMs = normalizeStartupTimeout(input.startupTimeoutMs);
+    const startupTimeoutMs = normalizeStartupTimeout(
+      input.startupTimeoutMs,
+      this.toolsConfig.managedProcesses
+    );
     try {
       const outcome = await Promise.race([
-        waitForTcp(host, port, startupTimeoutMs, input.context.signal)
+        waitForTcp(
+          host,
+          port,
+          startupTimeoutMs,
+          this.toolsConfig.managedProcesses,
+          input.context.signal
+        )
           .then(() => ({ type: 'ready' as const })),
         exit.then(value => ({ type: 'exit' as const, value })),
       ]);
@@ -282,7 +290,10 @@ export class ManagedProcessManager {
       return record;
     } catch (error) {
       if (error instanceof RuntimeToolExecutionError) throw error;
-      await terminateKnownChild(child.pid);
+      await terminateKnownChild(
+        child.pid,
+        this.toolsConfig.managedProcesses.stopGraceMs
+      );
       this.#children.delete(processId);
       const aborted = input.context.signal?.aborted || isAbortError(error);
       record = await this.#transition(processId, {
@@ -315,14 +326,20 @@ export class ManagedProcessManager {
       .sort((left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id));
   }
 
-  async readLogs(processId: string, maxBytes = MAX_LOG_BYTES): Promise<string> {
+  async readLogs(
+    processId: string,
+    maxBytes = this.toolsConfig.managedProcesses.maximumLogBytes
+  ): Promise<string> {
     await this.#refreshFromOperatingSystem();
     const spec = this.#requireEntry(processId).spec;
     const contents = await readFile(spec.absoluteLogPath).catch(error => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return Buffer.alloc(0);
       throw error;
     });
-    const limit = Math.min(MAX_LOG_BYTES, Math.max(1_024, Math.round(maxBytes)));
+    const limit = Math.min(
+      this.toolsConfig.managedProcesses.maximumLogBytes,
+      Math.max(1_024, Math.round(maxBytes))
+    );
     return contents.subarray(Math.max(0, contents.byteLength - limit)).toString('utf8');
   }
 
@@ -341,7 +358,11 @@ export class ManagedProcessManager {
       });
     }
     await this.#transition(processId, { status: 'stopping' });
-    await terminateOwnedProcessGroup(entry.spec, supervisor.processGroupId);
+    await terminateOwnedProcessGroup(
+      entry.spec,
+      supervisor.processGroupId,
+      this.toolsConfig.managedProcesses
+    );
     this.#children.delete(processId);
     return this.#transition(processId, { status: 'stopped' });
   }
@@ -456,7 +477,9 @@ export class ManagedProcessManager {
   }
 
   async #doRefreshFromOperatingSystem(): Promise<void> {
-    const supervisors = await listMarkedSupervisors();
+    const supervisors = await listMarkedSupervisors(
+      this.toolsConfig.managedProcesses.discoveryCommandMaximumBytes
+    );
     const activeIds = new Set<string>();
     for (const supervisor of supervisors) {
       let spec: WorkspaceProcessSpec;
@@ -475,7 +498,11 @@ export class ManagedProcessManager {
         continue;
       }
       activeIds.add(spec.id);
-      const status = await isTcpOpen(spec.host, spec.port) ? 'running' : 'starting';
+      const status = await isTcpOpen(
+        spec.host,
+        spec.port,
+        this.toolsConfig.managedProcesses.socketTimeoutMs
+      ) ? 'running' : 'starting';
       const existing = this.#registry.get(spec.id)?.record;
       if (
         existing
@@ -508,7 +535,9 @@ export class ManagedProcessManager {
   async #findOwnedSupervisor(
     spec: WorkspaceProcessSpec
   ): Promise<DiscoveredSupervisor | undefined> {
-    return (await listMarkedSupervisors()).find(processInfo => (
+    return (await listMarkedSupervisors(
+      this.toolsConfig.managedProcesses.discoveryCommandMaximumBytes
+    )).find(processInfo => (
       processInfo.processId === spec.id
       && processInfo.sessionId === spec.sessionId
       && processInfo.ownershipToken === spec.ownershipToken
@@ -590,8 +619,14 @@ async function readProcessSpec(path: string): Promise<WorkspaceProcessSpec> {
   return spec;
 }
 
-async function listMarkedSupervisors(): Promise<DiscoveredSupervisor[]> {
-  const output = await execFileText('/bin/ps', ['-axo', 'pid=,pgid=,command=', '-ww']);
+async function listMarkedSupervisors(
+  maximumOutputBytes: number
+): Promise<DiscoveredSupervisor[]> {
+  const output = await execFileText(
+    '/bin/ps',
+    ['-axo', 'pid=,pgid=,command=', '-ww'],
+    maximumOutputBytes
+  );
   const discovered: DiscoveredSupervisor[] = [];
   for (const line of output.split('\n')) {
     const columns = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
@@ -618,9 +653,13 @@ function marker(command: string, name: string): string | undefined {
   return new RegExp(`(?:^|\\s)${escaped}=([A-Za-z0-9_.-]+)(?:\\s|$)`).exec(command)?.[1];
 }
 
-function execFileText(file: string, args: string[]): Promise<string> {
+function execFileText(
+  file: string,
+  args: string[],
+  maximumOutputBytes: number
+): Promise<string> {
   return new Promise((resolvePromise, reject) => {
-    execFile(file, args, { maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+    execFile(file, args, { maxBuffer: maximumOutputBytes }, (error, stdout) => {
       if (error) reject(error);
       else resolvePromise(stdout);
     });
@@ -629,9 +668,12 @@ function execFileText(file: string, args: string[]): Promise<string> {
 
 async function terminateOwnedProcessGroup(
   spec: WorkspaceProcessSpec,
-  processGroupId: number
+  processGroupId: number,
+  config: ToolsConfig['managedProcesses']
 ): Promise<void> {
-  const verify = async () => (await listMarkedSupervisors()).some(item => (
+  const verify = async () => (await listMarkedSupervisors(
+    config.discoveryCommandMaximumBytes
+  )).some(item => (
     item.processGroupId === processGroupId
     && item.processId === spec.id
     && item.sessionId === spec.sessionId
@@ -639,7 +681,7 @@ async function terminateOwnedProcessGroup(
   ));
   if (!await verify()) return;
   sendSignal(processGroupId, 'SIGTERM');
-  const deadline = Date.now() + STOP_GRACE_MS;
+  const deadline = Date.now() + config.stopGraceMs;
   while (Date.now() < deadline) {
     if (!await verify()) return;
     await delay(50);
@@ -647,10 +689,13 @@ async function terminateOwnedProcessGroup(
   if (await verify()) sendSignal(processGroupId, 'SIGKILL');
 }
 
-async function terminateKnownChild(processGroupId: number): Promise<void> {
+async function terminateKnownChild(
+  processGroupId: number,
+  stopGraceMs: number
+): Promise<void> {
   if (!isProcessAlive(processGroupId)) return;
   sendSignal(processGroupId, 'SIGTERM');
-  const deadline = Date.now() + STOP_GRACE_MS;
+  const deadline = Date.now() + stopGraceMs;
   while (Date.now() < deadline && isProcessAlive(processGroupId)) await delay(50);
   if (isProcessAlive(processGroupId)) sendSignal(processGroupId, 'SIGKILL');
 }
@@ -672,13 +717,17 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function findAvailablePort(host: string): Promise<number> {
-  for (let port = PORT_RANGE_START; port <= PORT_RANGE_END; port += 1) {
+async function findAvailablePort(
+  host: string,
+  config: ToolsConfig['managedProcesses']
+): Promise<number> {
+  for (let port = config.portRangeStart; port <= config.portRangeEnd; port += 1) {
     if (await isPortAvailable(host, port)) return port;
   }
   throw new RuntimeToolExecutionError(
     'no_available_process_port',
-    `No available development-server port was found between ${PORT_RANGE_START} and ${PORT_RANGE_END}.`
+    `No available development-server port was found between `
+      + `${config.portRangeStart} and ${config.portRangeEnd}.`
   );
 }
 
@@ -691,10 +740,10 @@ function isPortAvailable(host: string, port: number): Promise<boolean> {
   });
 }
 
-function isTcpOpen(host: string, port: number): Promise<boolean> {
+function isTcpOpen(host: string, port: number, timeoutMs: number): Promise<boolean> {
   return new Promise(resolvePromise => {
     const socket = createConnection({ host, port });
-    socket.setTimeout(250);
+    socket.setTimeout(timeoutMs);
     socket.once('connect', () => {
       socket.destroy();
       resolvePromise(true);
@@ -711,13 +760,14 @@ async function waitForTcp(
   host: string,
   port: number,
   timeoutMs: number,
+  config: ToolsConfig['managedProcesses'],
   signal?: AbortSignal
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw abortError();
-    if (await isTcpOpen(host, port)) return;
-    await delay(READINESS_POLL_MS, signal);
+    if (await isTcpOpen(host, port, config.socketTimeoutMs)) return;
+    await delay(config.readinessPollMs, signal);
   }
   throw new Error('readiness timeout');
 }
@@ -739,9 +789,15 @@ function normalizePort(port: number): number {
   return port;
 }
 
-function normalizeStartupTimeout(value = DEFAULT_STARTUP_TIMEOUT_MS): number {
-  if (!Number.isFinite(value)) return DEFAULT_STARTUP_TIMEOUT_MS;
-  return Math.min(MAX_STARTUP_TIMEOUT_MS, Math.max(1_000, Math.round(value)));
+function normalizeStartupTimeout(
+  value: number | undefined,
+  config: ToolsConfig['managedProcesses']
+): number {
+  if (!Number.isFinite(value)) return config.defaultStartupTimeoutMs;
+  return Math.min(
+    config.maximumStartupTimeoutMs,
+    Math.max(1_000, Math.round(value!))
+  );
 }
 
 function logicalPath(root: string, path: string): string {

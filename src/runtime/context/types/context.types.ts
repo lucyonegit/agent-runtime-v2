@@ -1,5 +1,6 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
+import type { ContextConfig } from '../../../config/context-config.js';
 import type {
   AgentContextInputManifest,
   AgentContextSummaryType,
@@ -83,6 +84,7 @@ export interface ContextModelBudget {
 }
 
 export interface ContextMaterial {
+  contextConfig?: ContextConfig;
   fixedMessages: ContextFixedMessage[];
   trailingMessages?: ContextFixedMessage[];
   fixedPrefix: Record<string, unknown>;
@@ -174,4 +176,5 @@ export interface ReActContextMaterialOptions {
   getStableContext?: (sessionId: string) => string | undefined;
   recentRawTokenBudget?: number;
   minimumRecentGroups?: number;
+  contextConfig?: ContextConfig;
 }

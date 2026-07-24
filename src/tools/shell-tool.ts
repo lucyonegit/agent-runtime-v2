@@ -3,6 +3,10 @@ import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
+  DEFAULT_TOOLS_CONFIG,
+  type ToolsConfig,
+} from '../config/tools-config.js';
+import {
   RuntimeToolExecutionError,
   type RuntimeTool,
   type RuntimeToolContext,
@@ -19,13 +23,6 @@ import {
   stringRecord,
 } from './helpers/process-environment.helper.js';
 
-const SHELL_PATH = '/bin/zsh';
-const DEFAULT_TIMEOUT_MS = 300_000;
-const MIN_TIMEOUT_MS = 100;
-const MAX_TIMEOUT_MS = 1_800_000;
-const MAX_OUTPUT_BYTES = 32 * 1024;
-const TERMINATION_GRACE_MS = 1_000;
-
 interface ShellExecutionResult {
   command: string;
   cwd: string;
@@ -39,7 +36,10 @@ interface ShellExecutionResult {
   stderrTruncated: boolean;
 }
 
-export function createShellTools(): RuntimeTool[] {
+export function createShellTools(
+  toolsConfig: ToolsConfig = DEFAULT_TOOLS_CONFIG
+): RuntimeTool[] {
+  const shell = toolsConfig.shell;
   const runShell = new DynamicStructuredTool({
     name: 'run_shell',
     description: [
@@ -57,8 +57,8 @@ export function createShellTools(): RuntimeTool[] {
         command: {
           type: 'string',
           minLength: 1,
-          maxLength: 20_000,
-          description: 'Shell command to execute with /bin/zsh. It must not require interactive input.',
+          maxLength: shell.maximumCommandCharacters,
+          description: `Shell command to execute with ${shell.executable}. It must not require interactive input.`,
         },
         cwd: {
           type: 'string',
@@ -67,10 +67,10 @@ export function createShellTools(): RuntimeTool[] {
         },
         timeoutMs: {
           type: 'integer',
-          minimum: MIN_TIMEOUT_MS,
-          maximum: MAX_TIMEOUT_MS,
-          default: DEFAULT_TIMEOUT_MS,
-          description: `Execution timeout in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS}.`,
+          minimum: shell.minimumTimeoutMs,
+          maximum: shell.maximumTimeoutMs,
+          default: shell.defaultTimeoutMs,
+          description: `Execution timeout in milliseconds. Defaults to ${shell.defaultTimeoutMs}.`,
         },
         env: {
           type: 'object',
@@ -87,7 +87,10 @@ export function createShellTools(): RuntimeTool[] {
       const command = stringArgument(args, 'command');
       if (!command.trim()) throw new Error('Shell command is required.');
       const cwd = stringArgument(args, 'cwd', '.').trim() || '.';
-      const timeoutMs = normalizeTimeout(numberArgument(args, 'timeoutMs', DEFAULT_TIMEOUT_MS));
+      const timeoutMs = normalizeTimeout(
+        numberArgument(args, 'timeoutMs', shell.defaultTimeoutMs),
+        shell
+      );
       const env = stringRecord(args.env, 'env');
       const result = await executeHostShell({
         context: runtimeContext(config),
@@ -95,6 +98,7 @@ export function createShellTools(): RuntimeTool[] {
         cwd,
         timeoutMs,
         env,
+        toolsConfig,
       });
       assertSuccessfulShellResult(result);
       return jsonToolOutput(result);
@@ -115,7 +119,10 @@ export async function executeHostShell(input: {
   cwd?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
+  toolsConfig?: ToolsConfig;
 }): Promise<ShellExecutionResult> {
+  const toolsConfig = input.toolsConfig ?? DEFAULT_TOOLS_CONFIG;
+  const shell = toolsConfig.shell;
   const root = await realpath(await workspaceRoot(input.context));
   const cwdInput = input.cwd?.trim() || '.';
   const cwd = await realpath(isAbsolute(cwdInput) ? cwdInput : resolve(root, cwdInput));
@@ -126,22 +133,27 @@ export async function executeHostShell(input: {
   const logicalCwd = relativeCwd === '..' || relativeCwd.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
     ? cwd
     : relativeCwd || '.';
-  const timeoutMs = normalizeTimeout(input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const timeoutMs = normalizeTimeout(input.timeoutMs ?? shell.defaultTimeoutMs, shell);
   const startedAt = Date.now();
-  const child = spawn(SHELL_PATH, [
+  const child = spawn(shell.executable, [
     '-f',
     '-c',
     input.command,
   ], {
     cwd,
-    env: buildWorkspaceProcessEnv(input.env),
+    env: buildWorkspaceProcessEnv(input.env, toolsConfig.environment),
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  const stdout = captureOutput(child.stdout);
-  const stderr = captureOutput(child.stderr);
-  const completion = await waitForChild(child, timeoutMs, input.context.signal);
+  const stdout = captureOutput(child.stdout, shell.maximumOutputBytes);
+  const stderr = captureOutput(child.stderr, shell.maximumOutputBytes);
+  const completion = await waitForChild(
+    child,
+    timeoutMs,
+    shell.terminationGraceMs,
+    input.context.signal
+  );
   return {
     command: input.command,
     cwd: logicalCwd,
@@ -175,11 +187,17 @@ export function assertSuccessfulShellResult(result: ShellExecutionResult): void 
 }
 
 
-function normalizeTimeout(value: number): number {
-  return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, Math.round(value)));
+function normalizeTimeout(
+  value: number,
+  config: ToolsConfig['shell']
+): number {
+  return Math.min(
+    config.maximumTimeoutMs,
+    Math.max(config.minimumTimeoutMs, Math.round(value))
+  );
 }
 
-function captureOutput(stream: NodeJS.ReadableStream): {
+function captureOutput(stream: NodeJS.ReadableStream, maximumBytes: number): {
   text(): string;
   truncated(): boolean;
 } {
@@ -188,7 +206,7 @@ function captureOutput(stream: NodeJS.ReadableStream): {
   let wasTruncated = false;
   stream.on('data', (value: Buffer | string) => {
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-    const remaining = MAX_OUTPUT_BYTES - bytes;
+    const remaining = maximumBytes - bytes;
     if (remaining <= 0) {
       wasTruncated = true;
       return;
@@ -211,6 +229,7 @@ function captureOutput(stream: NodeJS.ReadableStream): {
 async function waitForChild(
   child: ChildProcess,
   timeoutMs: number,
+  terminationGraceMs: number,
   signal?: AbortSignal
 ): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; timedOut: boolean }> {
   let timedOut = false;
@@ -231,7 +250,7 @@ async function waitForChild(
       } catch {
         child.kill('SIGKILL');
       }
-    }, TERMINATION_GRACE_MS);
+    }, terminationGraceMs);
     forceKillTimer.unref();
   };
 

@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { BaseMessage } from '@langchain/core/messages';
+import {
+  DEFAULT_CONTEXT_CONFIG,
+  type ContextConfig,
+} from '../../config/context-config.js';
 import type { AgentJob } from '../../domain/index.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { compileContext } from './context-compiler.js';
@@ -34,6 +38,7 @@ export interface ContextCompressionServiceOptions {
   ids?: { summaryId(): string };
   recentRawTokenBudget?: number;
   minimumRecentGroups?: number;
+  contextConfig?: ContextConfig;
 }
 
 /**
@@ -56,6 +61,7 @@ export class ContextCompressionService {
     built?: BuiltContext;
     invoke(messages: BaseMessage[], built: BuiltContext, logicalCallKey: string): Promise<string>;
   }): Promise<boolean> {
+    const contextConfig = this.options.contextConfig ?? DEFAULT_CONTEXT_CONFIG;
     const ordered = orderedContextGroups(input.material);
     if (ordered.length === 0) return false;
 
@@ -71,10 +77,10 @@ export class ContextCompressionService {
       uncovered,
       input.material.compression.recentRawTokenBudget
         ?? this.options.recentRawTokenBudget
-        ?? 24_000,
+        ?? contextConfig.compression.recentRawTokenBudget,
       input.material.compression.minimumRecentGroups
         ?? this.options.minimumRecentGroups
-        ?? 2
+        ?? contextConfig.compression.minimumRecentGroups
     );
     const eligible = uncovered.filter(item => (
       !protectedTail.has(item.group.id)
@@ -88,11 +94,20 @@ export class ContextCompressionService {
         `Active rolling summary ${JSON.stringify(activeSummary.id)} is not ContextMemoryV1.`
       );
     }
-    const source = selectCompressionBatch(eligible, previousMemory, input.material);
+    const source = selectCompressionBatch(
+      eligible,
+      previousMemory,
+      input.material,
+      contextConfig
+    );
     if (source.length === 0) return false;
     const payload = {
       previousMemory,
-      newBlocks: source.map(item => serializeContextGroup(item.group, item.bundleId)),
+      newBlocks: source.map(item => serializeContextGroup(
+        item.group,
+        item.bundleId,
+        contextConfig
+      )),
     };
     const serializedPayload = JSON.stringify(payload);
     const compressionMaterial = buildCompressionMaterial(input.material, serializedPayload);

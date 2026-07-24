@@ -1,4 +1,8 @@
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import {
+  DEFAULT_CONTEXT_CONFIG,
+  type ContextConfig,
+} from '../../../config/context-config.js';
 import type { AgentMessage } from '../../../domain/index.js';
 import {
   CONTEXT_MEMORY_POLICY_COMPONENT_ID,
@@ -53,10 +57,17 @@ export function protectedTailGroupIds(
 export function selectCompressionBatch(
   eligible: OrderedContextGroup[],
   previousMemory: ContextMemoryV1 | undefined,
-  material: ContextMaterial
+  material: ContextMaterial,
+  config: ContextConfig = DEFAULT_CONTEXT_CONFIG
 ): OrderedContextGroup[] {
   const hardLimit = resolveInputTokenLimit(material.model);
-  const batchBudget = Math.max(8_000, Math.min(48_000, Math.floor(hardLimit * 0.5)));
+  const batchBudget = Math.max(
+    config.compression.batchMinimumTokens,
+    Math.min(
+      config.compression.batchMaximumTokens,
+      Math.floor(hardLimit * config.compression.batchInputFraction)
+    )
+  );
   let tokens = estimateTextTokens(JSON.stringify(previousMemory ?? null));
   const selected: OrderedContextGroup[] = [];
   for (const item of eligible) {
@@ -112,11 +123,15 @@ export function buildCompressionMaterial(
   };
 }
 
-export function serializeContextGroup(group: MessageGroup, bundleId: string) {
+export function serializeContextGroup(
+  group: MessageGroup,
+  bundleId: string,
+  config: ContextConfig = DEFAULT_CONTEXT_CONFIG
+) {
   return {
     groupId: group.id,
     ...(bundleId ? { bundleId } : {}),
-    messages: messagesInGroup(group).map(message => serializeMessage(message)),
+    messages: messagesInGroup(group).map(message => serializeMessage(message, config)),
   };
 }
 
@@ -166,8 +181,11 @@ export function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-function serializeMessage(message: AgentMessage) {
-  const projector = new ToolResultContextProjector();
+function serializeMessage(message: AgentMessage, config: ContextConfig) {
+  const projector = new ToolResultContextProjector({
+    maxTokens: config.projection.maximumToolResultTokens,
+    headRatio: config.projection.toolResultHeadRatio,
+  });
   const projectedContent = message.messageType === 'tool_result'
     ? projector.project(message.content).content
     : message.content;

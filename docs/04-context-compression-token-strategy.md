@@ -424,7 +424,9 @@ pressureRatio   = predictedCandidateTokens / inputTokenLimit
 
 ## 13. 预算选择
 
-模型限制由 `src/server/runtime/model-token-limits.ts` 的内置能力表解析，并允许部署环境覆盖：
+模型限制由 `src/config/model-profiles.ts` 的能力表和
+`src/config/model-config.ts` 的解析器统一维护；部署策略写入
+`src/config/runtime.json` 的 `model.tokens`，环境变量仅作为部署覆盖：
 
 ```text
 C = contextWindowTokens
@@ -433,14 +435,15 @@ I = inputTokenLimit ?? (C - O)
 ```
 
 约束为 `0 < I <= C - O`。不再设置独立的 `inputSelectionLimit`：
-55%/75% 压缩状态机是唯一的输入容量控制，不能在压缩前通过另一条
+默认 55%/75% 压缩状态机是唯一的输入容量控制，不能在压缩前通过另一条
 90% 选择线静默丢弃历史。`outputTokenLimit` 同时传给
 `ChatOpenAI.maxTokens`，因此 Runtime 输入预算和 Provider 输出上限使用同一份配置。
 默认输出固定为 4,096 Token；大文档和代码应通过文件工具落盘，而不是扩大单条回复。
 
 内置表目前覆盖运行时实际使用和默认支持的 Qwen Max、Qwen Plus、Qwen 3.x
 以及 GPT-4.1、GPT-4o 系列。未知模型不会套用猜测值：必须设置
-`MODEL_CONTEXT_WINDOW_TOKENS`，或先把模型加入能力表。可覆盖变量：
+`src/config/runtime.json` 中的 `model.tokens.contextWindowTokens`，或先把模型加入能力表。
+兼容的环境覆盖变量：
 
 ```text
 MODEL_CONTEXT_WINDOW_TOKENS

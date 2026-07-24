@@ -1,6 +1,10 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { DynamicStructuredTool } from '@langchain/core/tools';
+import {
+  DEFAULT_TOOLS_CONFIG,
+  type ToolsConfig,
+} from '../config/tools-config.js';
 import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import {
   jsonToolOutput,
@@ -13,7 +17,9 @@ const defaultHeaders = {
   accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
 };
 
-export function createBrowserTools(): RuntimeTool[] {
+export function createBrowserTools(
+  browserConfig: ToolsConfig['browser'] = DEFAULT_TOOLS_CONFIG.browser
+): RuntimeTool[] {
   const browseUrl = new DynamicStructuredTool({
     name: 'browse_url',
     description: 'Fetch a public HTTP or HTTPS URL and extract its title and readable text.',
@@ -21,7 +27,10 @@ export function createBrowserTools(): RuntimeTool[] {
       type: 'object',
       properties: {
         url: { type: 'string', description: 'Public HTTP or HTTPS URL.' },
-        maxLength: { type: 'number', description: 'Maximum content length. Defaults to 5000.' },
+        maxLength: {
+          type: 'number',
+          description: `Maximum content length. Defaults to ${browserConfig.defaultContentCharacters}.`,
+        },
       },
       required: ['url'],
       additionalProperties: false,
@@ -30,8 +39,14 @@ export function createBrowserTools(): RuntimeTool[] {
     func: async input => {
       const values = input as Record<string, unknown>;
       const url = stringArgument(values, 'url');
-      const maxLength = Math.max(500, Math.min(20_000, numberArgument(values, 'maxLength', 5_000)));
-      const response = await safeFetch(url);
+      const maxLength = Math.max(
+        browserConfig.minimumContentCharacters,
+        Math.min(
+          browserConfig.maximumContentCharacters,
+          numberArgument(values, 'maxLength', browserConfig.defaultContentCharacters)
+        )
+      );
+      const response = await safeFetch(url, browserConfig);
       if (!response.ok) throw new Error(`Fetch failed with status ${response.status}.`);
       const mediaType = response.headers.get('content-type')
         ?.split(';', 1)[0]
@@ -66,9 +81,13 @@ export function createBrowserTools(): RuntimeTool[] {
     func: async input => {
       const query = stringArgument(input as Record<string, unknown>, 'query').trim();
       if (!query) throw new Error('Search query is required.');
-      const response = await safeFetch(`https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`);
+      const response = await safeFetch(
+        `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+        browserConfig
+      );
       if (!response.ok) throw new Error(`Search failed with status ${response.status}.`);
-      const results = extractDuckDuckGoResults(await response.text()).slice(0, 5);
+      const results = extractDuckDuckGoResults(await response.text())
+        .slice(0, browserConfig.searchResultLimit);
       return jsonToolOutput({ query, resultsCount: results.length, results });
     },
   });
@@ -79,11 +98,18 @@ export function createBrowserTools(): RuntimeTool[] {
   ];
 }
 
-async function safeFetch(input: string): Promise<Response> {
+async function safeFetch(
+  input: string,
+  config: ToolsConfig['browser']
+): Promise<Response> {
   let url = new URL(input);
-  for (let redirect = 0; redirect <= 5; redirect += 1) {
-    await assertPublicUrl(url);
-    const response = await fetch(url, { headers: defaultHeaders, redirect: 'manual' });
+  for (let redirect = 0; redirect <= config.maximumRedirects; redirect += 1) {
+    await assertPublicUrl(url, config.allowProxyFakeIps);
+    const response = await fetch(url, {
+      headers: defaultHeaders,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(config.requestTimeoutMs),
+    });
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get('location');
     if (!location) throw new Error('Redirect response is missing a location header.');
@@ -92,7 +118,7 @@ async function safeFetch(input: string): Promise<Response> {
   throw new Error('Too many redirects.');
 }
 
-async function assertPublicUrl(url: URL): Promise<void> {
+async function assertPublicUrl(url: URL, allowProxyFakeIps: boolean): Promise<void> {
   if (!['http:', 'https:'].includes(url.protocol)) {
     throw new Error('Only HTTP and HTTPS URLs are supported.');
   }
@@ -105,8 +131,7 @@ async function assertPublicUrl(url: URL): Promise<void> {
   const addresses = hostnameIsIp
     ? [{ address: hostname }]
     : await lookup(hostname, { all: true, verbatim: true });
-  const allowProxyFakeIp = !hostnameIsIp
-    && process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS?.toLowerCase() === 'true';
+  const allowProxyFakeIp = !hostnameIsIp && allowProxyFakeIps;
   if (addresses.length === 0
     || addresses.some(item => isPrivateAddress(item.address, allowProxyFakeIp))) {
     throw new Error('Private or unresolved network addresses are not allowed.');

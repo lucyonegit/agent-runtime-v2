@@ -1,3 +1,5 @@
+import { DEFAULT_EXECUTION_CONFIG } from '../../config/execution-config.js';
+
 /** Limits shared by Job ownership and the inner ReAct execution loop. */
 export interface ExecutionLimits {
   maxIterations: number;
@@ -8,11 +10,11 @@ export interface ExecutionLimits {
 }
 
 const DEFAULT_EXECUTION_LIMITS: Readonly<ExecutionLimits> = Object.freeze({
-  maxIterations: 24,
-  maxToolCalls: 48,
-  executionDeadlineMs: 15 * 60_000,
-  jobLeaseMs: 30_000,
-  jobHeartbeatMs: 10_000,
+  maxIterations: DEFAULT_EXECUTION_CONFIG.maxIterations,
+  maxToolCalls: DEFAULT_EXECUTION_CONFIG.maxToolCalls,
+  executionDeadlineMs: DEFAULT_EXECUTION_CONFIG.deadlineMs,
+  jobLeaseMs: DEFAULT_EXECUTION_CONFIG.ownershipTimeoutMs,
+  jobHeartbeatMs: DEFAULT_EXECUTION_CONFIG.ownershipRefreshMs,
 });
 
 export function resolveExecutionLimits(

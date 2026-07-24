@@ -36,6 +36,7 @@ export interface ReactExecutionOptions {
   maxIterations: number;
   maxToolCalls: number;
   executionDeadlineMs: number;
+  streaming: boolean;
 }
 
 /**
@@ -74,7 +75,7 @@ export class ReactExecution {
           tools
         ),
         createOutputId,
-        streaming: true,
+        streaming: this.options.streaming,
       }),
       writer: this.#writer(),
       jobState: this.options.jobState,

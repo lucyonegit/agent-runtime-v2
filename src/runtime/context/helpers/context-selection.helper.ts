@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { SystemMessage, type BaseMessage } from '@langchain/core/messages';
 import { ContextFormatter } from './context-formatter.helper.js';
+import { ToolResultContextProjector } from './tool-result-projector.helper.js';
 import { messagesInGroup } from './message-group.helper.js';
 import {
   TokenBudget,
@@ -62,7 +63,11 @@ export function selectContextMaterial(material: ContextMaterial): ContextSelecti
 }
 
 function buildContextItems(material: ContextMaterial): Array<TokenBudgetItem<ContextItem>> {
-  const formatter = new ContextFormatter();
+  const projection = material.contextConfig?.projection;
+  const formatter = new ContextFormatter(new ToolResultContextProjector({
+    maxTokens: projection?.maximumToolResultTokens,
+    headRatio: projection?.toolResultHeadRatio,
+  }));
   const items: Array<TokenBudgetItem<ContextItem>> = [];
   let order = 0;
 

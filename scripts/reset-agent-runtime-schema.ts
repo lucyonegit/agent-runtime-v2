@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
+import { loadRuntimeConfig } from '../src/config/runtime-config.js';
 import {
   migrateAgentRuntimeSchema,
   resetAgentRuntimeSchema,
@@ -19,12 +20,14 @@ if (!['development', 'test'].includes(environment) && !explicitlyAllowed) {
   );
 }
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-  throw new Error('DATABASE_URL is required for Agent Runtime schema reset.');
-}
-
-const pool = new Pool({ connectionString: databaseUrl });
+const config = loadRuntimeConfig();
+const pool = new Pool({
+  connectionString: config.postgres.url,
+  max: config.postgres.maxConnections,
+  idleTimeoutMillis: config.postgres.idleTimeoutMs,
+  connectionTimeoutMillis: config.postgres.connectionTimeoutMs,
+  ssl: config.postgres.ssl,
+});
 try {
   const client = await pool.connect();
   try {

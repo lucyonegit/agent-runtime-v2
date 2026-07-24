@@ -7,18 +7,20 @@ import {
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
-import type { ModelRuntimeConfig } from './model-config.js';
+import type { ModelConfig } from '../../config/model-config.js';
 
 export function createLangChainChatModel(
-  config: ModelRuntimeConfig,
+  config: ModelConfig,
   maxOutputTokens?: number
 ): BaseChatModel {
   if (!config.apiKey) return new MissingCredentialsChatModel(config.provider);
   return new ChatOpenAI({
     apiKey: config.apiKey,
     model: config.modelName,
-    temperature: 0,
-    streaming: true,
+    temperature: config.temperature,
+    streaming: config.streaming,
+    timeout: config.requestTimeoutMs,
+    maxRetries: config.maxRetries,
     ...(maxOutputTokens ? { maxTokens: maxOutputTokens } : {}),
     ...(config.baseURL ? { configuration: { baseURL: config.baseURL } } : {}),
   });

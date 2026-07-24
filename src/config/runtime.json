@@ -1,0 +1,147 @@
+{
+  "runtime": {
+    "workerId": "auto",
+    "sandboxRoot": ".agent-sandbox"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 3000,
+    "logger": ["error", "warn", "log"],
+    "cors": {
+      "origin": true,
+      "credentials": true,
+      "methods": ["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
+      "allowedHeaders": ["content-type"]
+    }
+  },
+  "postgres": {
+    "url": "",
+    "maxConnections": 10,
+    "idleTimeoutMs": 30000,
+    "connectionTimeoutMs": 10000,
+    "ssl": false
+  },
+  "model": {
+    "provider": "dashscope",
+    "apiKey": "",
+    "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "modelName": "qwen3.7-max",
+    "temperature": 0,
+    "streaming": true,
+    "requestTimeoutMs": 120000,
+    "maxRetries": 2,
+    "tokens": {
+      "contextWindowTokens": null,
+      "inputTokenLimit": null,
+      "outputTokenLimit": 4096
+    }
+  },
+  "execution": {
+    "maxIterations": 24,
+    "maxToolCalls": 48,
+    "deadlineMs": 900000,
+    "ownershipTimeoutMs": 30000,
+    "ownershipRefreshMs": 10000,
+    "recoveryScanIntervalMs": 5000,
+    "recoveryBatchSize": 32
+  },
+  "context": {
+    "compression": {
+      "enabled": true,
+      "maximumPasses": 4,
+      "recentRawTokenBudget": 24000,
+      "minimumRecentGroups": 2,
+      "batchMinimumTokens": 8000,
+      "batchMaximumTokens": 48000,
+      "batchInputFraction": 0.5
+    },
+    "pressure": {
+      "watchRatio": 0.4,
+      "compressRatio": 0.55,
+      "mustCompressRatio": 0.75,
+      "criticalRatio": 0.9
+    },
+    "estimation": {
+      "historySampleSize": 100,
+      "minimumCalibrationSamples": 10,
+      "fallbackCalibrationFactor": 1.1,
+      "minimumCalibrationFactor": 1,
+      "maximumCalibrationFactor": 1.75,
+      "calibrationPercentile": 0.95,
+      "fallbackErrorReserveTokens": 256,
+      "minimumErrorReserveTokens": 64
+    },
+    "projection": {
+      "maximumToolResultTokens": 8000,
+      "toolResultHeadRatio": 0.6,
+      "runtimeStateMaximumTokens": 8000,
+      "artifactHistoryLimit": 100,
+      "recentModelCallLimit": 100
+    }
+  },
+  "tools": {
+    "enabled": {
+      "hitl": true,
+      "basic": true,
+      "artifacts": true,
+      "filesystem": true,
+      "shell": true,
+      "managedProcesses": true,
+      "browser": true
+    },
+    "filesystem": {
+      "maximumWriteCharacters": 6000,
+      "maximumWriteEstimatedTokens": 2000,
+      "maximumReadBytes": 1048576,
+      "maximumListEntries": 10000,
+      "maximumTraversalDepth": 50,
+      "grepDefaultResults": 50,
+      "grepMaximumResults": 200,
+      "symbolsDefaultResults": 100,
+      "symbolsMaximumResults": 500,
+      "linePreviewCharacters": 300,
+      "artifactTitleCharacters": 120
+    },
+    "shell": {
+      "executable": "/bin/zsh",
+      "defaultTimeoutMs": 300000,
+      "minimumTimeoutMs": 100,
+      "maximumTimeoutMs": 1800000,
+      "maximumOutputBytes": 32768,
+      "terminationGraceMs": 1000,
+      "maximumCommandCharacters": 20000
+    },
+    "managedProcesses": {
+      "defaultHost": "127.0.0.1",
+      "allowedHosts": ["127.0.0.1", "localhost"],
+      "portRangeStart": 4100,
+      "portRangeEnd": 4999,
+      "defaultStartupTimeoutMs": 60000,
+      "maximumStartupTimeoutMs": 300000,
+      "stopGraceMs": 1500,
+      "readinessPollMs": 100,
+      "discoveryPollMs": 1000,
+      "maximumLogBytes": 65536,
+      "socketTimeoutMs": 250,
+      "discoveryCommandMaximumBytes": 4194304
+    },
+    "browser": {
+      "requestTimeoutMs": 30000,
+      "maximumRedirects": 5,
+      "defaultContentCharacters": 5000,
+      "minimumContentCharacters": 500,
+      "maximumContentCharacters": 20000,
+      "searchResultLimit": 5,
+      "allowProxyFakeIps": false
+    },
+    "environment": {
+      "blockedKeys": [
+        "DATABASE_URL",
+        "DASHSCOPE_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL"
+      ],
+      "blockedPrefixes": ["AGENT_RUNTIME_", "AGENT_SERVER_"]
+    }
+  }
+}

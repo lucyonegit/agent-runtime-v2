@@ -1,4 +1,5 @@
 import { SystemMessage } from '@langchain/core/messages';
+import { DEFAULT_CONTEXT_CONFIG } from '../../../config/context-config.js';
 import type {
   AgentArtifact,
   AgentContextSummary,
@@ -38,7 +39,10 @@ export async function loadJobContextMaterial(
 ): Promise<ContextMaterial> {
   const [facts, modelCalls] = await Promise.all([
     loadSessionFacts(options, job.sessionId),
-    options.store.listRecentSessionModelCalls(job.sessionId, 100),
+    options.store.listRecentSessionModelCalls(
+      job.sessionId,
+      (options.contextConfig ?? DEFAULT_CONTEXT_CONFIG).projection.recentModelCallLimit
+    ),
   ]);
   assertNoBlockedMessageGroups(
     facts.blocked,
@@ -60,7 +64,10 @@ export async function loadNextTurnContextMaterial(
 ): Promise<{ material: ContextMaterial; latestJobId?: string }> {
   const [facts, modelCalls] = await Promise.all([
     loadSessionFacts(options, sessionId),
-    options.store.listRecentSessionModelCalls(sessionId, 100),
+    options.store.listRecentSessionModelCalls(
+      sessionId,
+      (options.contextConfig ?? DEFAULT_CONTEXT_CONFIG).projection.recentModelCallLimit
+    ),
   ]);
   return {
     material: buildContextMaterial(options, {
@@ -135,6 +142,7 @@ function buildContextMaterial(
   }
 ): ContextMaterial {
   const { facts, job } = input;
+  const contextConfig = options.contextConfig ?? DEFAULT_CONTEXT_CONFIG;
   const stableContext = options.getStableContext?.(input.sessionId);
   const fixedMessages: ContextMaterial['fixedMessages'] = [{
     id: 'must_keep:system',
@@ -150,7 +158,7 @@ function buildContextMaterial(
   }
 
   const goalId = job ? jobGoalMessageId(job) : undefined;
-  const trailingMessages = buildRuntimeStateMessages(facts, job);
+  const trailingMessages = buildRuntimeStateMessages(facts, job, contextConfig);
   const groups = facts.groups.map(group => {
     const messages = messagesInGroup(group);
     const currentGoal = job
@@ -186,6 +194,7 @@ function buildContextMaterial(
   });
 
   return {
+    contextConfig,
     fixedMessages,
     trailingMessages,
     fixedPrefix: { systemPrompt: options.systemPrompt, stableContext },
@@ -193,7 +202,7 @@ function buildContextMaterial(
     bundles,
     summaries: facts.summaries.map(toSummaryMaterial),
     toolSchemas: options.toolSchemas,
-    model: calibrateModelBudget(options.model, input.modelCalls),
+    model: calibrateModelBudget(options.model, input.modelCalls, contextConfig),
     audit: {
       purpose: 'job_execution',
       contextRulesVersion: input.contextRulesVersion,
@@ -214,15 +223,21 @@ function buildContextMaterial(
       ...(item.toolCallId ? { toolCallId: item.toolCallId } : {}),
     })),
     compression: {
-      disabled: false,
-      recentRawTokenBudget: options.recentRawTokenBudget ?? 24_000,
-      minimumRecentGroups: options.minimumRecentGroups ?? 2,
+      disabled: !contextConfig.compression.enabled,
+      recentRawTokenBudget: options.recentRawTokenBudget
+        ?? contextConfig.compression.recentRawTokenBudget,
+      minimumRecentGroups: options.minimumRecentGroups
+        ?? contextConfig.compression.minimumRecentGroups,
       ...(goalId ? { protectedMessageIds: [goalId] } : {}),
     },
   };
 }
 
-function buildRuntimeStateMessages(facts: SessionFacts, job?: AgentJob) {
+function buildRuntimeStateMessages(
+  facts: SessionFacts,
+  job: AgentJob | undefined,
+  contextConfig: typeof DEFAULT_CONTEXT_CONFIG
+) {
   const plan = [...facts.plans]
     .filter(item => job ? item.jobId === job.id : item.status === 'active')
     .sort((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
@@ -240,7 +255,9 @@ function buildRuntimeStateMessages(facts: SessionFacts, job?: AgentJob) {
         error: step.error,
       }))
     : [];
-  const latestArtifacts = latestArtifactRevisions(facts.artifacts).slice(-100).map(artifact => ({
+  const latestArtifacts = latestArtifactRevisions(facts.artifacts)
+    .slice(-contextConfig.projection.artifactHistoryLimit)
+    .map(artifact => ({
     id: artifact.id,
     jobId: artifact.jobId,
     logicalPath: artifact.logicalPath,
@@ -249,7 +266,7 @@ function buildRuntimeStateMessages(facts: SessionFacts, job?: AgentJob) {
     size: artifact.size,
     checksum: artifact.checksum,
     revision: artifact.revision,
-  }));
+    }));
   const pendingInputRequests = facts.userInputRequests
     .filter(request => (!job || request.jobId === job.id) && request.status === 'pending')
     .map(request => ({
@@ -273,7 +290,10 @@ function buildRuntimeStateMessages(facts: SessionFacts, job?: AgentJob) {
     artifacts: latestArtifacts,
     pendingUserInputRequests: pendingInputRequests,
   };
-  const text = buildDurableRuntimeStatePrompt(state);
+  const text = buildDurableRuntimeStatePrompt(
+    state,
+    contextConfig.projection.runtimeStateMaximumTokens
+  );
   return [{ id: 'must_keep:runtime_state', message: new SystemMessage(text), text }];
 }
 

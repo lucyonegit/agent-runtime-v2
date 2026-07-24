@@ -12,8 +12,8 @@ uploads
 # Env
 .env
 
-# Config
-config
+# Root deployment overrides. Source configuration lives in src/config.
+/config
 
 # Cache
 .cache

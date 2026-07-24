@@ -13,7 +13,8 @@ export function compileContext(material: ContextMaterial): CompiledContext {
   const selected = selectContextMaterial(material);
   const pressure = evaluateContextPressure(
     selected.predictedCandidateTokens,
-    selected.hardInputLimit
+    selected.hardInputLimit,
+    material.contextConfig
   );
   const inputManifest: AgentContextInputManifest = {
     purpose: material.audit.purpose,

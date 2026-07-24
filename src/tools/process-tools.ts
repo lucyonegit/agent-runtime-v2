@@ -1,4 +1,8 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
+import {
+  DEFAULT_TOOLS_CONFIG,
+  type ToolsConfig,
+} from '../config/tools-config.js';
 import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import {
   jsonToolOutput,
@@ -9,7 +13,11 @@ import {
 import { stringRecord } from './helpers/process-environment.helper.js';
 import type { ManagedProcessManager } from './managed-process-manager.js';
 
-export function createManagedProcessTools(manager: ManagedProcessManager): RuntimeTool[] {
+export function createManagedProcessTools(
+  manager: ManagedProcessManager,
+  processConfig: ToolsConfig['managedProcesses'] =
+    DEFAULT_TOOLS_CONFIG.managedProcesses
+): RuntimeTool[] {
   const startProcess = new DynamicStructuredTool({
     name: 'start_process',
     description: [
@@ -23,10 +31,14 @@ export function createManagedProcessTools(manager: ManagedProcessManager): Runti
       type: 'object',
       properties: {
         name: { type: 'string', minLength: 1, maxLength: 120, description: 'Stable human-readable service name within the Session.' },
-        command: { type: 'string', minLength: 1, maxLength: 20_000, description: 'Non-interactive server command executed with /bin/zsh.' },
+        command: { type: 'string', minLength: 1, maxLength: 20_000, description: 'Non-interactive development-server command.' },
         cwd: { type: 'string', default: '.', description: 'Working directory relative to the Session workspace, or an absolute directory.' },
         env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Explicit child environment. {PORT} and {HOST} placeholders are supported.' },
-        host: { type: 'string', enum: ['127.0.0.1', 'localhost'], default: '127.0.0.1' },
+        host: {
+          type: 'string',
+          enum: processConfig.allowedHosts,
+          default: processConfig.defaultHost,
+        },
         port: {
           anyOf: [
             { type: 'string', enum: ['auto'] },
@@ -35,7 +47,12 @@ export function createManagedProcessTools(manager: ManagedProcessManager): Runti
           default: 'auto',
           description: 'Use auto unless the user explicitly requires a port.',
         },
-        startupTimeoutMs: { type: 'integer', minimum: 1_000, maximum: 300_000, default: 60_000 },
+        startupTimeoutMs: {
+          type: 'integer',
+          minimum: 1_000,
+          maximum: processConfig.maximumStartupTimeoutMs,
+          default: processConfig.defaultStartupTimeoutMs,
+        },
       },
       required: ['name', 'command'],
       additionalProperties: false,
@@ -51,9 +68,13 @@ export function createManagedProcessTools(manager: ManagedProcessManager): Runti
         command: stringArgument(args, 'command'),
         cwd: stringArgument(args, 'cwd', '.'),
         env: stringRecord(args.env, 'env'),
-        host: stringArgument(args, 'host', '127.0.0.1'),
+        host: stringArgument(args, 'host', processConfig.defaultHost),
         port,
-        startupTimeoutMs: numberArgument(args, 'startupTimeoutMs', 60_000),
+        startupTimeoutMs: numberArgument(
+          args,
+          'startupTimeoutMs',
+          processConfig.defaultStartupTimeoutMs
+        ),
       });
       return jsonToolOutput(processRecord);
     },
@@ -76,7 +97,12 @@ export function createManagedProcessTools(manager: ManagedProcessManager): Runti
       type: 'object',
       properties: {
         processId: { type: 'string', minLength: 1 },
-        maxBytes: { type: 'integer', minimum: 1_024, maximum: 65_536, default: 32_768 },
+        maxBytes: {
+          type: 'integer',
+          minimum: 1_024,
+          maximum: processConfig.maximumLogBytes,
+          default: Math.min(32_768, processConfig.maximumLogBytes),
+        },
       },
       required: ['processId'],
       additionalProperties: false,
@@ -85,7 +111,14 @@ export function createManagedProcessTools(manager: ManagedProcessManager): Runti
     func: async input => {
       const args = input as Record<string, unknown>;
       const processId = stringArgument(args, 'processId');
-      const logs = await manager.readLogs(processId, numberArgument(args, 'maxBytes', 32_768));
+      const logs = await manager.readLogs(
+        processId,
+        numberArgument(
+          args,
+          'maxBytes',
+          Math.min(32_768, processConfig.maximumLogBytes)
+        )
+      );
       return jsonToolOutput({ processId, logs });
     },
   });

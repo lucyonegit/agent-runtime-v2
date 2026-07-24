@@ -1,4 +1,14 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import {
+  DEFAULT_CONTEXT_CONFIG,
+  type ContextConfig,
+} from '../config/context-config.js';
+import { DEFAULT_EXECUTION_CONFIG } from '../config/execution-config.js';
+import {
+  DEFAULT_MODEL_CONFIG,
+  resolveModelTokenLimits,
+} from '../config/model-config.js';
+import { DEFAULT_TOOLS_CONFIG } from '../config/tools-config.js';
 import { resolveJobGoalMessage, type AgentJob } from '../domain/index.js';
 import { ReactExecution } from '../runtime/execution/react-execution.js';
 import { ContextCompressionService } from '../runtime/context/context-compression.service.js';
@@ -33,6 +43,7 @@ export interface JobExecutionSupervisorOptions {
   modelName: string;
   tools: RuntimeTool[];
   sandboxRoot?: string;
+  shellPath?: string;
   maxContextTokens?: number;
   reservedOutputTokens?: number;
   inputTokenLimit?: number;
@@ -43,6 +54,8 @@ export interface JobExecutionSupervisorOptions {
   jobHeartbeatMs?: number;
   recoveryIntervalMs?: number;
   recoveryBatchSize?: number;
+  streaming?: boolean;
+  contextConfig?: ContextConfig;
   jobSystemPrompt: string;
   systemPromptVersion: string;
   promptId: string;
@@ -61,7 +74,8 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
     completion: Promise<void>;
   }>();
   readonly #options: Required<Omit<JobExecutionSupervisorOptions,
-    'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName' | 'sandboxRoot'>>
+    'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName'
+    | 'sandboxRoot' | 'shellPath' | 'contextConfig'>>
     & JobExecutionSupervisorOptions;
   readonly #reactExecution: ReactExecution;
   readonly #contextService: ReActContextService;
@@ -72,21 +86,26 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
   #stopping = false;
 
   constructor(options: JobExecutionSupervisorOptions) {
-    const maxContextTokens = options.maxContextTokens ?? 128_000;
-    const reservedOutputTokens = options.reservedOutputTokens ?? 4_096;
+    const defaultModelLimits = resolveModelTokenLimits(DEFAULT_MODEL_CONFIG);
+    const maxContextTokens = options.maxContextTokens
+      ?? defaultModelLimits.contextWindowTokens;
+    const reservedOutputTokens = options.reservedOutputTokens
+      ?? defaultModelLimits.outputTokenLimit;
     const inputTokenLimit = options.inputTokenLimit
       ?? maxContextTokens - reservedOutputTokens;
     this.#options = {
       maxContextTokens,
       reservedOutputTokens,
       inputTokenLimit,
-      maxIterations: 24,
-      maxToolCalls: 48,
-      executionDeadlineMs: 15 * 60_000,
-      jobLeaseMs: 30_000,
-      jobHeartbeatMs: 10_000,
-      recoveryIntervalMs: 5_000,
-      recoveryBatchSize: 32,
+      maxIterations: DEFAULT_EXECUTION_CONFIG.maxIterations,
+      maxToolCalls: DEFAULT_EXECUTION_CONFIG.maxToolCalls,
+      executionDeadlineMs: DEFAULT_EXECUTION_CONFIG.deadlineMs,
+      jobLeaseMs: DEFAULT_EXECUTION_CONFIG.ownershipTimeoutMs,
+      jobHeartbeatMs: DEFAULT_EXECUTION_CONFIG.ownershipRefreshMs,
+      recoveryIntervalMs: DEFAULT_EXECUTION_CONFIG.recoveryScanIntervalMs,
+      recoveryBatchSize: DEFAULT_EXECUTION_CONFIG.recoveryBatchSize,
+      streaming: DEFAULT_MODEL_CONFIG.streaming,
+      shellPath: DEFAULT_TOOLS_CONFIG.shell.executable,
       clock: { nowMs: () => Date.now() },
       ...options,
     };
@@ -135,6 +154,7 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
       maxIterations: this.#options.maxIterations,
       maxToolCalls: this.#options.maxToolCalls,
       executionDeadlineMs: this.#options.executionDeadlineMs,
+      streaming: this.#options.streaming,
     });
     this.#contextService = new ReActContextService({
       store: this.#options.store,
@@ -143,14 +163,17 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
       promptId: this.#options.promptId,
       promptVersion: this.#options.promptVersion,
       model: modelBudget,
+      contextConfig: this.#options.contextConfig ?? DEFAULT_CONTEXT_CONFIG,
       toolSchemas: this.#options.tools.map(tool => tool.tool),
       getStableContext: sessionId => buildStableEnvironmentContext({
         sandboxRoot: this.#options.sandboxRoot ?? '.agent-sandbox',
         sessionId,
+        shellPath: this.#options.shellPath,
       }),
       compression: new ContextCompressionService({
         store: this.#options.store,
         modelName: this.#options.modelName,
+        contextConfig: this.#options.contextConfig ?? DEFAULT_CONTEXT_CONFIG,
       }),
       compressionModels: {
         create: ({ job, context, logicalCallKey }) => this.#reactExecution.createAuditedModel(

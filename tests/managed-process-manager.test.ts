@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
 import { ManagedProcessManager } from '../src/tools/managed-process-manager.js';
 import type { RuntimeToolContext } from '../src/runtime/execution/tool-executor.js';
+import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../src/config/tools-config.js';
 
 describe('ManagedProcessManager', () => {
   const roots: string[] = [];
@@ -24,7 +25,8 @@ describe('ManagedProcessManager', () => {
     const manager = trackedManager(new ManagedProcessManager(
       { publish: event => { events.push(event); } },
       { nowMs: () => Date.now() },
-      sandboxRoot
+      sandboxRoot,
+      testToolsConfig()
     ));
     await manager.start();
     const context = toolContext(sandboxRoot);
@@ -62,7 +64,12 @@ describe('ManagedProcessManager', () => {
 
   it('reports an exit-before-ready even when the command exits with code zero', async () => {
     const sandboxRoot = await temporarySandbox();
-    const manager = trackedManager(new ManagedProcessManager(undefined, undefined, sandboxRoot));
+    const manager = trackedManager(new ManagedProcessManager(
+      undefined,
+      undefined,
+      sandboxRoot,
+      testToolsConfig()
+    ));
     await manager.start();
 
     await expect(manager.startProcess({
@@ -79,7 +86,12 @@ describe('ManagedProcessManager', () => {
 
   it('adopts a surviving marked process after the Runtime manager restarts', async () => {
     const sandboxRoot = await temporarySandbox();
-    const firstManager = trackedManager(new ManagedProcessManager(undefined, undefined, sandboxRoot));
+    const firstManager = trackedManager(new ManagedProcessManager(
+      undefined,
+      undefined,
+      sandboxRoot,
+      testToolsConfig()
+    ));
     await firstManager.start();
     const started = await firstManager.startProcess({
       context: toolContext(sandboxRoot),
@@ -90,7 +102,12 @@ describe('ManagedProcessManager', () => {
     });
     firstManager.shutdown();
 
-    const restartedManager = trackedManager(new ManagedProcessManager(undefined, undefined, sandboxRoot));
+    const restartedManager = trackedManager(new ManagedProcessManager(
+      undefined,
+      undefined,
+      sandboxRoot,
+      testToolsConfig()
+    ));
     await restartedManager.start();
     await expect(restartedManager.getProcess(started.id)).resolves.toMatchObject({
       id: started.id,
@@ -113,6 +130,12 @@ describe('ManagedProcessManager', () => {
     return manager;
   }
 });
+
+function testToolsConfig(): ToolsConfig {
+  const config = structuredClone(DEFAULT_TOOLS_CONFIG) as ToolsConfig;
+  config.environment.hostEnvironment = { ...process.env };
+  return config;
+}
 
 function toolContext(sandboxRoot: string): RuntimeToolContext {
   return {

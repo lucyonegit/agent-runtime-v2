@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { DEFAULT_CONTEXT_CONFIG } from '../../../config/context-config.js';
 import { estimateTextTokens } from './token-budget.helper.js';
 import { stableStringify } from '../../helpers/stable-json.helper.js';
 
@@ -20,8 +21,10 @@ export class ToolResultContextProjector {
   readonly #headRatio: number;
 
   constructor(options: ToolResultContextProjectorOptions = {}) {
-    this.#maxTokens = options.maxTokens ?? 8_000;
-    this.#headRatio = options.headRatio ?? 0.6;
+    this.#maxTokens = options.maxTokens
+      ?? DEFAULT_CONTEXT_CONFIG.projection.maximumToolResultTokens;
+    this.#headRatio = options.headRatio
+      ?? DEFAULT_CONTEXT_CONFIG.projection.toolResultHeadRatio;
   }
 
   project(value: unknown): ToolResultProjection {

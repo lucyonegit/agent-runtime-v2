@@ -58,7 +58,8 @@ export class ReActContextService {
           const model = compression.models.create({ job, context, logicalCallKey });
           return (await model.invoke(messages)).text;
         },
-      })
+      }),
+      this.options.contextConfig
     );
   }
 

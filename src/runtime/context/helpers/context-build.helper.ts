@@ -1,4 +1,8 @@
 import { compileContext } from '../context-compiler.js';
+import {
+  DEFAULT_CONTEXT_CONFIG,
+  type ContextConfig,
+} from '../../../config/context-config.js';
 import type {
   BuiltContext,
   ContextMaterial,
@@ -7,9 +11,10 @@ import { ContextOverflowError } from './token-budget.helper.js';
 
 export async function buildContextWithCompression(
   load: () => Promise<ContextMaterial>,
-  compress: (material: ContextMaterial, built?: BuiltContext) => Promise<boolean>
+  compress: (material: ContextMaterial, built?: BuiltContext) => Promise<boolean>,
+  config: ContextConfig = DEFAULT_CONTEXT_CONFIG
 ): Promise<BuiltContext> {
-  for (let pass = 0; pass < 4; pass += 1) {
+  for (let pass = 0; pass < config.compression.maximumPasses; pass += 1) {
     const material = await load();
     let built: BuiltContext;
     try {
@@ -40,7 +45,8 @@ export async function buildContextWithCompression(
 function requiredCompressionError(built: BuiltContext): ContextOverflowError {
   return new ContextOverflowError(
     `Input context requires ${built.predictedCandidateTokens} predicted tokens, `
-    + `at or above 75% of input limit ${built.hardInputLimit}, `
+        + `at or above the required compression threshold of input limit `
+        + `${built.hardInputLimit}, `
     + 'and could not be compressed below the required threshold.'
   );
 }

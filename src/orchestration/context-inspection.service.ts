@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { ContextConfig } from '../config/context-config.js';
 import { mapStoredMessagesToChatMessages } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import {
@@ -60,6 +61,7 @@ export interface ContextInspectionServiceOptions {
   promptId?: string;
   promptVersion?: number;
   getStableContext?: (sessionId: string) => string | undefined;
+  contextConfig?: ContextConfig;
   clock?: { nowMs(): number };
 }
 
@@ -78,6 +80,7 @@ export class ContextInspectionService {
       model: options.model,
       toolSchemas: options.tools,
       getStableContext: options.getStableContext,
+      contextConfig: options.contextConfig,
     });
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
   }

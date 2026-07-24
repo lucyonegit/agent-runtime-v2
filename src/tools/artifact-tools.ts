@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { DynamicStructuredTool } from '@langchain/core/tools';
+import {
+  DEFAULT_TOOLS_CONFIG,
+  type ToolsConfig,
+} from '../config/tools-config.js';
 import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import {
   assertFileWriteContentLimit,
-  FILE_WRITE_MAX_CHARACTERS,
-  FILE_WRITE_MAX_ESTIMATED_TOKENS,
   fileContentArgumentLimit,
 } from './filesystem-tools.js';
 import {
@@ -24,13 +26,16 @@ const formatExtensions: Record<string, string> = {
   text: '.txt',
 };
 
-export function createArtifactTools(): RuntimeTool[] {
+export function createArtifactTools(
+  filesystemConfig: ToolsConfig['filesystem'] =
+    DEFAULT_TOOLS_CONFIG.filesystem
+): RuntimeTool[] {
   const writeArticle = new DynamicStructuredTool({
     name: 'write_article',
     description: [
       'Write one complete prose article, report, or long-form document into workspace/artifacts.',
-      `Content must not exceed ${FILE_WRITE_MAX_CHARACTERS} characters`,
-      `or ${FILE_WRITE_MAX_ESTIMATED_TOKENS} estimated tokens.`,
+      `Content must not exceed ${filesystemConfig.maximumWriteCharacters} characters`,
+      `or ${filesystemConfig.maximumWriteEstimatedTokens} estimated tokens.`,
       'Never truncate content. For a larger document, use start_file_write and append_file_chunk with an artifacts/ path.',
       'Do not use for webpages or source code; use write_file with a code/ path instead.',
     ].join(' '),
@@ -40,8 +45,8 @@ export function createArtifactTools(): RuntimeTool[] {
         title: { type: 'string', description: 'Document title used to create the artifact file name.' },
         content: {
           type: 'string',
-          maxLength: FILE_WRITE_MAX_CHARACTERS,
-          description: `Complete document content. Maximum ${FILE_WRITE_MAX_CHARACTERS} characters.`,
+          maxLength: filesystemConfig.maximumWriteCharacters,
+          description: `Complete document content. Maximum ${filesystemConfig.maximumWriteCharacters} characters.`,
         },
         format: { type: 'string', enum: ['markdown', 'text'] },
       },
@@ -53,12 +58,14 @@ export function createArtifactTools(): RuntimeTool[] {
       const values = input as Record<string, unknown>;
       const title = stringArgument(values, 'title').trim();
       const content = stringArgument(values, 'content');
-      assertFileWriteContentLimit(content);
+      assertFileWriteContentLimit(content, filesystemConfig);
       const format = stringArgument(values, 'format', 'markdown');
       const extension = formatExtensions[format];
       if (!title) throw new Error('Article title is required.');
       if (!extension) throw new Error(`Unsupported article format: ${format}`);
-      const fileName = `${sanitizeFileName(title)}${extension}`;
+      const fileName = `${
+        sanitizeFileName(title, filesystemConfig.artifactTitleCharacters)
+      }${extension}`;
       const context = runtimeContext(config);
       const filePath = await resolveWorkspaceAreaPath(
         context,
@@ -100,14 +107,14 @@ export function createArtifactTools(): RuntimeTool[] {
     tool: writeArticle,
     sideEffectLevel: 'idempotent',
     requiresFreshContext: true,
-    argumentLimits: [fileContentArgumentLimit()],
+    argumentLimits: [fileContentArgumentLimit(filesystemConfig)],
   }];
 }
 
-function sanitizeFileName(value: string): string {
+function sanitizeFileName(value: string, maximumCharacters: number): string {
   return value
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
     .replace(/\s+/g, ' ')
-    .slice(0, 120)
+    .slice(0, maximumCharacters)
     || 'untitled';
 }

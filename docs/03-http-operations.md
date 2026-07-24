@@ -23,9 +23,14 @@
 
 DELETE 请求不发送 JSON body；客户端只有在 body 存在时才设置 `content-type: application/json`。
 
-## 2. 环境变量
+## 2. 配置
 
-Server 入口使用 `dotenv/config`。主要变量：
+所有非敏感运行策略统一放在 `src/config/runtime.json`，并按职责由
+`src/config/server-config.ts`、`postgres-config.ts`、`model-config.ts`、
+`execution-config.ts`、`context-config.ts` 与 `tools-config.ts` 定义类型和默认值。
+`src/config/runtime-config.ts` 是唯一加载入口。
+
+环境变量只用于密钥、数据库地址和少量部署覆盖，优先级高于 JSON：
 
 ```text
 DATABASE_URL=postgresql://...
@@ -36,7 +41,13 @@ AGENT_SERVER_HOST=127.0.0.1
 AGENT_SERVER_PORT=3000
 ```
 
-`.env` 必须被 Git 忽略，日志和调试接口不得输出 API Key。
+模型 token 能力、ReAct 上限、Context 压缩阈值、文件与 Shell 上限、常驻进程端口范围、
+Browser 超时和工具开关均从 `src/config/runtime.json` 读取。构建时该文件会复制到
+`dist/src/config/runtime.json`。也可通过
+`AGENT_RUNTIME_CONFIG_FILE` 指向另一份完整配置。
+
+`.env` 必须被 Git 忽略，`src/config/runtime.json` 不得写入真实 API Key；日志和调试接口
+也不得输出 API Key。
 
 ## 3. Schema
 

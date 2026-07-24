@@ -1,15 +1,22 @@
 import type { AgentModelCall } from '../../../domain/index.js';
+import {
+  DEFAULT_CONTEXT_CONFIG,
+  type ContextConfig,
+} from '../../../config/context-config.js';
 import type {
   ContextModelBudget,
   ContextPressureLevel,
 } from '../types/context.types.js';
 
-export const CONTEXT_COMPRESSION_START_RATIO = 0.55;
-export const CONTEXT_COMPRESSION_REQUIRED_RATIO = 0.75;
+export const CONTEXT_COMPRESSION_START_RATIO =
+  DEFAULT_CONTEXT_CONFIG.pressure.compressRatio;
+export const CONTEXT_COMPRESSION_REQUIRED_RATIO =
+  DEFAULT_CONTEXT_CONFIG.pressure.mustCompressRatio;
 
 export function calibrateModelBudget(
   model: ContextModelBudget,
-  calls: AgentModelCall[]
+  calls: AgentModelCall[],
+  config: ContextConfig = DEFAULT_CONTEXT_CONFIG
 ): ContextModelBudget {
   const samples = calls.filter(call => (
     call.status === 'completed'
@@ -19,19 +26,27 @@ export function calibrateModelBudget(
     && typeof call.actualInputTokens === 'number'
     && call.actualInputTokens > 0
     && rawEstimatedInputTokens(call) > 0
-  )).slice(-100);
-  if (samples.length < 10) {
+  )).slice(-config.estimation.historySampleSize);
+  if (samples.length < config.estimation.minimumCalibrationSamples) {
     return {
       ...model,
-      tokenCalibrationFactor: model.tokenCalibrationFactor ?? 1.1,
-      tokenErrorReserve: model.tokenErrorReserve ?? 256,
+      tokenCalibrationFactor: model.tokenCalibrationFactor
+        ?? config.estimation.fallbackCalibrationFactor,
+      tokenErrorReserve: model.tokenErrorReserve
+        ?? config.estimation.fallbackErrorReserveTokens,
       tokenCalibrationSampleCount: samples.length,
     };
   }
   const ratios = samples
     .map(call => call.actualInputTokens! / rawEstimatedInputTokens(call))
     .sort((left, right) => left - right);
-  const factor = Math.min(1.75, Math.max(1, percentile(ratios, 0.95)));
+  const factor = Math.min(
+    config.estimation.maximumCalibrationFactor,
+    Math.max(
+      config.estimation.minimumCalibrationFactor,
+      percentile(ratios, config.estimation.calibrationPercentile)
+    )
+  );
   const residuals = samples
     .map(call => Math.max(
       0,
@@ -41,32 +56,36 @@ export function calibrateModelBudget(
   return {
     ...model,
     tokenCalibrationFactor: factor,
-    tokenErrorReserve: Math.max(64, Math.ceil(percentile(residuals, 0.95))),
+    tokenErrorReserve: Math.max(
+      config.estimation.minimumErrorReserveTokens,
+      Math.ceil(percentile(residuals, config.estimation.calibrationPercentile))
+    ),
     tokenCalibrationSampleCount: samples.length,
   };
 }
 
 export function evaluateContextPressure(
   predictedTokens: number,
-  inputTokenLimit: number
+  inputTokenLimit: number,
+  config: ContextConfig = DEFAULT_CONTEXT_CONFIG
 ): {
   shouldCompress: boolean;
   mustCompress: boolean;
   pressureLevel: ContextPressureLevel;
 } {
   const ratio = inputTokenLimit > 0 ? predictedTokens / inputTokenLimit : 1;
-  const pressureLevel = ratio >= 0.9
+  const pressureLevel = ratio >= config.pressure.criticalRatio
     ? 'critical'
-    : ratio >= CONTEXT_COMPRESSION_REQUIRED_RATIO
+    : ratio >= config.pressure.mustCompressRatio
       ? 'mandatory'
-      : ratio >= CONTEXT_COMPRESSION_START_RATIO
+      : ratio >= config.pressure.compressRatio
         ? 'compact'
-        : ratio >= 0.4
+        : ratio >= config.pressure.watchRatio
           ? 'watch'
           : 'normal';
   return {
-    shouldCompress: ratio >= CONTEXT_COMPRESSION_START_RATIO,
-    mustCompress: ratio >= CONTEXT_COMPRESSION_REQUIRED_RATIO,
+    shouldCompress: ratio >= config.pressure.compressRatio,
+    mustCompress: ratio >= config.pressure.mustCompressRatio,
     pressureLevel,
   };
 }

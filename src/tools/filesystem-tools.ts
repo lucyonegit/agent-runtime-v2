@@ -11,6 +11,10 @@ import {
 import { basename, dirname, extname, join, relative } from 'node:path';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
+  DEFAULT_TOOLS_CONFIG,
+  type ToolsConfig,
+} from '../config/tools-config.js';
+import {
   RuntimeToolExecutionError,
   type RuntimeTool,
   type RuntimeToolContext,
@@ -41,8 +45,10 @@ interface CodeSymbol {
   line: number;
 }
 
-export const FILE_WRITE_MAX_CHARACTERS = 6_000;
-export const FILE_WRITE_MAX_ESTIMATED_TOKENS = 2_000;
+export const FILE_WRITE_MAX_CHARACTERS =
+  DEFAULT_TOOLS_CONFIG.filesystem.maximumWriteCharacters;
+export const FILE_WRITE_MAX_ESTIMATED_TOKENS =
+  DEFAULT_TOOLS_CONFIG.filesystem.maximumWriteEstimatedTokens;
 
 export const FILE_WRITE_LIMIT_MESSAGE = [
   `File content exceeds the single-call limit of ${FILE_WRITE_MAX_CHARACTERS} characters`,
@@ -95,7 +101,10 @@ interface CompletedFileWriteResult {
 
 const fileWriteLocks = new Map<string, Promise<void>>();
 
-export function createFilesystemTools(): RuntimeTool[] {
+export function createFilesystemTools(
+  filesystemConfig: ToolsConfig['filesystem'] =
+    DEFAULT_TOOLS_CONFIG.filesystem
+): RuntimeTool[] {
   const listFiles = new DynamicStructuredTool({
     name: 'list_files',
     description: 'List the shared Session workspace. Its standard areas are code, docs, artifacts, downloads, and tmp.',
@@ -116,7 +125,12 @@ export function createFilesystemTools(): RuntimeTool[] {
       const target = isRootPath(directory)
         ? root
         : await resolveWorkspacePath(context, directory, { mustExist: true });
-      const files = await collectFiles(target, root, values.recursive === true);
+      const files = await collectFiles(
+        target,
+        root,
+        values.recursive === true,
+        filesystemConfig
+      );
       return jsonToolOutput({
         directory: isRootPath(directory) ? '/' : directory,
         files,
@@ -137,10 +151,16 @@ export function createFilesystemTools(): RuntimeTool[] {
     func: async (input, _runManager, config) => {
       const path = stringArgument(input as Record<string, unknown>, 'path');
       const context = runtimeContext(config);
-      const content = await readFile(
-        await resolveWorkspacePath(context, path, { mustExist: true }),
-        'utf8'
-      );
+      const filePath = await resolveWorkspacePath(context, path, { mustExist: true });
+      const metadata = await stat(filePath);
+      if (metadata.size > filesystemConfig.maximumReadBytes) {
+        throw new RuntimeToolExecutionError(
+          'file_read_limit_exceeded',
+          `File exceeds the configured ${filesystemConfig.maximumReadBytes} byte read limit.`,
+          { path, size: metadata.size }
+        );
+      }
+      const content = await readFile(filePath, 'utf8');
       return jsonToolOutput({
         path,
         content,
@@ -152,8 +172,8 @@ export function createFilesystemTools(): RuntimeTool[] {
     name: 'write_file',
     description: [
       'Write one complete UTF-8 file inside the shared Session workspace.',
-      `The complete content must not exceed ${FILE_WRITE_MAX_CHARACTERS} characters`,
-      `or ${FILE_WRITE_MAX_ESTIMATED_TOKENS} estimated tokens.`,
+      `The complete content must not exceed ${filesystemConfig.maximumWriteCharacters} characters`,
+      `or ${filesystemConfig.maximumWriteEstimatedTokens} estimated tokens.`,
       'Prefer splitting large implementations into smaller modules/files.',
       'Never truncate content. For one indivisible large file, use start_file_write and append_file_chunk.',
       'Use code/ for webpages, applications, scripts, and source code; use docs/, artifacts/, downloads/, or tmp/ only when their category matches the requested deliverable.',
@@ -167,8 +187,8 @@ export function createFilesystemTools(): RuntimeTool[] {
         },
         content: {
           type: 'string',
-          maxLength: FILE_WRITE_MAX_CHARACTERS,
-          description: `Complete file content. Maximum ${FILE_WRITE_MAX_CHARACTERS} characters; never truncate.`,
+          maxLength: filesystemConfig.maximumWriteCharacters,
+          description: `Complete file content. Maximum ${filesystemConfig.maximumWriteCharacters} characters; never truncate.`,
         },
       },
       required: ['path', 'content'],
@@ -179,7 +199,7 @@ export function createFilesystemTools(): RuntimeTool[] {
       const values = input as Record<string, unknown>;
       const path = stringArgument(values, 'path');
       const content = stringArgument(values, 'content');
-      assertFileWriteContentLimit(content);
+      assertFileWriteContentLimit(content, filesystemConfig);
       const context = runtimeContext(config);
       const filePath = await resolveWorkspacePath(context, path);
       const existed = await stat(filePath).then(() => true, () => false);
@@ -217,8 +237,8 @@ export function createFilesystemTools(): RuntimeTool[] {
     name: 'start_file_write',
     description: [
       'Start an atomic, chunked write for one UTF-8 file that cannot fit in write_file.',
-      `Provide the first chunk only, limited to ${FILE_WRITE_MAX_CHARACTERS} characters`,
-      `or ${FILE_WRITE_MAX_ESTIMATED_TOKENS} estimated tokens.`,
+      `Provide the first chunk only, limited to ${filesystemConfig.maximumWriteCharacters} characters`,
+      `or ${filesystemConfig.maximumWriteEstimatedTokens} estimated tokens.`,
       'The destination file is not changed and no Artifact is created until append_file_chunk is called with finalize=true.',
       'Call this tool alone, wait for its ToolMessage, then use the returned writeId.',
     ].join(' '),
@@ -231,8 +251,8 @@ export function createFilesystemTools(): RuntimeTool[] {
         },
         content: {
           type: 'string',
-          maxLength: FILE_WRITE_MAX_CHARACTERS,
-          description: `First file chunk. Maximum ${FILE_WRITE_MAX_CHARACTERS} characters.`,
+          maxLength: filesystemConfig.maximumWriteCharacters,
+          description: `First file chunk. Maximum ${filesystemConfig.maximumWriteCharacters} characters.`,
         },
       },
       required: ['path', 'content'],
@@ -243,7 +263,7 @@ export function createFilesystemTools(): RuntimeTool[] {
       const values = input as Record<string, unknown>;
       const path = stringArgument(values, 'path');
       const content = stringArgument(values, 'content');
-      assertFileWriteContentLimit(content);
+      assertFileWriteContentLimit(content, filesystemConfig);
       const context = runtimeContext(config);
       const writeId = createFileWriteId(context.idempotencyKey);
       return jsonToolOutput(await withFileWriteLock(writeId, async () => (
@@ -256,8 +276,8 @@ export function createFilesystemTools(): RuntimeTool[] {
     name: 'append_file_chunk',
     description: [
       'Append exactly one sequential chunk to a file write created by start_file_write.',
-      `Each chunk is limited to ${FILE_WRITE_MAX_CHARACTERS} characters`,
-      `or ${FILE_WRITE_MAX_ESTIMATED_TOKENS} estimated tokens.`,
+      `Each chunk is limited to ${filesystemConfig.maximumWriteCharacters} characters`,
+      `or ${filesystemConfig.maximumWriteEstimatedTokens} estimated tokens.`,
       'Use the exact nextChunkIndex returned by the previous ToolMessage.',
       'Set finalize=true only on the last chunk. Finalization atomically replaces the destination and creates one Artifact.',
       'Call this tool alone and wait for its ToolMessage before sending another chunk.',
@@ -277,8 +297,8 @@ export function createFilesystemTools(): RuntimeTool[] {
         },
         content: {
           type: 'string',
-          maxLength: FILE_WRITE_MAX_CHARACTERS,
-          description: `Next file chunk. Maximum ${FILE_WRITE_MAX_CHARACTERS} characters.`,
+          maxLength: filesystemConfig.maximumWriteCharacters,
+          description: `Next file chunk. Maximum ${filesystemConfig.maximumWriteCharacters} characters.`,
         },
         finalize: {
           type: 'boolean',
@@ -296,7 +316,7 @@ export function createFilesystemTools(): RuntimeTool[] {
       const content = stringArgument(values, 'content');
       const finalize = values.finalize === true;
       assertFileWriteId(writeId);
-      assertFileWriteContentLimit(content);
+      assertFileWriteContentLimit(content, filesystemConfig);
       if (!Number.isSafeInteger(chunkIndex) || chunkIndex < 1) {
         throw new RuntimeToolExecutionError(
           'file_chunk_index_invalid',
@@ -324,7 +344,10 @@ export function createFilesystemTools(): RuntimeTool[] {
       properties: {
         pattern: { type: 'string', description: 'Search string or JavaScript regular expression.' },
         directory: { type: 'string', description: 'Workspace-relative directory. Defaults to root.' },
-        maxResults: { type: 'number', description: 'Maximum matches. Defaults to 50.' },
+        maxResults: {
+          type: 'number',
+          description: `Maximum matches. Defaults to ${filesystemConfig.grepDefaultResults}.`,
+        },
       },
       required: ['pattern'],
       additionalProperties: false,
@@ -335,13 +358,22 @@ export function createFilesystemTools(): RuntimeTool[] {
       const context = runtimeContext(config);
       const pattern = stringArgument(values, 'pattern');
       const directory = stringArgument(values, 'directory', '.');
-      const maxResults = Math.max(1, Math.min(200, numberArgument(values, 'maxResults', 50)));
+      const maxResults = Math.max(1, Math.min(
+        filesystemConfig.grepMaximumResults,
+        numberArgument(values, 'maxResults', filesystemConfig.grepDefaultResults)
+      ));
       const root = await workspaceRoot(context);
       const target = isRootPath(directory)
         ? root
         : await resolveWorkspacePath(context, directory, { mustExist: true });
       const regex = new RegExp(pattern, 'i');
-      const matches = await searchFiles(target, root, regex, maxResults);
+      const matches = await searchFiles(
+        target,
+        root,
+        regex,
+        maxResults,
+        filesystemConfig
+      );
       return jsonToolOutput({ pattern, totalMatches: matches.length, matches });
     },
   });
@@ -353,7 +385,10 @@ export function createFilesystemTools(): RuntimeTool[] {
       type: 'object',
       properties: {
         directory: { type: 'string', description: 'Workspace-relative directory. Defaults to root.' },
-        maxResults: { type: 'number', description: 'Maximum symbols. Defaults to 100.' },
+        maxResults: {
+          type: 'number',
+          description: `Maximum symbols. Defaults to ${filesystemConfig.symbolsDefaultResults}.`,
+        },
       },
       additionalProperties: false,
     } as const,
@@ -362,12 +397,20 @@ export function createFilesystemTools(): RuntimeTool[] {
       const values = input as Record<string, unknown>;
       const context = runtimeContext(config);
       const directory = stringArgument(values, 'directory', '.');
-      const maxResults = Math.max(1, Math.min(500, numberArgument(values, 'maxResults', 100)));
+      const maxResults = Math.max(1, Math.min(
+        filesystemConfig.symbolsMaximumResults,
+        numberArgument(values, 'maxResults', filesystemConfig.symbolsDefaultResults)
+      ));
       const root = await workspaceRoot(context);
       const target = isRootPath(directory)
         ? root
         : await resolveWorkspacePath(context, directory, { mustExist: true });
-      const symbols = await collectSymbols(target, root, maxResults);
+      const symbols = await collectSymbols(
+        target,
+        root,
+        maxResults,
+        filesystemConfig
+      );
       return jsonToolOutput({ directory: isRootPath(directory) ? '/' : directory, symbols });
     },
   });
@@ -379,53 +422,66 @@ export function createFilesystemTools(): RuntimeTool[] {
       tool: writeFileTool,
       sideEffectLevel: 'idempotent',
       requiresFreshContext: true,
-      argumentLimits: [fileContentArgumentLimit()],
+      argumentLimits: [fileContentArgumentLimit(filesystemConfig)],
     },
     {
       tool: startFileWrite,
       sideEffectLevel: 'idempotent',
       exclusive: true,
       requiresFreshContext: true,
-      argumentLimits: [fileContentArgumentLimit()],
+      argumentLimits: [fileContentArgumentLimit(filesystemConfig)],
     },
     {
       tool: appendFileChunk,
       sideEffectLevel: 'idempotent',
       exclusive: true,
       requiresFreshContext: true,
-      argumentLimits: [fileContentArgumentLimit()],
+      argumentLimits: [fileContentArgumentLimit(filesystemConfig)],
     },
     { tool: grepFiles, sideEffectLevel: 'read_only' },
     { tool: listSymbols, sideEffectLevel: 'read_only' },
   ];
 }
 
-export function fileContentArgumentLimit() {
+export function fileContentArgumentLimit(
+  config: ToolsConfig['filesystem'] = DEFAULT_TOOLS_CONFIG.filesystem
+) {
   return {
     path: 'content',
-    maxCharacters: FILE_WRITE_MAX_CHARACTERS,
-    maxEstimatedTokens: FILE_WRITE_MAX_ESTIMATED_TOKENS,
+    maxCharacters: config.maximumWriteCharacters,
+    maxEstimatedTokens: config.maximumWriteEstimatedTokens,
     errorCode: 'file_content_too_large',
-    message: FILE_WRITE_LIMIT_MESSAGE,
+    message: fileWriteLimitMessage(config),
   };
 }
 
-export function assertFileWriteContentLimit(content: string): void {
+export function assertFileWriteContentLimit(
+  content: string,
+  config: ToolsConfig['filesystem'] = DEFAULT_TOOLS_CONFIG.filesystem
+): void {
   const estimatedTokens = estimateTextTokens(content);
   if (
-    content.length <= FILE_WRITE_MAX_CHARACTERS
-    && estimatedTokens <= FILE_WRITE_MAX_ESTIMATED_TOKENS
+    content.length <= config.maximumWriteCharacters
+    && estimatedTokens <= config.maximumWriteEstimatedTokens
   ) return;
   throw new RuntimeToolExecutionError(
     'file_content_too_large',
-    FILE_WRITE_LIMIT_MESSAGE,
+    fileWriteLimitMessage(config),
     {
       characters: content.length,
       estimatedTokens,
-      maxCharacters: FILE_WRITE_MAX_CHARACTERS,
-      maxEstimatedTokens: FILE_WRITE_MAX_ESTIMATED_TOKENS,
+      maxCharacters: config.maximumWriteCharacters,
+      maxEstimatedTokens: config.maximumWriteEstimatedTokens,
     }
   );
+}
+
+function fileWriteLimitMessage(config: ToolsConfig['filesystem']): string {
+  return [
+    `File content exceeds the single-call limit of ${config.maximumWriteCharacters} characters`,
+    `or ${config.maximumWriteEstimatedTokens} estimated tokens.`,
+    'Split code into smaller files, or use start_file_write followed by append_file_chunk.',
+  ].join(' ');
 }
 
 function createFileWriteId(idempotencyKey: string): string {
@@ -829,23 +885,30 @@ function isFileNotFoundError(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT');
 }
 
-async function collectFiles(root: string, workspace: string, recursive: boolean): Promise<FileEntry[]> {
-  const entries = await readdir(root, { withFileTypes: true });
+async function collectFiles(
+  root: string,
+  workspace: string,
+  recursive: boolean,
+  config: ToolsConfig['filesystem']
+): Promise<FileEntry[]> {
   const result: FileEntry[] = [];
-  for (const entry of entries) {
-    if (shouldSkip(entry.name) || entry.isSymbolicLink()) continue;
-    const fullPath = join(root, entry.name);
-    const metadata = await stat(fullPath);
-    result.push({
-      name: entry.name,
-      path: normalizeRelative(workspace, fullPath),
-      isDirectory: entry.isDirectory(),
-      ...(entry.isDirectory() ? {} : { size: metadata.size }),
-    });
-    if (recursive && entry.isDirectory()) {
-      result.push(...await collectFiles(fullPath, workspace, true));
+  const collect = async (directory: string, depth: number): Promise<void> => {
+    if (depth > config.maximumTraversalDepth) return;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (result.length >= config.maximumListEntries) return;
+      if (shouldSkip(entry.name) || entry.isSymbolicLink()) continue;
+      const fullPath = join(directory, entry.name);
+      const metadata = await stat(fullPath);
+      result.push({
+        name: entry.name,
+        path: normalizeRelative(workspace, fullPath),
+        isDirectory: entry.isDirectory(),
+        ...(entry.isDirectory() ? {} : { size: metadata.size }),
+      });
+      if (recursive && entry.isDirectory()) await collect(fullPath, depth + 1);
     }
-  }
+  };
+  await collect(root, 0);
   return result;
 }
 
@@ -853,10 +916,11 @@ async function searchFiles(
   root: string,
   workspace: string,
   regex: RegExp,
-  maxResults: number
+  maxResults: number,
+  config: ToolsConfig['filesystem']
 ): Promise<Array<{ path: string; line: number; content: string }>> {
   const matches: Array<{ path: string; line: number; content: string }> = [];
-  await walkFiles(root, async filePath => {
+  await walkFiles(root, config.maximumTraversalDepth, async filePath => {
     if (matches.length >= maxResults || !isTextPath(filePath)) return;
     const content = await readFile(filePath, 'utf8').catch(() => undefined);
     if (content === undefined) return;
@@ -867,7 +931,7 @@ async function searchFiles(
         matches.push({
           path: normalizeRelative(workspace, filePath),
           line: index + 1,
-          content: lines[index]!.trim().slice(0, 300),
+          content: lines[index]!.trim().slice(0, config.linePreviewCharacters),
         });
       }
     }
@@ -875,9 +939,14 @@ async function searchFiles(
   return matches;
 }
 
-async function collectSymbols(root: string, workspace: string, maxResults: number): Promise<CodeSymbol[]> {
+async function collectSymbols(
+  root: string,
+  workspace: string,
+  maxResults: number,
+  config: ToolsConfig['filesystem']
+): Promise<CodeSymbol[]> {
   const symbols: CodeSymbol[] = [];
-  await walkFiles(root, async filePath => {
+  await walkFiles(root, config.maximumTraversalDepth, async filePath => {
     if (symbols.length >= maxResults || !isSymbolPath(filePath)) return;
     const content = await readFile(filePath, 'utf8').catch(() => undefined);
     if (content === undefined) return;
@@ -892,11 +961,17 @@ async function collectSymbols(root: string, workspace: string, maxResults: numbe
   return symbols;
 }
 
-async function walkFiles(root: string, visit: (filePath: string) => Promise<void>): Promise<void> {
+async function walkFiles(
+  root: string,
+  maximumDepth: number,
+  visit: (filePath: string) => Promise<void>,
+  depth = 0
+): Promise<void> {
+  if (depth > maximumDepth) return;
   for (const entry of await readdir(root, { withFileTypes: true })) {
     if (shouldSkip(entry.name) || entry.isSymbolicLink()) continue;
     const fullPath = join(root, entry.name);
-    if (entry.isDirectory()) await walkFiles(fullPath, visit);
+    if (entry.isDirectory()) await walkFiles(fullPath, maximumDepth, visit, depth + 1);
     else if (entry.isFile()) await visit(fullPath);
   }
 }
