@@ -1,6 +1,8 @@
 import { resolve } from 'node:path';
-import { DEFAULT_CONTEXT_CONFIG } from '../../config/context-config.js';
-import { DEFAULT_TOOLS_CONFIG } from '../../config/tools-config.js';
+import {
+  DEFAULT_CONTEXT_CONFIG,
+  DEFAULT_TOOLS_CONFIG,
+} from '../../config/runtime-config.js';
 import type { AgentPromptManifest } from '../../domain/index.js';
 import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
 import { createPromptManifest } from './prompt-registry.js';

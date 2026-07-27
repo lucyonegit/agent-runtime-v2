@@ -424,9 +424,9 @@ pressureRatio   = predictedCandidateTokens / inputTokenLimit
 
 ## 13. 预算选择
 
-模型限制由 `src/config/model-profiles.ts` 的能力表和
-`src/config/model-config.ts` 的解析器统一维护；部署策略写入
-`src/config/runtime.json` 的 `model.tokens`，环境变量仅作为部署覆盖：
+模型限制由 `src/runtime/model/model-profiles.ts` 的能力表和解析器统一维护；
+部署策略写入 `src/config/runtime.json` 的 `model.tokens`，
+由 `src/config/runtime-config.ts` 加载，环境变量仅作为部署覆盖：
 
 ```text
 C = contextWindowTokens

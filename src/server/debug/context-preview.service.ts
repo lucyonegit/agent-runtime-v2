@@ -1,5 +1,5 @@
 import { isAIMessage, isToolMessage, type BaseMessage } from '@langchain/core/messages';
-import type { ContextConfig } from '../../config/context-config.js';
+import type { ContextConfig } from '../../config/runtime-config.js';
 import {
   ContextInspectionService,
   type ContextQuery,

@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
 import { ManagedProcessManager } from '../src/tools/managed-process-manager.js';
 import type { RuntimeToolContext } from '../src/runtime/execution/tool-executor.js';
-import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../src/config/tools-config.js';
+import {
+  DEFAULT_TOOLS_CONFIG,
+  type ToolsConfig,
+} from '../src/config/runtime-config.js';
 
 describe('ManagedProcessManager', () => {
   const roots: string[] = [];
@@ -133,7 +136,7 @@ describe('ManagedProcessManager', () => {
 
 function testToolsConfig(): ToolsConfig {
   const config = structuredClone(DEFAULT_TOOLS_CONFIG) as ToolsConfig;
-  config.environment.hostEnvironment = { ...process.env };
+  config.hostEnvironment = { ...process.env };
   return config;
 }
 

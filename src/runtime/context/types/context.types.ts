@@ -1,6 +1,6 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import type { ContextConfig } from '../../../config/context-config.js';
+import type { ContextConfig } from '../../../config/runtime-config.js';
 import type {
   AgentContextInputManifest,
   AgentContextSummaryType,

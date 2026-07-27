@@ -1,5 +1,5 @@
 import { SystemMessage } from '@langchain/core/messages';
-import { DEFAULT_CONTEXT_CONFIG } from '../../../config/context-config.js';
+import { DEFAULT_CONTEXT_CONFIG } from '../../../config/runtime-config.js';
 import type {
   AgentArtifact,
   AgentContextSummary,

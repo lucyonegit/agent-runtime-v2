@@ -2,7 +2,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/tools-config.js';
+} from '../config/runtime-config.js';
 import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import {
   jsonToolOutput,
@@ -11,13 +11,17 @@ import {
   stringArgument,
 } from './helpers/tool-input.helper.js';
 import { stringRecord } from './helpers/process-environment.helper.js';
-import type { ManagedProcessManager } from './managed-process-manager.js';
+import {
+  resolveManagedProcessToolConfig,
+  type ManagedProcessManager,
+} from './managed-process-manager.js';
 
 export function createManagedProcessTools(
   manager: ManagedProcessManager,
-  processConfig: ToolsConfig['managedProcesses'] =
+  processOptions: ToolsConfig['managedProcesses'] =
     DEFAULT_TOOLS_CONFIG.managedProcesses
 ): RuntimeTool[] {
+  const processConfig = resolveManagedProcessToolConfig(processOptions);
   const startProcess = new DynamicStructuredTool({
     name: 'start_process',
     description: [

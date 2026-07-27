@@ -7,7 +7,7 @@ import {
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
-import type { ModelConfig } from '../../config/model-config.js';
+import type { ModelConfig } from '../../config/runtime-config.js';
 
 export function createLangChainChatModel(
   config: ModelConfig,

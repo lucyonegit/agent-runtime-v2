@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { loadRuntimeConfig } from '../src/config/runtime-config.js';
 
-describe('root runtime configuration', () => {
-  it('loads module defaults, JSON policy, secrets, and deployment overrides once', () => {
+describe('runtime configuration', () => {
+  it('loads bundled JSON policy, secrets, and deployment overrides once', () => {
     const config = loadRuntimeConfig({ env: {
       DATABASE_URL: 'postgres://runtime',
       DASHSCOPE_API_KEY: 'test-secret',
@@ -27,7 +27,7 @@ describe('root runtime configuration', () => {
       execution: { ownershipTimeoutMs: 45_000, ownershipRefreshMs: 15_000 },
       tools: { browser: { allowProxyFakeIps: true } },
     });
-    expect(config.tools.environment.hostEnvironment).toMatchObject({
+    expect(config.tools.hostEnvironment).toMatchObject({
       PATH: '/test/bin',
       DASHSCOPE_API_KEY: 'test-secret',
     });

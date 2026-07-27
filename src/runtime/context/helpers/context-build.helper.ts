@@ -2,7 +2,7 @@ import { compileContext } from '../context-compiler.js';
 import {
   DEFAULT_CONTEXT_CONFIG,
   type ContextConfig,
-} from '../../../config/context-config.js';
+} from '../../../config/runtime-config.js';
 import type {
   BuiltContext,
   ContextMaterial,

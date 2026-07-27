@@ -4,7 +4,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/tools-config.js';
+} from '../config/runtime-config.js';
 import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import {
   jsonToolOutput,
@@ -17,9 +17,23 @@ const defaultHeaders = {
   accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
 };
 
+const BROWSER_TOOL_LIMITS = {
+  maximumRedirects: 5,
+  defaultContentCharacters: 5_000,
+  minimumContentCharacters: 500,
+  maximumContentCharacters: 20_000,
+  searchResultLimit: 5,
+} as const;
+
+type BrowserToolConfig = ToolsConfig['browser'] & typeof BROWSER_TOOL_LIMITS;
+
 export function createBrowserTools(
-  browserConfig: ToolsConfig['browser'] = DEFAULT_TOOLS_CONFIG.browser
+  browserOptions: ToolsConfig['browser'] = DEFAULT_TOOLS_CONFIG.browser
 ): RuntimeTool[] {
+  const browserConfig: BrowserToolConfig = {
+    ...browserOptions,
+    ...BROWSER_TOOL_LIMITS,
+  };
   const browseUrl = new DynamicStructuredTool({
     name: 'browse_url',
     description: 'Fetch a public HTTP or HTTPS URL and extract its title and readable text.',
@@ -100,7 +114,7 @@ export function createBrowserTools(
 
 async function safeFetch(
   input: string,
-  config: ToolsConfig['browser']
+  config: BrowserToolConfig
 ): Promise<Response> {
   let url = new URL(input);
   for (let redirect = 0; redirect <= config.maximumRedirects; redirect += 1) {

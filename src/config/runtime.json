@@ -91,57 +91,22 @@
     },
     "filesystem": {
       "maximumWriteCharacters": 6000,
-      "maximumWriteEstimatedTokens": 2000,
-      "maximumReadBytes": 1048576,
-      "maximumListEntries": 10000,
-      "maximumTraversalDepth": 50,
-      "grepDefaultResults": 50,
-      "grepMaximumResults": 200,
-      "symbolsDefaultResults": 100,
-      "symbolsMaximumResults": 500,
-      "linePreviewCharacters": 300,
-      "artifactTitleCharacters": 120
+      "maximumWriteEstimatedTokens": 2000
     },
     "shell": {
       "executable": "/bin/zsh",
       "defaultTimeoutMs": 300000,
-      "minimumTimeoutMs": 100,
-      "maximumTimeoutMs": 1800000,
-      "maximumOutputBytes": 32768,
-      "terminationGraceMs": 1000,
-      "maximumCommandCharacters": 20000
+      "maximumTimeoutMs": 1800000
     },
     "managedProcesses": {
-      "defaultHost": "127.0.0.1",
-      "allowedHosts": ["127.0.0.1", "localhost"],
       "portRangeStart": 4100,
       "portRangeEnd": 4999,
       "defaultStartupTimeoutMs": 60000,
-      "maximumStartupTimeoutMs": 300000,
-      "stopGraceMs": 1500,
-      "readinessPollMs": 100,
-      "discoveryPollMs": 1000,
-      "maximumLogBytes": 65536,
-      "socketTimeoutMs": 250,
-      "discoveryCommandMaximumBytes": 4194304
+      "maximumStartupTimeoutMs": 300000
     },
     "browser": {
       "requestTimeoutMs": 30000,
-      "maximumRedirects": 5,
-      "defaultContentCharacters": 5000,
-      "minimumContentCharacters": 500,
-      "maximumContentCharacters": 20000,
-      "searchResultLimit": 5,
       "allowProxyFakeIps": false
-    },
-    "environment": {
-      "blockedKeys": [
-        "DATABASE_URL",
-        "DASHSCOPE_API_KEY",
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL"
-      ],
-      "blockedPrefixes": ["AGENT_RUNTIME_", "AGENT_SERVER_"]
     }
   }
 }

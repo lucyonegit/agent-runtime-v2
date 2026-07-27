@@ -1,4 +1,4 @@
-import { DEFAULT_EXECUTION_CONFIG } from '../../config/execution-config.js';
+import { DEFAULT_EXECUTION_CONFIG } from '../../config/runtime-config.js';
 
 /** Limits shared by Job ownership and the inner ReAct execution loop. */
 export interface ExecutionLimits {

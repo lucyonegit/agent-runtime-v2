@@ -5,7 +5,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/tools-config.js';
+} from '../config/runtime-config.js';
 import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import {
   assertFileWriteContentLimit,
@@ -25,6 +25,7 @@ const formatExtensions: Record<string, string> = {
   markdown: '.md',
   text: '.txt',
 };
+const ARTIFACT_TITLE_CHARACTERS = 120;
 
 export function createArtifactTools(
   filesystemConfig: ToolsConfig['filesystem'] =
@@ -64,7 +65,7 @@ export function createArtifactTools(
       if (!title) throw new Error('Article title is required.');
       if (!extension) throw new Error(`Unsupported article format: ${format}`);
       const fileName = `${
-        sanitizeFileName(title, filesystemConfig.artifactTitleCharacters)
+        sanitizeFileName(title, ARTIFACT_TITLE_CHARACTERS)
       }${extension}`;
       const context = runtimeContext(config);
       const filePath = await resolveWorkspaceAreaPath(

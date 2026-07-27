@@ -1,14 +1,12 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import {
   DEFAULT_CONTEXT_CONFIG,
-  type ContextConfig,
-} from '../config/context-config.js';
-import { DEFAULT_EXECUTION_CONFIG } from '../config/execution-config.js';
-import {
+  DEFAULT_EXECUTION_CONFIG,
   DEFAULT_MODEL_CONFIG,
+  DEFAULT_TOOLS_CONFIG,
   resolveModelTokenLimits,
-} from '../config/model-config.js';
-import { DEFAULT_TOOLS_CONFIG } from '../config/tools-config.js';
+  type ContextConfig,
+} from '../config/runtime-config.js';
 import { resolveJobGoalMessage, type AgentJob } from '../domain/index.js';
 import { ReactExecution } from '../runtime/execution/react-execution.js';
 import { ContextCompressionService } from '../runtime/context/context-compression.service.js';

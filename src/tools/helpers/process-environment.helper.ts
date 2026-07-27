@@ -1,22 +1,28 @@
-import {
-  DEFAULT_TOOLS_CONFIG,
-  type ToolsConfig,
-} from '../../config/tools-config.js';
+const BLOCKED_ENVIRONMENT_KEYS = [
+  'DATABASE_URL',
+  'DASHSCOPE_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+];
+const BLOCKED_ENVIRONMENT_PREFIXES = [
+  'AGENT_RUNTIME_',
+  'AGENT_SERVER_',
+];
 
 export function buildWorkspaceProcessEnv(
   overrides: Record<string, string> = {},
-  config: ToolsConfig['environment'] = DEFAULT_TOOLS_CONFIG.environment
+  hostEnvironment: NodeJS.ProcessEnv = {}
 ): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...(config.hostEnvironment ?? {}) };
+  const environment: NodeJS.ProcessEnv = { ...hostEnvironment };
 
   // HOST and PORT configure many application frameworks. They belong to the
   // child application, not to the Agent Runtime HTTP server.
   delete environment.HOST;
   delete environment.PORT;
 
-  for (const key of config.blockedKeys) delete environment[key];
+  for (const key of BLOCKED_ENVIRONMENT_KEYS) delete environment[key];
   for (const key of Object.keys(environment)) {
-    if (config.blockedPrefixes.some(prefix => key.startsWith(prefix))) {
+    if (BLOCKED_ENVIRONMENT_PREFIXES.some(prefix => key.startsWith(prefix))) {
       delete environment[key];
     }
   }

@@ -13,7 +13,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/tools-config.js';
+} from '../config/runtime-config.js';
 import {
   RuntimeToolExecutionError,
   type RuntimeTool,
@@ -44,6 +44,20 @@ interface CodeSymbol {
   path: string;
   line: number;
 }
+
+const FILESYSTEM_TOOL_LIMITS = {
+  maximumReadBytes: 1_048_576,
+  maximumListEntries: 10_000,
+  maximumTraversalDepth: 50,
+  grepDefaultResults: 50,
+  grepMaximumResults: 200,
+  symbolsDefaultResults: 100,
+  symbolsMaximumResults: 500,
+  linePreviewCharacters: 300,
+} as const;
+
+type FilesystemToolConfig =
+  ToolsConfig['filesystem'] & typeof FILESYSTEM_TOOL_LIMITS;
 
 export const FILE_WRITE_MAX_CHARACTERS =
   DEFAULT_TOOLS_CONFIG.filesystem.maximumWriteCharacters;
@@ -102,9 +116,13 @@ interface CompletedFileWriteResult {
 const fileWriteLocks = new Map<string, Promise<void>>();
 
 export function createFilesystemTools(
-  filesystemConfig: ToolsConfig['filesystem'] =
+  filesystemOptions: ToolsConfig['filesystem'] =
     DEFAULT_TOOLS_CONFIG.filesystem
 ): RuntimeTool[] {
+  const filesystemConfig: FilesystemToolConfig = {
+    ...filesystemOptions,
+    ...FILESYSTEM_TOOL_LIMITS,
+  };
   const listFiles = new DynamicStructuredTool({
     name: 'list_files',
     description: 'List the shared Session workspace. Its standard areas are code, docs, artifacts, downloads, and tmp.',
@@ -889,7 +907,7 @@ async function collectFiles(
   root: string,
   workspace: string,
   recursive: boolean,
-  config: ToolsConfig['filesystem']
+  config: FilesystemToolConfig
 ): Promise<FileEntry[]> {
   const result: FileEntry[] = [];
   const collect = async (directory: string, depth: number): Promise<void> => {
@@ -917,7 +935,7 @@ async function searchFiles(
   workspace: string,
   regex: RegExp,
   maxResults: number,
-  config: ToolsConfig['filesystem']
+  config: FilesystemToolConfig
 ): Promise<Array<{ path: string; line: number; content: string }>> {
   const matches: Array<{ path: string; line: number; content: string }> = [];
   await walkFiles(root, config.maximumTraversalDepth, async filePath => {
@@ -943,7 +961,7 @@ async function collectSymbols(
   root: string,
   workspace: string,
   maxResults: number,
-  config: ToolsConfig['filesystem']
+  config: FilesystemToolConfig
 ): Promise<CodeSymbol[]> {
   const symbols: CodeSymbol[] = [];
   await walkFiles(root, config.maximumTraversalDepth, async filePath => {

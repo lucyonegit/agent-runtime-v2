@@ -3,7 +3,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import {
   DEFAULT_CONTEXT_CONFIG,
   type ContextConfig,
-} from '../../config/context-config.js';
+} from '../../config/runtime-config.js';
 import type { AgentJob } from '../../domain/index.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { compileContext } from './context-compiler.js';

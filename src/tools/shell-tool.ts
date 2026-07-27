@@ -5,7 +5,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/tools-config.js';
+} from '../config/runtime-config.js';
 import {
   RuntimeToolExecutionError,
   type RuntimeTool,
@@ -36,10 +36,19 @@ interface ShellExecutionResult {
   stderrTruncated: boolean;
 }
 
+const SHELL_TOOL_LIMITS = {
+  minimumTimeoutMs: 100,
+  maximumOutputBytes: 32 * 1_024,
+  terminationGraceMs: 1_000,
+  maximumCommandCharacters: 20_000,
+} as const;
+
+type ShellToolConfig = ToolsConfig['shell'] & typeof SHELL_TOOL_LIMITS;
+
 export function createShellTools(
   toolsConfig: ToolsConfig = DEFAULT_TOOLS_CONFIG
 ): RuntimeTool[] {
-  const shell = toolsConfig.shell;
+  const shell = resolveShellToolConfig(toolsConfig.shell);
   const runShell = new DynamicStructuredTool({
     name: 'run_shell',
     description: [
@@ -122,7 +131,7 @@ export async function executeHostShell(input: {
   toolsConfig?: ToolsConfig;
 }): Promise<ShellExecutionResult> {
   const toolsConfig = input.toolsConfig ?? DEFAULT_TOOLS_CONFIG;
-  const shell = toolsConfig.shell;
+  const shell = resolveShellToolConfig(toolsConfig.shell);
   const root = await realpath(await workspaceRoot(input.context));
   const cwdInput = input.cwd?.trim() || '.';
   const cwd = await realpath(isAbsolute(cwdInput) ? cwdInput : resolve(root, cwdInput));
@@ -141,7 +150,7 @@ export async function executeHostShell(input: {
     input.command,
   ], {
     cwd,
-    env: buildWorkspaceProcessEnv(input.env, toolsConfig.environment),
+    env: buildWorkspaceProcessEnv(input.env, toolsConfig.hostEnvironment),
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -189,12 +198,21 @@ export function assertSuccessfulShellResult(result: ShellExecutionResult): void 
 
 function normalizeTimeout(
   value: number,
-  config: ToolsConfig['shell']
+  config: ShellToolConfig
 ): number {
   return Math.min(
     config.maximumTimeoutMs,
     Math.max(config.minimumTimeoutMs, Math.round(value))
   );
+}
+
+function resolveShellToolConfig(
+  config: ToolsConfig['shell']
+): ShellToolConfig {
+  return {
+    ...config,
+    ...SHELL_TOOL_LIMITS,
+  };
 }
 
 function captureOutput(stream: NodeJS.ReadableStream, maximumBytes: number): {

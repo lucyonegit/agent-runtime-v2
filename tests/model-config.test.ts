@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   DASHSCOPE_OPENAI_BASE_URL,
-} from '../src/config/model-config.js';
-import { loadRuntimeConfig } from '../src/config/runtime-config.js';
+  loadRuntimeConfig,
+} from '../src/config/runtime-config.js';
 
 describe('loadRuntimeConfig model resolution', () => {
   it('uses DashScope defaults and gives its key precedence', () => {

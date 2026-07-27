@@ -6,7 +6,7 @@ import { createConnection, createServer } from 'node:net';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/tools-config.js';
+} from '../config/runtime-config.js';
 import type { AgentManagedProcess } from '../domain/index.js';
 import type { RuntimeEventPublisher } from '../runtime/events/runtime-event-writer.js';
 import {
@@ -18,6 +18,28 @@ import { WORKSPACE_PROCESS_SUPERVISOR_SOURCE } from './helpers/process-superviso
 import { workspaceRoot } from './helpers/workspace-path.helper.js';
 
 const PROCESS_SPEC_VERSION = 1;
+const MANAGED_PROCESS_LIMITS = {
+  defaultHost: '127.0.0.1',
+  allowedHosts: ['127.0.0.1', 'localhost'],
+  stopGraceMs: 1_500,
+  readinessPollMs: 100,
+  discoveryPollMs: 1_000,
+  maximumLogBytes: 64 * 1_024,
+  socketTimeoutMs: 250,
+  discoveryCommandMaximumBytes: 4 * 1_024 * 1_024,
+};
+
+export type ManagedProcessToolConfig =
+  ToolsConfig['managedProcesses'] & typeof MANAGED_PROCESS_LIMITS;
+
+export function resolveManagedProcessToolConfig(
+  config: ToolsConfig['managedProcesses']
+): ManagedProcessToolConfig {
+  return {
+    ...config,
+    ...MANAGED_PROCESS_LIMITS,
+  };
+}
 
 interface StartManagedProcessInput {
   context: RuntimeToolContext;
@@ -70,6 +92,7 @@ interface DiscoveredSupervisor {
 export class ManagedProcessManager {
   readonly #registry = new Map<string, RegistryEntry>();
   readonly #children = new Map<string, ChildProcess>();
+  readonly #processConfig: ManagedProcessToolConfig;
   #discoveryTimer?: ReturnType<typeof setInterval>;
   #refreshing?: Promise<void>;
 
@@ -78,7 +101,11 @@ export class ManagedProcessManager {
     private readonly clock: { nowMs(): number } = { nowMs: () => Date.now() },
     private readonly sandboxRoot = resolve(process.cwd(), '.agent-sandbox'),
     private readonly toolsConfig: ToolsConfig = DEFAULT_TOOLS_CONFIG
-  ) {}
+  ) {
+    this.#processConfig = resolveManagedProcessToolConfig(
+      toolsConfig.managedProcesses
+    );
+  }
 
   async start(): Promise<void> {
     if (this.#discoveryTimer) return;
@@ -87,7 +114,7 @@ export class ManagedProcessManager {
       void this.#refreshFromOperatingSystem().catch(() => {
         // A later scan can recover from a transient ps/filesystem failure.
       });
-    }, this.toolsConfig.managedProcesses.discoveryPollMs);
+    }, this.#processConfig.discoveryPollMs);
     this.#discoveryTimer.unref();
   }
 
@@ -102,8 +129,8 @@ export class ManagedProcessManager {
     const rawCommand = input.command.trim();
     if (!name) throw new TypeError('Managed process name is required.');
     if (!rawCommand) throw new TypeError('Managed process command is required.');
-    const host = input.host?.trim() || this.toolsConfig.managedProcesses.defaultHost;
-    if (!this.toolsConfig.managedProcesses.allowedHosts.includes(host)) {
+    const host = input.host?.trim() || this.#processConfig.defaultHost;
+    if (!this.#processConfig.allowedHosts.includes(host)) {
       throw new RuntimeToolExecutionError(
         'invalid_process_host',
         'Managed development servers must bind to 127.0.0.1 or localhost.'
@@ -129,7 +156,7 @@ export class ManagedProcessManager {
     }
 
     const port = input.port === undefined || input.port === 'auto'
-      ? await findAvailablePort(host, this.toolsConfig.managedProcesses)
+      ? await findAvailablePort(host, this.#processConfig)
       : normalizePort(input.port);
     if (!await isPortAvailable(host, port)) {
       throw new RuntimeToolExecutionError(
@@ -215,7 +242,7 @@ export class ManagedProcessManager {
         cwd,
         env: buildWorkspaceProcessEnv(
           environmentOverrides,
-          this.toolsConfig.environment
+          this.toolsConfig.hostEnvironment
         ),
         detached: true,
         stdio: 'ignore',
@@ -249,7 +276,7 @@ export class ManagedProcessManager {
     const exit = childExit(child);
     const startupTimeoutMs = normalizeStartupTimeout(
       input.startupTimeoutMs,
-      this.toolsConfig.managedProcesses
+      this.#processConfig
     );
     try {
       const outcome = await Promise.race([
@@ -257,7 +284,7 @@ export class ManagedProcessManager {
           host,
           port,
           startupTimeoutMs,
-          this.toolsConfig.managedProcesses,
+          this.#processConfig,
           input.context.signal
         )
           .then(() => ({ type: 'ready' as const })),
@@ -292,7 +319,7 @@ export class ManagedProcessManager {
       if (error instanceof RuntimeToolExecutionError) throw error;
       await terminateKnownChild(
         child.pid,
-        this.toolsConfig.managedProcesses.stopGraceMs
+        this.#processConfig.stopGraceMs
       );
       this.#children.delete(processId);
       const aborted = input.context.signal?.aborted || isAbortError(error);
@@ -328,7 +355,7 @@ export class ManagedProcessManager {
 
   async readLogs(
     processId: string,
-    maxBytes = this.toolsConfig.managedProcesses.maximumLogBytes
+    maxBytes = this.#processConfig.maximumLogBytes
   ): Promise<string> {
     await this.#refreshFromOperatingSystem();
     const spec = this.#requireEntry(processId).spec;
@@ -337,7 +364,7 @@ export class ManagedProcessManager {
       throw error;
     });
     const limit = Math.min(
-      this.toolsConfig.managedProcesses.maximumLogBytes,
+      this.#processConfig.maximumLogBytes,
       Math.max(1_024, Math.round(maxBytes))
     );
     return contents.subarray(Math.max(0, contents.byteLength - limit)).toString('utf8');
@@ -361,7 +388,7 @@ export class ManagedProcessManager {
     await terminateOwnedProcessGroup(
       entry.spec,
       supervisor.processGroupId,
-      this.toolsConfig.managedProcesses
+      this.#processConfig
     );
     this.#children.delete(processId);
     return this.#transition(processId, { status: 'stopped' });
@@ -478,7 +505,7 @@ export class ManagedProcessManager {
 
   async #doRefreshFromOperatingSystem(): Promise<void> {
     const supervisors = await listMarkedSupervisors(
-      this.toolsConfig.managedProcesses.discoveryCommandMaximumBytes
+      this.#processConfig.discoveryCommandMaximumBytes
     );
     const activeIds = new Set<string>();
     for (const supervisor of supervisors) {
@@ -501,7 +528,7 @@ export class ManagedProcessManager {
       const status = await isTcpOpen(
         spec.host,
         spec.port,
-        this.toolsConfig.managedProcesses.socketTimeoutMs
+        this.#processConfig.socketTimeoutMs
       ) ? 'running' : 'starting';
       const existing = this.#registry.get(spec.id)?.record;
       if (
@@ -536,7 +563,7 @@ export class ManagedProcessManager {
     spec: WorkspaceProcessSpec
   ): Promise<DiscoveredSupervisor | undefined> {
     return (await listMarkedSupervisors(
-      this.toolsConfig.managedProcesses.discoveryCommandMaximumBytes
+      this.#processConfig.discoveryCommandMaximumBytes
     )).find(processInfo => (
       processInfo.processId === spec.id
       && processInfo.sessionId === spec.sessionId
@@ -669,7 +696,7 @@ function execFileText(
 async function terminateOwnedProcessGroup(
   spec: WorkspaceProcessSpec,
   processGroupId: number,
-  config: ToolsConfig['managedProcesses']
+  config: ManagedProcessToolConfig
 ): Promise<void> {
   const verify = async () => (await listMarkedSupervisors(
     config.discoveryCommandMaximumBytes
@@ -719,7 +746,7 @@ function isProcessAlive(pid: number): boolean {
 
 async function findAvailablePort(
   host: string,
-  config: ToolsConfig['managedProcesses']
+  config: ManagedProcessToolConfig
 ): Promise<number> {
   for (let port = config.portRangeStart; port <= config.portRangeEnd; port += 1) {
     if (await isPortAvailable(host, port)) return port;
@@ -760,7 +787,7 @@ async function waitForTcp(
   host: string,
   port: number,
   timeoutMs: number,
-  config: ToolsConfig['managedProcesses'],
+  config: ManagedProcessToolConfig,
   signal?: AbortSignal
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -791,7 +818,7 @@ function normalizePort(port: number): number {
 
 function normalizeStartupTimeout(
   value: number | undefined,
-  config: ToolsConfig['managedProcesses']
+  config: ManagedProcessToolConfig
 ): number {
   if (!Number.isFinite(value)) return config.defaultStartupTimeoutMs;
   return Math.min(

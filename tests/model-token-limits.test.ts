@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveModelTokenLimits,
-} from '../src/config/model-config.js';
+} from '../src/runtime/model/model-profiles.js';
 
 describe('resolveModelTokenLimits', () => {
   it('uses the registered qwen-max limits instead of a global 128K guess', () => {

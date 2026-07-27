@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { DEFAULT_CONTEXT_CONFIG } from '../../../config/context-config.js';
+import { DEFAULT_CONTEXT_CONFIG } from '../../../config/runtime-config.js';
 import { estimateTextTokens } from './token-budget.helper.js';
 import { stableStringify } from '../../helpers/stable-json.helper.js';
 

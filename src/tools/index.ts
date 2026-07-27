@@ -2,7 +2,7 @@ import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/tools-config.js';
+} from '../config/runtime-config.js';
 import { createArtifactTools } from './artifact-tools.js';
 import { createBasicTools } from './basic-tools.js';
 import { createBrowserTools } from './browser-tools.js';
