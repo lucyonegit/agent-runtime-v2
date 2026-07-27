@@ -4,7 +4,6 @@ import { mapStoredMessagesToChatMessages } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import {
   ACTIVE_JOB_STATUSES,
-  resolveJobGoalMessage,
   type AgentJob,
   type AgentModelCall,
 } from '../domain/index.js';
@@ -111,11 +110,10 @@ export class ContextInspectionService {
 
   async #job(jobId: string, query: ContextQuery): Promise<ContextSnapshot> {
     const job = await this.#requireJob(jobId);
-    const originalGoal = await this.#originalGoal(job);
     return this.#snapshot(
       query,
       job.sessionId,
-      await this.#contexts.previewJob(job, originalGoal),
+      await this.#contexts.previewJob(job),
       { basedOnLatestJobId: job.id }
     );
   }
@@ -138,13 +136,6 @@ export class ContextInspectionService {
     const job = await this.options.store.getJob(jobId);
     if (!job) throw new Error(`Job ${JSON.stringify(jobId)} was not found.`);
     return job;
-  }
-
-  async #originalGoal(job: AgentJob): Promise<string> {
-    const messages = await this.options.store.listSessionMessages(job.sessionId);
-    const goal = resolveJobGoalMessage(job, messages)?.content;
-    if (!goal) throw new Error(`Job ${job.id} has no original user goal.`);
-    return goal;
   }
 
   #snapshot(

@@ -59,7 +59,7 @@ export class ReactExecution {
 
   async runJob(input: {
     job: AgentJob;
-    loadContext(): Promise<BuiltContext>;
+    reloadContext(): Promise<BuiltContext>;
     signal?: AbortSignal;
   }): Promise<ReactJobExecutionResult> {
     const checkpoint = await this.options.store.getLatestLoopCheckpoint(input.job.id);
@@ -97,7 +97,7 @@ export class ReactExecution {
         loopInput: {
           context: {
             loadMessages: async () => {
-              current = await input.loadContext();
+              current = await input.reloadContext();
               return current.messages;
             },
           },

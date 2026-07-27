@@ -4,11 +4,12 @@ import type {
   AgentArtifact,
   AgentContextSummary,
   AgentJob,
+  AgentMessage,
   AgentPlan,
   AgentPlanStep,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
-import { jobGoalMessageId } from '../../../domain/index.js';
+import { resolveJobGoalMessage } from '../../../domain/index.js';
 import {
   buildDurableRuntimeStatePrompt,
   createJobPromptManifest,
@@ -34,7 +35,6 @@ import { TurnBundleBuilder } from './turn-bundle.helper.js';
 export async function loadJobContextMaterial(
   options: ReActContextMaterialOptions,
   job: AgentJob,
-  originalGoal: string,
   contextRulesVersion = CONTEXT_RULES_VERSION
 ): Promise<ContextMaterial> {
   const [facts, modelCalls] = await Promise.all([
@@ -53,7 +53,6 @@ export async function loadJobContextMaterial(
     facts,
     modelCalls,
     job,
-    originalGoal,
     contextRulesVersion,
   });
 }
@@ -82,6 +81,7 @@ export async function loadNextTurnContextMaterial(
 
 interface SessionFacts {
   jobs: AgentJob[];
+  messages: AgentMessage[];
   summaries: AgentContextSummary[];
   plans: AgentPlan[];
   planSteps: AgentPlanStep[];
@@ -117,6 +117,7 @@ async function loadSessionFacts(
   const groups = built.groups.filter(isModelVisibleGroup);
   return {
     jobs,
+    messages,
     summaries,
     plans,
     planSteps,
@@ -137,7 +138,6 @@ function buildContextMaterial(
       ReActContextMaterialOptions['store']['listRecentSessionModelCalls']
     >>;
     job?: AgentJob;
-    originalGoal?: string;
     contextRulesVersion: string;
   }
 ): ContextMaterial {
@@ -157,18 +157,16 @@ function buildContextMaterial(
     });
   }
 
-  const goalId = job ? jobGoalMessageId(job) : undefined;
+  const goalMessage = job ? resolveJobGoalMessage(job, facts.messages) : undefined;
+  if (job && !goalMessage) {
+    throw new Error(`Job ${job.id} has no original user goal.`);
+  }
+  const goalId = goalMessage?.id;
   const trailingMessages = buildRuntimeStateMessages(facts, job, contextConfig);
   const groups = facts.groups.map(group => {
     const messages = messagesInGroup(group);
-    const currentGoal = job
-      ? goalId
-        ? messages.some(message => message.id === goalId)
-        : messages.some(message => (
-            message.jobId === job.id
-            && message.messageType === 'user_message'
-            && message.content === input.originalGoal
-          ))
+    const currentGoal = goalId
+      ? messages.some(message => message.id === goalId)
       : false;
     const currentExecution = job
       ? messages.some(message => message.jobId === job.id)

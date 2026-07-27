@@ -7,7 +7,7 @@ import {
   resolveModelTokenLimits,
   type ContextConfig,
 } from '../../config/runtime-config.js';
-import { resolveJobGoalMessage, type AgentJob } from '../../domain/index.js';
+import type { AgentJob } from '../../domain/index.js';
 import { ReactExecution } from '../../runtime/execution/react-execution.js';
 import { ContextCompressionService } from '../../runtime/context/context-compression.service.js';
 import { ReActContextService } from '../../runtime/context/react-context.service.js';
@@ -242,12 +242,9 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
 
   async #executeJob(jobId: string, signal: AbortSignal): Promise<void> {
     const job = await this.#loadRunnableOwnedJob(jobId);
-    const messages = await this.#options.store.listSessionMessages(job.sessionId);
-    const originalGoal = resolveJobGoalMessage(job, messages)?.content;
-    if (!originalGoal) throw new Error(`Job ${job.id} has no original user goal.`);
     await this.#reactExecution.runJob({
       job,
-      loadContext: () => this.#contextService.buildForJob(job, originalGoal),
+      reloadContext: () => this.#contextService.buildForJob(job),
       signal,
     });
   }

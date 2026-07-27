@@ -116,7 +116,7 @@ describe('unified ReAct planning', () => {
       model: { provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500 },
       toolSchemas: [],
     });
-    const built = await contexts.previewJob(job(), 'Create a report');
+    const built = await contexts.previewJob(job());
 
     expect(built.messages.map(message => message.content)).toEqual([
       'system',
@@ -151,7 +151,7 @@ describe('unified ReAct planning', () => {
       toolSchemas: [],
     });
 
-    const built = await contexts.previewJob(job(), 'Create a report');
+    const built = await contexts.previewJob(job());
     const runtimeState = String(built.messages.at(-1)?.content);
 
     expect(runtimeState).toContain('Durable runtime state (authoritative, schemaVersion=1)');

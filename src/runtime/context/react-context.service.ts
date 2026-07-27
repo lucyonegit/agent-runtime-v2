@@ -46,10 +46,10 @@ export interface ReActContextServiceOptions extends ReActContextMaterialOptions 
 export class ReActContextService {
   constructor(private readonly options: ReActContextServiceOptions) {}
 
-  buildForJob(job: AgentJob, originalGoal: string): Promise<BuiltContext> {
+  buildForJob(job: AgentJob): Promise<BuiltContext> {
     const compression = this.#requiredCompressionPorts();
     return buildContextWithCompression(
-      () => loadJobContextMaterial(this.options, job, originalGoal),
+      () => loadJobContextMaterial(this.options, job),
       async (material, built) => compression.service.compress({
         job,
         material,
@@ -65,13 +65,11 @@ export class ReActContextService {
 
   async previewJob(
     job: AgentJob,
-    originalGoal: string,
     contextRulesVersion = CONTEXT_RULES_VERSION
   ): Promise<BuiltContext> {
     const material = await loadJobContextMaterial(
       this.options,
       job,
-      originalGoal,
       contextRulesVersion
     );
     return compileContext(material);
