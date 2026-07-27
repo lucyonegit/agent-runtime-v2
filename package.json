@@ -9,7 +9,7 @@
     "copy:runtime-config": "node --input-type=module -e \"import { copyFileSync, mkdirSync } from 'node:fs'; mkdirSync('dist/src/config', { recursive: true }); copyFileSync('src/config/runtime.json', 'dist/src/config/runtime.json');\"",
     "build": "npm run clean && tsc -p tsconfig.build.json && npm run copy:runtime-config",
     "serve": "node dist/src/server/main.js",
-    "dev:server": "npm run build && node dist/src/server/main.js",
+    "dev:server": "node --enable-source-maps --loader ts-node/esm src/server/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude 'dist/**' --exclude '.agent-sandbox/**' --exclude 'tests/postgres*.test.ts'",
     "test:postgres": "bash scripts/test-postgres.sh",
@@ -31,6 +31,7 @@
   "devDependencies": {
     "@types/node": "file:../agent/node_modules/@types/node",
     "@types/pg": "^8.20.0",
+    "ts-node": "^10.9.2",
     "typescript": "file:../agent/node_modules/typescript",
     "vitest": "file:../agent/node_modules/vitest"
   }

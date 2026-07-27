@@ -11,9 +11,16 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": true,
+    "sourceMap": true,
+    "inlineSources": true,
     "outDir": "dist",
     "rootDir": ".",
     "types": ["node", "vitest/globals"]
+  },
+  "ts-node": {
+    "esm": true,
+    "transpileOnly": true,
+    "experimentalResolver": true
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]
 }
