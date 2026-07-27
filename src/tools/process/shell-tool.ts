@@ -5,19 +5,19 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/runtime-config.js';
+} from '../../config/runtime-config.js';
 import {
   RuntimeToolExecutionError,
   type RuntimeTool,
   type RuntimeToolContext,
-} from '../runtime/execution/tool-executor.js';
-import { workspaceRoot } from './helpers/workspace-path.helper.js';
+} from '../../runtime/execution/tool-executor.js';
+import { workspaceRoot } from '../helpers/workspace-path.helper.js';
 import {
   jsonToolOutput,
   numberArgument,
   runtimeContext,
   stringArgument,
-} from './helpers/tool-input.helper.js';
+} from '../helpers/tool-input.helper.js';
 import {
   buildWorkspaceProcessEnv,
   stringRecord,

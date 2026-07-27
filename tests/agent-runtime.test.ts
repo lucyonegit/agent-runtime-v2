@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentJob } from '../src/domain/index.js';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.js';
-import type { JobManagerPort } from '../src/orchestration/job-manager.js';
+import type { JobManagerPort } from '../src/orchestration/jobs/job-manager.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
 describe('AgentRuntime application facade', () => {
@@ -44,6 +44,7 @@ function jobManager(): JobManagerPort {
     createJob: vi.fn<JobManagerPort['createJob']>(),
     cancelJob: vi.fn<JobManagerPort['cancelJob']>(),
     retryJob: vi.fn<JobManagerPort['retryJob']>(),
+    continueAsNewJob: vi.fn<JobManagerPort['continueAsNewJob']>(),
     resumeJob: vi.fn<JobManagerPort['resumeJob']>(),
     answerUserInputRequest: vi.fn<JobManagerPort['answerUserInputRequest']>(),
   };

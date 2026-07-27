@@ -3,17 +3,17 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   resolveJobGoalMessage,
   type AgentPlanStepResult,
-} from '../domain/index.js';
-import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
-import type { RuntimeEventPublisher } from '../runtime/events/runtime-event-writer.js';
+} from '../../domain/index.js';
+import type { RuntimeTool } from '../../runtime/execution/tool-executor.js';
+import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
 import {
   jsonToolOutput,
   runtimeContext,
   stringArgument,
-} from './helpers/tool-input.helper.js';
-import type { CreatePlanToolsOptions } from './types/plan-tool.types.js';
+} from '../helpers/tool-input.helper.js';
+import type { CreatePlanToolsOptions } from './plan-tool.types.js';
 
-export type { CreatePlanToolsOptions } from './types/plan-tool.types.js';
+export type { CreatePlanToolsOptions } from './plan-tool.types.js';
 
 export function createPlanTools(options: CreatePlanToolsOptions): RuntimeTool[] {
   const clock = options.clock ?? { nowMs: () => Date.now() };

@@ -23,7 +23,7 @@ import type {
 } from '../src/runtime/context/types/context.types.js';
 import type { RuntimeToolContext } from '../src/runtime/execution/tool-executor.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
-import { createPlanTools } from '../src/tools/plan-tools.js';
+import { createPlanTools } from '../src/tools/plan/plan-tools.js';
 
 describe('unified ReAct planning', () => {
   it('persists update_plan through the durable store and publishes Plan entities', async () => {

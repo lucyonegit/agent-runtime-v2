@@ -4,9 +4,10 @@ import type {
   AgentMessage,
   AgentSession,
   AgentToolInvocation,
+  AgentUserInputRequest,
 } from '../src/domain/index.js';
-import type { JobExecutionSupervisorPort } from '../src/orchestration/job-execution-supervisor.js';
-import { JobManager } from '../src/orchestration/job-manager.js';
+import type { JobExecutionSupervisorPort } from '../src/orchestration/jobs/job-execution-supervisor.js';
+import { JobManager } from '../src/orchestration/jobs/job-manager.js';
 import { resolveExecutionLimits } from '../src/runtime/settings/execution-limits.js';
 import {
   AgentStoreError,
@@ -147,6 +148,45 @@ describe('JobManager', () => {
     expect(execution.startExecution).toHaveBeenCalledWith('job_2');
   });
 
+  it('continues as a new Job with a distinct committed user message', async () => {
+    const store = createStore();
+    const failedJob = jobFixture({ status: 'failed', version: 2, completedAtMs: 900 });
+    const continuation = jobFixture({ id: 'job_2', retryOfJobId: 'job_1' });
+    const message = messageFixtureFor(continuation);
+    const running = jobFixture({
+      ...continuation,
+      status: 'running',
+      version: 1,
+      attemptNo: 1,
+      currentAttemptId: 'attempt_1',
+      leaseOwner: 'worker_1',
+      leaseExpiresAtMs: 31_000,
+    });
+    vi.mocked(store.getJob).mockResolvedValue(failedJob);
+    vi.mocked(store.listSessionMessages).mockResolvedValue([messageFixture]);
+    vi.mocked(store.createJobAndAppendUserMessage).mockResolvedValue({
+      session: sessionFixture,
+      job: continuation,
+      message,
+    });
+    vi.mocked(store.startJobExecution).mockResolvedValue(running);
+    const { manager, execution } = createManager(store, 1_000);
+
+    await expect(manager.continueAsNewJob({
+      failedJobId: failedJob.id,
+      clientRequestId: 'continue_request',
+      message: 'Use a different implementation.',
+    })).resolves.toMatchObject({ job: running, message });
+
+    expect(store.createJobAndAppendUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      retryOfJobId: failedJob.id,
+      content: 'Use a different implementation.',
+      userMessageId: 'message_2',
+    }));
+    expect(store.createRetryJob).not.toHaveBeenCalled();
+    expect(execution.startExecution).toHaveBeenCalledWith(running.id);
+  });
+
   it('persists cancellation before aborting its active execution', async () => {
     const order: string[] = [];
     const cancelled = jobFixture({
@@ -239,6 +279,60 @@ describe('JobManager', () => {
       error: expect.objectContaining({ code: 'unsafe_tool_recovery' }),
     }));
     expect(execution.startExecution).not.toHaveBeenCalled();
+  });
+
+  it('dispatches a HITL-resumed Job without starting a duplicate attempt', async () => {
+    const store = createStore();
+    const running = jobFixture({
+      status: 'running',
+      version: 3,
+      attemptNo: 2,
+      currentAttemptId: 'attempt_1',
+      leaseOwner: 'worker_1',
+      leaseExpiresAtMs: 31_000,
+    });
+    const request: AgentUserInputRequest = {
+      id: 'input_1',
+      sessionId: 'session_1',
+      jobId: running.id,
+      source: 'agent',
+      answerMode: 'as_user_message',
+      status: 'answered',
+      prompt: 'Continue?',
+      inputSchema: { type: 'approval' },
+      answer: true,
+      answerMessageId: 'message_2',
+      clientAnswerId: 'answer_1',
+      version: 1,
+      createdAtMs: 100,
+      updatedAtMs: 1_000,
+      answeredAtMs: 1_000,
+    };
+    const answerMessage: AgentMessage = {
+      ...messageFixture,
+      id: 'message_2',
+      jobId: running.id,
+      content: 'true',
+    };
+    vi.mocked(store.saveUserInputAnswerAndResumeIfReady).mockResolvedValue({
+      request,
+      answerMessage,
+      job: running,
+      shouldResume: true,
+      attemptId: running.currentAttemptId,
+    });
+    const { manager, execution } = createManager(store, 1_000);
+
+    await manager.answerUserInputRequest({
+      requestId: request.id,
+      expectedVersion: 0,
+      clientAnswerId: 'answer_1',
+      answer: true,
+    });
+
+    expect(store.saveUserInputAnswerAndResumeIfReady).toHaveBeenCalledOnce();
+    expect(store.startJobExecution).not.toHaveBeenCalled();
+    expect(execution.startExecution).toHaveBeenCalledWith(running.id);
   });
 
   it('maps a stale start version into a stable runtime error', async () => {

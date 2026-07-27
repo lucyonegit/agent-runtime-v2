@@ -9,11 +9,11 @@ import type {
   RuntimeToolContext,
   RuntimeUserInputArtifact,
 } from '../src/runtime/execution/tool-executor.js';
-import { isPrivateAddress, isTextMediaType } from '../src/tools/browser-tools.js';
+import { isPrivateAddress, isTextMediaType } from '../src/tools/browser/browser-tools.js';
 import {
   FILE_WRITE_MAX_CHARACTERS,
   FILE_WRITE_MAX_ESTIMATED_TOKENS,
-} from '../src/tools/filesystem-tools.js';
+} from '../src/tools/filesystem/filesystem-tools.js';
 import { createRuntimeTools, removeSessionSandbox } from '../src/tools/index.js';
 import { jsonToolOutput } from '../src/tools/helpers/tool-input.helper.js';
 

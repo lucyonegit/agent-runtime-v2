@@ -80,10 +80,20 @@ export class AgentController {
   @Post('jobs/:jobId/retry')
   retryJob(
     @Param('jobId') jobId: string,
-    @Body() body: { clientRequestId: string; message?: string }
+    @Body() body: { clientRequestId: string }
   ) {
     assertNonEmpty(body?.clientRequestId, 'clientRequestId');
     return this.runtime.retryJob({ failedJobId: jobId, ...body });
+  }
+
+  @Post('jobs/:jobId/continue-as-new')
+  continueAsNewJob(
+    @Param('jobId') jobId: string,
+    @Body() body: { clientRequestId: string; message: string }
+  ) {
+    assertNonEmpty(body?.clientRequestId, 'clientRequestId');
+    assertNonEmpty(body?.message, 'message');
+    return this.runtime.continueAsNewJob({ failedJobId: jobId, ...body });
   }
 
   @Post('jobs/:jobId/resume')

@@ -6,16 +6,16 @@ import { createConnection, createServer } from 'node:net';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/runtime-config.js';
-import type { AgentManagedProcess } from '../domain/index.js';
-import type { RuntimeEventPublisher } from '../runtime/events/runtime-event-writer.js';
+} from '../../config/runtime-config.js';
+import type { AgentManagedProcess } from '../../domain/index.js';
+import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
 import {
   RuntimeToolExecutionError,
   type RuntimeToolContext,
-} from '../runtime/execution/tool-executor.js';
+} from '../../runtime/execution/tool-executor.js';
 import { buildWorkspaceProcessEnv } from './helpers/process-environment.helper.js';
 import { WORKSPACE_PROCESS_SUPERVISOR_SOURCE } from './helpers/process-supervisor-script.helper.js';
-import { workspaceRoot } from './helpers/workspace-path.helper.js';
+import { workspaceRoot } from '../helpers/workspace-path.helper.js';
 
 const PROCESS_SPEC_VERSION = 1;
 const MANAGED_PROCESS_LIMITS = {

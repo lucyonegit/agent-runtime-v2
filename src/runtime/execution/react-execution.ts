@@ -19,7 +19,9 @@ import {
 } from '../events/runtime-event-writer.js';
 import { ToolExecutor, type RuntimeTool } from './tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
-import { mapStoreError } from '../errors/runtime-error.js';
+import { FinalAnswerPolicy } from './policies/final-answer-policy.js';
+import { ToolCallPolicy } from './policies/tool-call-policy.js';
+import { PendingToolCallLoader } from './recovery/pending-tool-call-loader.js';
 
 export interface ReactExecutionOptions {
   store: AgentStore;
@@ -45,7 +47,15 @@ export interface ReactExecutionOptions {
  * become visible without a nested executor or an in-memory context fork.
  */
 export class ReactExecution {
-  constructor(private readonly options: ReactExecutionOptions) {}
+  readonly #toolCallPolicy: ToolCallPolicy;
+  readonly #finalAnswerPolicy: FinalAnswerPolicy;
+  readonly #pendingToolCallLoader: PendingToolCallLoader;
+
+  constructor(private readonly options: ReactExecutionOptions) {
+    this.#toolCallPolicy = new ToolCallPolicy(options.tools);
+    this.#finalAnswerPolicy = new FinalAnswerPolicy(options.store);
+    this.#pendingToolCallLoader = new PendingToolCallLoader(options.store);
+  }
 
   async runJob(input: {
     job: AgentJob;
@@ -53,7 +63,10 @@ export class ReactExecution {
     signal?: AbortSignal;
   }): Promise<ReactJobExecutionResult> {
     const checkpoint = await this.options.store.getLatestLoopCheckpoint(input.job.id);
-    const pendingToolCalls = await this.#loadPendingToolCalls(input.job, checkpoint?.callMessageId);
+    const pendingToolCalls = await this.#pendingToolCallLoader.load(
+      input.job,
+      checkpoint?.callMessageId
+    );
     let current: BuiltContext | undefined;
     const toolExecutor = this.#toolExecutor();
     const tools = toolExecutor.tools();
@@ -96,8 +109,8 @@ export class ReactExecution {
             ),
           },
           policy: {
-            validateToolCalls: candidate => this.#validateToolCalls(candidate.toolCalls),
-            validateFinalAnswer: () => this.#validateFinalAnswer(input.job.id),
+            validateToolCalls: candidate => this.#toolCallPolicy.validate(candidate.toolCalls),
+            validateFinalAnswer: () => this.#finalAnswerPolicy.validate(input.job.id),
           },
           limits: this.#limits(input.job, input.signal),
           ...(resume ? { resume } : {}),
@@ -189,88 +202,6 @@ export class ReactExecution {
     };
   }
 
-  async #loadPendingToolCalls(job: AgentJob, callMessageId?: string) {
-    if (!callMessageId) return [];
-    const [messages, invocations] = await Promise.all([
-      this.options.store.listSessionMessages(job.sessionId),
-      this.options.store.listSessionToolInvocations(job.sessionId),
-    ]);
-    const callMessage = messages.find(message => message.id === callMessageId);
-    if (!callMessage?.toolCalls?.length) {
-      throw new Error(`Checkpoint tool batch ${JSON.stringify(callMessageId)} has no call message.`);
-    }
-    const byCallId = new Map(
-      invocations
-        .filter(invocation => invocation.jobId === job.id && invocation.callMessageId === callMessageId)
-        .map(invocation => [invocation.toolCallId, invocation])
-    );
-    return callMessage.toolCalls.flatMap(call => {
-      const invocation = byCallId.get(call.id);
-      if (!invocation) {
-        throw new Error(`Checkpoint tool call ${JSON.stringify(call.id)} has no invocation.`);
-      }
-      if (['completed', 'failed'].includes(invocation.status)) return [];
-      if (invocation.status !== 'pending') {
-        throw new Error(
-          `Checkpoint tool call ${JSON.stringify(call.id)} cannot resume from ${invocation.status}.`
-        );
-      }
-      return [{ ...call, args: invocation.arguments }];
-    });
-  }
-
-  async #validateToolCalls(toolCalls: Array<{ name: string }>) {
-    const contractByName = new Map(this.options.tools.map(tool => [tool.tool.name, tool]));
-    const freshContextCall = toolCalls.find(call => contractByName.get(call.name)?.requiresFreshContext);
-    const prerequisiteSibling = freshContextCall
-      ? toolCalls.find(call => !contractByName.get(call.name)?.requiresFreshContext)
-      : undefined;
-    if (!freshContextCall || !prerequisiteSibling) return { type: 'accept' as const };
-    return {
-      type: 'retry' as const,
-      code: 'tool_batch.requires_fresh_context',
-      feedback: [
-        `Runtime validation rejected the previous tool batch because ${JSON.stringify(freshContextCall.name)} cannot share a model turn with prerequisite tool ${JSON.stringify(prerequisiteSibling.name)}.`,
-        `The rejected batch was not persisted or executed: ${JSON.stringify(toolCalls.map(call => call.name))}.`,
-        'Execute searches and reads first, wait for their ToolMessages, then call the write tool alone using those observed results.',
-      ].join('\n'),
-    };
-  }
-
-  async #validateFinalAnswer(jobId: string) {
-    try {
-      const plan = await this.options.store.getPlanByJobId(jobId);
-      if (!plan || plan.status === 'completed') return { type: 'accept' as const };
-      const steps = await this.options.store.listPlanSteps(plan.id);
-      if (plan.status === 'failed' || plan.status === 'cancelled') {
-        return {
-          type: 'fail' as const,
-          code: 'invalid_plan_state' as const,
-          message: `Plan ${JSON.stringify(plan.id)} is ${plan.status} and cannot produce a successful final answer.`,
-          details: { planId: plan.id, planStatus: plan.status },
-        };
-      }
-      const snapshot = steps.map(step => ({
-        key: step.key,
-        title: step.title,
-        status: step.status,
-        result: step.result,
-      }));
-      return {
-        type: 'retry' as const,
-        code: 'final.plan_incomplete',
-        feedback: [
-          'Runtime validation rejected the previous answer because the durable plan is still active.',
-          'Do not answer the user yet. Call update_plan alone with the complete plan.',
-          'Mark completed work completed with result summaries; mark unnecessary work skipped.',
-          'Only after update_plan returns a terminal completed plan may you provide the final answer.',
-          `Current plan id=${plan.id}, version=${plan.version}, steps=${JSON.stringify(snapshot)}`,
-        ].join('\n'),
-      };
-    } catch (error) {
-      throw mapStoreError(error);
-    }
-  }
 }
 
 function createOutputId(): string {

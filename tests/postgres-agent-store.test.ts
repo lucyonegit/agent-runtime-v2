@@ -8,8 +8,8 @@ import {
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import type { JobExecutionSupervisorPort } from '../src/orchestration/job-execution-supervisor.js';
-import { JobManager } from '../src/orchestration/job-manager.js';
+import type { JobExecutionSupervisorPort } from '../src/orchestration/jobs/job-execution-supervisor.js';
+import { JobManager } from '../src/orchestration/jobs/job-manager.js';
 import { AuditedChatModel } from '../src/runtime/model/audited-chat-model.js';
 import { executeDurableAgentLoop } from '../src/runtime/execution/helpers/durable-loop-execution.helper.js';
 import { ToolExecutor } from '../src/runtime/execution/tool-executor.js';

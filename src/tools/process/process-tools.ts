@@ -2,14 +2,14 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/runtime-config.js';
-import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
+} from '../../config/runtime-config.js';
+import type { RuntimeTool } from '../../runtime/execution/tool-executor.js';
 import {
   jsonToolOutput,
   numberArgument,
   runtimeContext,
   stringArgument,
-} from './helpers/tool-input.helper.js';
+} from '../helpers/tool-input.helper.js';
 import { stringRecord } from './helpers/process-environment.helper.js';
 import {
   resolveManagedProcessToolConfig,

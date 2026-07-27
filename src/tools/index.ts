@@ -3,18 +3,18 @@ import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
 } from '../config/runtime-config.js';
-import { createArtifactTools } from './artifact-tools.js';
-import { createBasicTools } from './basic-tools.js';
-import { createBrowserTools } from './browser-tools.js';
-import { createFilesystemTools } from './filesystem-tools.js';
-import { createHitlTools } from './hitl-tools.js';
-import { createShellTools } from './shell-tool.js';
-import { createManagedProcessTools } from './process-tools.js';
-import type { ManagedProcessManager } from './managed-process-manager.js';
+import { createArtifactTools } from './artifacts/artifact-tools.js';
+import { createBasicTools } from './basic/basic-tools.js';
+import { createBrowserTools } from './browser/browser-tools.js';
+import { createFilesystemTools } from './filesystem/filesystem-tools.js';
+import { createHitlTools } from './hitl/hitl-tools.js';
+import { createShellTools } from './process/shell-tool.js';
+import { createManagedProcessTools } from './process/process-tools.js';
+import type { ManagedProcessManager } from './process/managed-process-manager.js';
 
 export {
   ManagedProcessManager,
-} from './managed-process-manager.js';
+} from './process/managed-process-manager.js';
 
 export {
   removeSessionSandbox,

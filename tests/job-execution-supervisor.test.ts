@@ -1,7 +1,7 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentJob } from '../src/domain/index.js';
-import { JobExecutionSupervisor } from '../src/orchestration/job-execution-supervisor.js';
+import { JobExecutionSupervisor } from '../src/orchestration/jobs/job-execution-supervisor.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
 describe('JobExecutionSupervisor recovery', () => {

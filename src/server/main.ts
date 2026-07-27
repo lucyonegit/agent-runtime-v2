@@ -4,8 +4,8 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { Pool } from 'pg';
 import { loadRuntimeConfig } from '../config/runtime-config.js';
 import { AgentRuntime } from '../orchestration/agent-runtime.js';
-import { JobExecutionSupervisor } from '../orchestration/job-execution-supervisor.js';
-import { JobManager } from '../orchestration/job-manager.js';
+import { JobExecutionSupervisor } from '../orchestration/jobs/job-execution-supervisor.js';
+import { JobManager } from '../orchestration/jobs/job-manager.js';
 import { PostgresAgentStore } from '../storage/postgres/postgres-agent-store.js';
 import { assertAgentRuntimeSchemaVersion } from '../storage/postgres/migrations.js';
 import { AgentHttpModule } from './http/agent-http.module.js';

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { JobManagerPort } from './job-manager.js';
+import type { JobManagerPort } from './jobs/job-manager.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { SessionView, type SessionProcessReader } from '../view/session-view.js';
 
@@ -77,8 +77,16 @@ export class AgentRuntime {
     return this.#jobs.cancelJob(jobId, expectedVersion);
   }
 
-  async retryJob(input: { failedJobId: string; clientRequestId: string; message?: string }) {
+  async retryJob(input: { failedJobId: string; clientRequestId: string }) {
     return this.#jobs.retryJob(input);
+  }
+
+  async continueAsNewJob(input: {
+    failedJobId: string;
+    clientRequestId: string;
+    message: string;
+  }) {
+    return this.#jobs.continueAsNewJob(input);
   }
 
   async resumeJob(jobId: string, expectedVersion: number) {

@@ -5,21 +5,21 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
-} from '../config/runtime-config.js';
-import type { RuntimeTool } from '../runtime/execution/tool-executor.js';
+} from '../../config/runtime-config.js';
+import type { RuntimeTool } from '../../runtime/execution/tool-executor.js';
 import {
   assertFileWriteContentLimit,
   fileContentArgumentLimit,
-} from './filesystem-tools.js';
+} from '../filesystem/filesystem-tools.js';
 import {
   resolveWorkspaceAreaPath,
   resolveWorkspacePath,
-} from './helpers/workspace-path.helper.js';
+} from '../helpers/workspace-path.helper.js';
 import {
   jsonToolOutput,
   runtimeContext,
   stringArgument,
-} from './helpers/tool-input.helper.js';
+} from '../helpers/tool-input.helper.js';
 
 const formatExtensions: Record<string, string> = {
   markdown: '.md',

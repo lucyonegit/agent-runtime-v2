@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
-import { ManagedProcessManager } from '../src/tools/managed-process-manager.js';
+import { ManagedProcessManager } from '../src/tools/process/managed-process-manager.js';
 import type { RuntimeToolContext } from '../src/runtime/execution/tool-executor.js';
 import {
   DEFAULT_TOOLS_CONFIG,

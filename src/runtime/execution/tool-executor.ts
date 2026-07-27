@@ -3,10 +3,7 @@ import {
   type StructuredToolInterface,
 } from '@langchain/core/tools';
 import { resolve } from 'node:path';
-import { isToolMessage } from '@langchain/core/messages';
 import type {
-  AgentArtifactDraft,
-  AgentToolInvocation,
   AgentToolSideEffectLevel,
 } from '../../domain/index.js';
 import type { ToolUserInputRequest } from '../loop/loop-events.js';
@@ -17,9 +14,11 @@ import {
   type ToolExecutorPort,
 } from '../loop/agent-loop.js';
 import type { AgentStore } from '../../storage/agent-store.js';
-import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
 import { mapStoreError } from '../errors/runtime-error.js';
 import { checksumToolArguments } from './helpers/tool-call-identity.helper.js';
+import { ToolInvocationReplay } from './tool-pipeline/tool-invocation-replay.js';
+import { validateToolInput } from './tool-pipeline/tool-input-validator.js';
+import { normalizeToolOutput } from './tool-pipeline/tool-result-normalizer.js';
 
 export interface RuntimeToolContext {
   sessionId: string;
@@ -86,6 +85,7 @@ export class ToolExecutor implements ToolExecutorPort {
   readonly #tools: Map<string, RuntimeTool>;
   readonly #sandboxRoot: string;
   readonly #clock: { nowMs(): number };
+  readonly #replay: ToolInvocationReplay;
 
   constructor(options: ToolExecutorOptions) {
     this.#store = options.store;
@@ -96,6 +96,7 @@ export class ToolExecutor implements ToolExecutorPort {
     }
     this.#sandboxRoot = resolve(options.sandboxRoot ?? '.agent-sandbox');
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
+    this.#replay = new ToolInvocationReplay(options.store);
   }
 
   tools(): StructuredToolInterface[] {
@@ -119,7 +120,7 @@ export class ToolExecutor implements ToolExecutorPort {
       });
     }
 
-    if (!startResult.started) return this.#replayTerminalResult(startResult.invocation);
+    if (!startResult.started) return this.#replay.load(startResult.invocation);
     const invocation = startResult.invocation;
     const runtimeTool = this.#tools.get(request.call.name);
     if (!runtimeTool) {
@@ -135,7 +136,7 @@ export class ToolExecutor implements ToolExecutorPort {
         `Started ToolInvocation ${JSON.stringify(invocation.id)} does not match the runtime tool contract.`
       );
     }
-    const argumentLimitFailure = validateArgumentLimits(
+    const argumentLimitFailure = validateToolInput(
       request.call.args,
       runtimeTool.argumentLimits
     );
@@ -159,22 +160,7 @@ export class ToolExecutor implements ToolExecutorPort {
         signal: request.signal,
         configurable: { agentRuntimeContext: context },
       });
-      if (isToolMessage(output)) {
-        if (isUserInputArtifact(output.artifact)) {
-          return { type: 'requires_user_input', request: output.artifact.request };
-        }
-        return {
-          type: 'completed',
-          content: output.text,
-          result: output.artifact ?? output.content,
-          artifacts: readArtifactDrafts(output.artifact),
-        };
-      }
-      return {
-        type: 'completed',
-        content: stringifyToolOutput(output),
-        result: output,
-      };
+      return normalizeToolOutput(output);
     } catch (error) {
       if (request.signal?.aborted || isAbortError(error)) throw error;
       return {
@@ -192,107 +178,8 @@ export class ToolExecutor implements ToolExecutorPort {
     }
   }
 
-  async #replayTerminalResult(invocation: AgentToolInvocation): Promise<ToolExecutionResult> {
-    if (!invocation.resultMessageId) {
-      return {
-        type: 'failed', code: 'tool_failed',
-        message: `Tool invocation is ${invocation.status} without a committed result message.`,
-      };
-    }
-    const messages = await this.#store.listSessionMessages(invocation.sessionId);
-    const message = messages.find(candidate => candidate.id === invocation.resultMessageId);
-    if (!message?.toolResult) {
-      throw new FatalToolExecutionError(
-        'storage_error',
-        `Committed result message ${JSON.stringify(invocation.resultMessageId)} was not found.`
-      );
-    }
-    if (message.toolResult.status === 'failed') {
-      return {
-        type: 'failed',
-        code: invocation.error?.code ?? 'tool_failed',
-        message: message.toolResult.error ?? invocation.error?.message ?? 'Tool failed.',
-        details: invocation.error?.details,
-      };
-    }
-    return { type: 'completed', content: message.content, result: message.toolResult.result };
-  }
-}
-
-function isUserInputArtifact(value: unknown): value is RuntimeUserInputArtifact {
-  return Boolean(value && typeof value === 'object'
-    && (value as { type?: unknown }).type === 'requires_user_input'
-    && (value as { request?: unknown }).request);
-}
-
-function stringifyToolOutput(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
-}
-
-function readArtifactDrafts(value: unknown): AgentArtifactDraft[] | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const candidates = (value as { artifacts?: unknown }).artifacts;
-  if (!Array.isArray(candidates)) return undefined;
-  const artifacts = candidates.filter(isArtifactDraft);
-  return artifacts.length > 0 ? artifacts : undefined;
-}
-
-function isArtifactDraft(value: unknown): value is AgentArtifactDraft {
-  if (!value || typeof value !== 'object') return false;
-  const draft = value as Partial<AgentArtifactDraft>;
-  return draft.kind === 'file'
-    && ['code', 'docs', 'artifacts', 'downloads'].includes(String(draft.area))
-    && [draft.title, draft.fileName, draft.logicalPath, draft.storagePath,
-      draft.mediaType, draft.checksum].every(item => typeof item === 'string' && item.length > 0)
-    && typeof draft.size === 'number'
-    && Number.isSafeInteger(draft.size)
-    && draft.size >= 0;
 }
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
-}
-
-function validateArgumentLimits(
-  arguments_: Record<string, unknown>,
-  limits: RuntimeToolArgumentLimit[] | undefined
-): Extract<ToolExecutionResult, { type: 'failed' }> | undefined {
-  for (const limit of limits ?? []) {
-    const value = readArgumentPath(arguments_, limit.path);
-    if (typeof value !== 'string') continue;
-    const estimatedTokens = estimateTextTokens(value);
-    if (
-      (limit.maxCharacters !== undefined && value.length > limit.maxCharacters)
-      || (
-        limit.maxEstimatedTokens !== undefined
-        && estimatedTokens > limit.maxEstimatedTokens
-      )
-    ) {
-      return {
-        type: 'failed',
-        code: limit.errorCode,
-        message: limit.message,
-        details: {
-          argumentPath: limit.path,
-          characters: value.length,
-          estimatedTokens,
-          maxCharacters: limit.maxCharacters,
-          maxEstimatedTokens: limit.maxEstimatedTokens,
-        },
-      };
-    }
-  }
-  return undefined;
-}
-
-function readArgumentPath(
-  arguments_: Record<string, unknown>,
-  path: string
-): unknown {
-  let current: unknown = arguments_;
-  for (const segment of path.split('.')) {
-    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return current;
 }
