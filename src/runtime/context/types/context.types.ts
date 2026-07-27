@@ -163,6 +163,7 @@ export type ReActContextStore = Pick<AgentStore,
   | 'listSessionPlanSteps'
   | 'listSessionArtifacts'
   | 'listSessionUserInputRequests'
+  | 'replaceContextSummary'
 >>;
 
 export interface ReActContextMaterialOptions {

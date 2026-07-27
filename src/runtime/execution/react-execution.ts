@@ -1,12 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import type { AIMessageChunk } from '@langchain/core/messages';
-import type { Runnable } from '@langchain/core/runnables';
-import type { StructuredToolInterface } from '@langchain/core/tools';
 import { AgentLoop } from '../loop/agent-loop.js';
-import type { AgentContextInputManifest, AgentJob, AgentModelCallType } from '../../domain/index.js';
-import { AuditedChatModel } from '../model/audited-chat-model.js';
+import type { AgentJob } from '../../domain/index.js';
+import { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';
 import type {
   JobExecutionStatePort,
@@ -28,13 +23,9 @@ export interface ReactExecutionOptions {
   jobState: JobExecutionStatePort;
   workerId: string;
   publisher: RuntimeEventPublisher;
-  model: BaseChatModel;
-  provider: string;
-  modelName: string;
+  modelFactory: AuditedModelFactory;
   tools: RuntimeTool[];
   sandboxRoot?: string;
-  maxContextTokens: number;
-  reservedOutputTokens: number;
   maxIterations: number;
   maxToolCalls: number;
   executionDeadlineMs: number;
@@ -77,16 +68,16 @@ export class ReactExecution {
     } : undefined;
     return executeDurableAgentLoop({
       loop: new AgentLoop({
-        model: this.#auditedModel(
-          input.job,
-          () => {
+        model: this.options.modelFactory.create({
+          job: input.job,
+          manifest: () => {
             if (!current) throw new Error('Model context is unavailable before tool recovery completes.');
             return current.inputManifest;
           },
-          'job.react',
-          'job.react',
-          tools
-        ),
+          callType: 'job.react',
+          logicalCallKey: 'job.react',
+          tools,
+        }),
         createOutputId,
         streaming: this.options.streaming,
       }),
@@ -117,61 +108,6 @@ export class ReactExecution {
         },
       },
     });
-  }
-
-  createAuditedModel(
-    job: AgentJob,
-    built: BuiltContext,
-    callType: AgentModelCallType,
-    logicalCallKey: string,
-    tools: StructuredToolInterface[] = []
-  ): AuditedChatModel {
-    return this.#auditedModel(
-      job,
-      built.inputManifest,
-      callType,
-      logicalCallKey,
-      tools
-    );
-  }
-
-  #auditedModel(
-    job: AgentJob,
-    manifest: AgentContextInputManifest | (() => AgentContextInputManifest),
-    callType: AgentModelCallType,
-    logicalCallKey: string,
-    tools: StructuredToolInterface[] = []
-  ): AuditedChatModel {
-    if (!job.currentAttemptId) {
-      throw new Error(`Job ${JSON.stringify(job.id)} has no current attempt.`);
-    }
-    return new AuditedChatModel({
-      delegate: this.#bindTools(tools),
-      store: this.options.store,
-      workerId: this.options.workerId,
-      target: {
-        sessionId: job.sessionId,
-        jobId: job.id,
-        attemptId: job.currentAttemptId,
-        attemptNo: job.attemptNo,
-      },
-      callType,
-      logicalCallKey,
-      provider: this.options.provider,
-      model: this.options.modelName,
-      maxContextTokens: this.options.maxContextTokens,
-      reservedOutputTokens: this.options.reservedOutputTokens,
-      baseManifest: manifest,
-      publisher: this.options.publisher,
-    });
-  }
-
-  #bindTools(tools: StructuredToolInterface[]): Runnable<BaseLanguageModelInput, AIMessageChunk> {
-    if (tools.length === 0) return this.options.model;
-    if (!this.options.model.bindTools) {
-      throw new Error(`Model ${this.options.modelName} does not support LangChain bindTools().`);
-    }
-    return this.options.model.bindTools(tools) as Runnable<BaseLanguageModelInput, AIMessageChunk>;
   }
 
   #toolExecutor(): ToolExecutor {

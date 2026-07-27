@@ -182,7 +182,10 @@ describe('unified ReAct planning', () => {
       .mockResolvedValueOnce(material(false));
     const compress = vi.fn(async () => true);
 
-    const built = await buildContextWithCompression(load, compress);
+    const built = await buildContextWithCompression({
+      loadMaterial: load,
+      compressMaterial: () => compress(),
+    });
     expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
     expect(load).toHaveBeenCalledTimes(2);
     expect(compress).toHaveBeenCalledTimes(1);
@@ -194,7 +197,10 @@ describe('unified ReAct planning', () => {
       throw new Error('Session context compression returned invalid JSON.');
     });
 
-    const built = await buildContextWithCompression(load, compress);
+    const built = await buildContextWithCompression({
+      loadMaterial: load,
+      compressMaterial: () => compress(),
+    });
 
     expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
     expect(load).toHaveBeenCalledTimes(1);
@@ -207,7 +213,10 @@ describe('unified ReAct planning', () => {
     const load = vi.fn().mockResolvedValue(required);
     const compress = vi.fn(async () => false);
 
-    await expect(buildContextWithCompression(load, compress))
+    await expect(buildContextWithCompression({
+      loadMaterial: load,
+      compressMaterial: () => compress(),
+    }))
       .rejects.toMatchObject({ code: 'context_overflow' });
     expect(load).toHaveBeenCalledTimes(1);
     expect(compress).toHaveBeenCalledTimes(1);
@@ -227,7 +236,10 @@ describe('unified ReAct planning', () => {
       return true;
     });
 
-    const built = await buildContextWithCompression(load, compress);
+    const built = await buildContextWithCompression({
+      loadMaterial: load,
+      compressMaterial: ({ material, context }) => compress(material, context),
+    });
 
     expect(built.messages.map(message => message.content)).toEqual(['system', 'Create a report']);
     expect(load).toHaveBeenCalledTimes(2);

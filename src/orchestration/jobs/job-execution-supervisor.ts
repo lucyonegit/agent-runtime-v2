@@ -9,8 +9,8 @@ import {
 } from '../../config/runtime-config.js';
 import type { AgentJob } from '../../domain/index.js';
 import { ReactExecution } from '../../runtime/execution/react-execution.js';
-import { ContextCompressionService } from '../../runtime/context/context-compression.service.js';
 import { ReActContextService } from '../../runtime/context/react-context.service.js';
+import { AuditedModelFactory } from '../../runtime/model/audited-model.factory.js';
 import { RuntimeError } from '../../runtime/errors/runtime-error.js';
 import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
 import type { RuntimeTool } from '../../runtime/execution/tool-executor.js';
@@ -139,6 +139,17 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
       reservedOutputTokens: this.#options.reservedOutputTokens,
       inputTokenLimit: this.#options.inputTokenLimit,
     };
+    // 普通 ReAct 与 Context 压缩共享同一个审计模型工厂；Supervisor 不感知具体调用类型。
+    const modelFactory = new AuditedModelFactory({
+      delegate: this.#options.model,
+      store: this.#options.store,
+      workerId: this.#options.workerId,
+      provider: this.#options.provider,
+      modelName: this.#options.modelName,
+      maxContextTokens: this.#options.maxContextTokens,
+      reservedOutputTokens: this.#options.reservedOutputTokens,
+      publisher: this.#options.publisher,
+    });
     this.#reactExecution = new ReactExecution({
       store: this.#options.store,
       jobState: {
@@ -148,13 +159,9 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
       },
       workerId: this.#options.workerId,
       publisher: this.#options.publisher,
-      model: this.#options.model,
-      provider: this.#options.provider,
-      modelName: this.#options.modelName,
+      modelFactory,
       tools: this.#options.tools,
       sandboxRoot: this.#options.sandboxRoot,
-      maxContextTokens: this.#options.maxContextTokens,
-      reservedOutputTokens: this.#options.reservedOutputTokens,
       maxIterations: this.#options.maxIterations,
       maxToolCalls: this.#options.maxToolCalls,
       executionDeadlineMs: this.#options.executionDeadlineMs,
@@ -174,19 +181,8 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
         sessionId,
         shellPath: this.#options.shellPath,
       }),
-      compression: new ContextCompressionService({
-        store: this.#options.store,
-        modelName: this.#options.modelName,
-        contextConfig: this.#options.contextConfig ?? DEFAULT_CONTEXT_CONFIG,
-      }),
-      compressionModels: {
-        create: ({ job, context, logicalCallKey }) => this.#reactExecution.createAuditedModel(
-          job,
-          context,
-          'context.compress',
-          logicalCallKey
-        ),
-      },
+      // ReActContextService 内部决定何时以 context.compress 类型调用模型。
+      modelFactory,
     });
   }
 
@@ -228,6 +224,7 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
   }
 
   async #runJobWithExecutionOwnership(jobId: string, signal: AbortSignal): Promise<void> {
+    // Job 执行期间持续刷新执行权有效期；进程退出后刷新自然停止，过期 Job 会进入恢复流程。
     const stopOwnershipRefresh = this.#executionOwnership.startRefreshing(jobId);
     try {
       await this.#executeJob(jobId, signal);
@@ -241,9 +238,12 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
   }
 
   async #executeJob(jobId: string, signal: AbortSignal): Promise<void> {
+    // 先确认 Job 仍处于可运行状态，并且执行权、Attempt 都属于当前 Worker。
     const job = await this.#loadRunnableOwnedJob(jobId);
     await this.#reactExecution.runJob({
       job,
+      // ReAct 每轮模型调用前都会执行该回调。上一轮工具结果、Plan 更新、HITL 回答
+      // 已经写入数据库，因此这里必须重新构建 Context，而不能复用 Job 启动时的快照。
       reloadContext: () => this.#contextService.buildForJob(job),
       signal,
     });
