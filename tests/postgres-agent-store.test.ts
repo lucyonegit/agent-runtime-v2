@@ -329,6 +329,35 @@ describe('PostgresAgentStore converged model', () => {
         taskRunId: 'task_run_2',
       },
     });
+
+    await expect(store.execution.answerUserInput({
+      requestId: 'input_1',
+      expectedVersion: 0,
+      clientAnswerId: 'client_answer_1',
+      answer: 'alpha',
+      answerMessageId: 'unused_replay_message',
+      taskRunId: 'unused_replay_run',
+      ownerId: 'worker_1',
+      nowMs: 31,
+      ownershipExpiresAtMs: 1_000,
+    })).resolves.toMatchObject({
+      shouldResume: false,
+      answerMessage: { id: 'message_input_answer', content: 'alpha' },
+    });
+    await expect(store.execution.answerUserInput({
+      requestId: 'input_1',
+      expectedVersion: 0,
+      clientAnswerId: 'client_answer_1',
+      answer: 'beta',
+      answerMessageId: 'conflicting_replay_message',
+      taskRunId: 'conflicting_replay_run',
+      ownerId: 'worker_1',
+      nowMs: 32,
+      ownershipExpiresAtMs: 1_000,
+    })).rejects.toMatchObject({ code: 'USER_INPUT_ANSWER_CONFLICT' });
+    await expect(store.tasks.getLatestRun(task.id)).resolves.toMatchObject({
+      id: 'task_run_2', runNo: 2,
+    });
   });
 
   it('converts an expired request into a failed ToolMessage and an input_expired TaskRun', async () => {

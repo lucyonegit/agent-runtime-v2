@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { isDeepStrictEqual } from 'node:util';
 import { validateAgentUserInputAnswer } from '../../../domain/index.js';
 import {
   AgentStoreError,
@@ -188,17 +189,22 @@ export async function answerUserInputCommand(
     const call = requireRow(callResult.rows[0], 'lock waiting tool call');
 
     if (request.status === 'answered') {
-      if (request.client_answer_id !== input.clientAnswerId || !request.answer_message_id) {
+      const answerMessage = request.answer_message_id
+        ? await selectMessageById(client, request.answer_message_id)
+        : undefined;
+      const mappedAnswerMessage = answerMessage ? mapAgentMessageRow(answerMessage) : undefined;
+      if (request.client_answer_id !== input.clientAnswerId
+        || !mappedAnswerMessage
+        || !isDeepStrictEqual(mappedAnswerMessage.toolResult?.result, input.answer)) {
         throw new AgentStoreError(
           'USER_INPUT_ANSWER_CONFLICT',
           `UserInputRequest ${JSON.stringify(request.id)} was already answered differently.`,
           { requestId: request.id }
         );
       }
-      const answerMessage = await selectMessageById(client, request.answer_message_id);
       return {
         request: mapAgentUserInputRequestRow(request),
-        answerMessage: mapAgentMessageRow(requireRow(answerMessage, 'load answer message')),
+        answerMessage: mappedAnswerMessage,
         task: mapAgentTaskRow(task),
         toolCall: mapAgentToolCallRow(call),
         shouldResume: false,
