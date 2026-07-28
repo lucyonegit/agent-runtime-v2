@@ -18,7 +18,7 @@ describe('ContextCompressionService', () => {
     const writes: ReplaceContextSummaryInput[] = [];
     const service = new ContextCompressionService({
       store: {
-        replaceContextSummary: async input => {
+        replaceSummary: async input => {
           writes.push(input);
           return {
             ...input,
@@ -125,7 +125,7 @@ describe('ContextCompressionService', () => {
     }];
     const service = new ContextCompressionService({
       store: {
-        replaceContextSummary: async input => {
+        replaceSummary: async input => {
           writes.push(input);
           return {
             ...input,

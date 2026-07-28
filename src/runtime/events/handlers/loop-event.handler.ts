@@ -95,7 +95,7 @@ export class LoopEventHandler {
     });
     if (event.toolCalls.length === 0) return { type: 'final_candidate', event };
     try {
-      const committed = await this.#options.store.commitModelToolCalls({
+      const committed = await this.#options.store.execution.commitModelToolCalls({
         sessionId: target.sessionId,
         jobId: target.jobId,
         attemptId: target.attemptId,
@@ -164,7 +164,7 @@ export class LoopEventHandler {
             details: event.details,
             durationMs: event.durationMs,
           };
-      const committed = await this.#options.store.commitToolResult({
+      const committed = await this.#options.store.execution.commitToolResult({
         sessionId: target.sessionId,
         jobId: target.jobId,
         attemptId: target.attemptId,
@@ -198,10 +198,10 @@ export class LoopEventHandler {
   }
 
   async #setModelCallOutputDisposition(
-    input: Parameters<AgentStore['setModelCallOutputDisposition']>[0]
+    input: Parameters<AgentStore['models']['setCallOutputDisposition']>[0]
   ): Promise<void> {
     try {
-      await this.#options.store.setModelCallOutputDisposition(input);
+      await this.#options.store.models.setCallOutputDisposition(input);
     } catch (error) {
       if (this.#options.requireModelCallAudit) throw error;
     }

@@ -3,7 +3,7 @@ import type { RuntimeConfig } from '../../config/runtime-config.js';
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
 import { JobExecutor } from '../../orchestration/jobs/job-executor.js';
 import { JobManager } from '../../orchestration/jobs/job-manager.js';
-import { JobStore } from '../../orchestration/jobs/shared/job-store.js';
+import { JobActions } from '../../orchestration/jobs/shared/job-actions.js';
 import { ReActContextService } from '../../runtime/context/react-context.service.js';
 import { ReActExecution } from '../../runtime/execution/react-execution.js';
 import { AuditedModelFactory } from '../../runtime/model/audited-model.factory.js';
@@ -80,7 +80,7 @@ export async function createAgentApplication(
     });
 
     // JobManager、后台执行监督器和 ReAct 使用同一套状态迁移规则。
-    const jobStore = new JobStore({
+    const jobActions = new JobActions({
       store,
       workerId: config.workerId,
       jobLeaseMs: config.execution.ownershipTimeoutMs,
@@ -120,7 +120,7 @@ export async function createAgentApplication(
     });
     const reactExecution = new ReActExecution({
       store,
-      jobStore,
+      jobActions,
       context,
       workerId: config.workerId,
       publisher: events,
@@ -134,7 +134,7 @@ export async function createAgentApplication(
     });
     const jobExecutor = new JobExecutor({
       store,
-      jobStore,
+      jobActions,
       reactExecution,
       workerId: config.workerId,
       publisher: events,
@@ -145,7 +145,7 @@ export async function createAgentApplication(
       clock,
     });
     const jobs = new JobManager({
-      jobStore,
+      jobActions,
       publisher: events,
       execution: jobExecutor,
     });

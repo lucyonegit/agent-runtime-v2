@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentJob } from '../src/domain/index.js';
 import { JobExecutor } from '../src/orchestration/jobs/job-executor.js';
-import { JobStore } from '../src/orchestration/jobs/shared/job-store.js';
+import { JobActions } from '../src/orchestration/jobs/shared/job-actions.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
 describe('JobExecutor recovery', () => {
@@ -15,14 +15,18 @@ describe('JobExecutor recovery', () => {
       leaseExpiresAtMs: undefined,
     });
     const store = {
-      abandonStartedModelCalls: vi.fn(async () => []),
-      listJobsNeedingRuntimeRecovery: vi.fn(async () => [candidate]),
-      markJobRecoveryRequired: vi.fn(async () => recoveryRequiredJob),
-      startJobExecution: vi.fn(),
+      models: {
+        abandonStartedCalls: vi.fn(async () => []),
+      },
+      jobs: {
+        listNeedingRecovery: vi.fn(async () => [candidate]),
+        markRecoveryRequired: vi.fn(async () => recoveryRequiredJob),
+        startExecution: vi.fn(),
+      },
     } as unknown as AgentStore;
     const publisher = { publish: vi.fn(async () => undefined) };
     const clock = { nowMs: () => 1_000 };
-    const jobStore = new JobStore({
+    const jobActions = new JobActions({
       store,
       workerId: 'worker_test',
       jobLeaseMs: 30_000,
@@ -30,7 +34,7 @@ describe('JobExecutor recovery', () => {
     });
     const executor = new JobExecutor({
       store,
-      jobStore,
+      jobActions,
       reactExecution: { runJob: vi.fn(async () => undefined as never) },
       workerId: 'worker_test',
       publisher,
@@ -42,13 +46,13 @@ describe('JobExecutor recovery', () => {
     await executor.start();
     await executor.shutdown();
 
-    expect(store.abandonStartedModelCalls).toHaveBeenCalledWith(1_000);
-    expect(store.listJobsNeedingRuntimeRecovery).toHaveBeenCalledWith({
+    expect(store.models.abandonStartedCalls).toHaveBeenCalledWith(1_000);
+    expect(store.jobs.listNeedingRecovery).toHaveBeenCalledWith({
       nowMs: 1_000,
       createdBeforeMs: -59_000,
       limit: 32,
     });
-    expect(store.markJobRecoveryRequired).toHaveBeenCalledWith({
+    expect(store.jobs.markRecoveryRequired).toHaveBeenCalledWith({
       jobId: candidate.id,
       expectedVersion: candidate.version,
       nowMs: 1_000,
@@ -58,7 +62,7 @@ describe('JobExecutor recovery', () => {
       sessionId: recoveryRequiredJob.sessionId,
       job: recoveryRequiredJob,
     });
-    expect(store.startJobExecution).not.toHaveBeenCalled();
+    expect(store.jobs.startExecution).not.toHaveBeenCalled();
   });
 });
 

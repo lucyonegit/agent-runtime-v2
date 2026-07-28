@@ -9,7 +9,7 @@ import type {
 } from '../../../domain/index.js';
 
 /** Durable Job reads and terminal writes required by the ReAct executor. */
-export interface JobStorePort {
+export interface JobActionsPort {
   getJob(jobId: string): Promise<AgentJob | undefined>;
   fail(job: AgentJob, error: AgentJobError): Promise<AgentJob>;
   cancel(jobId: string, expectedVersion: number): Promise<AgentJob>;

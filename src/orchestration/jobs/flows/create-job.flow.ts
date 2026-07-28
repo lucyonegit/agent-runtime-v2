@@ -2,7 +2,7 @@ import type { CreateJobAndAppendUserMessageResult } from '../../../storage/agent
 import { JobAttemptStarter } from '../shared/job-attempt-starter.js';
 import { JobEventPublisher } from '../shared/job-event-publisher.js';
 import { JobExecutionDispatcher } from '../shared/job-execution-dispatcher.js';
-import { JobStore } from '../shared/job-store.js';
+import { JobActions } from '../shared/job-actions.js';
 
 export interface CreateManagedJobInput {
   sessionId: string;
@@ -12,14 +12,14 @@ export interface CreateManagedJobInput {
 
 export class CreateJobFlow {
   constructor(
-    private readonly jobStore: JobStore,
+    private readonly jobActions: JobActions,
     private readonly attempts: JobAttemptStarter,
     private readonly events: JobEventPublisher,
     private readonly execution: JobExecutionDispatcher
   ) {}
 
   async execute(input: CreateManagedJobInput): Promise<CreateJobAndAppendUserMessageResult> {
-    const created = await this.jobStore.createJobWithMessage({
+    const created = await this.jobActions.createJobWithMessage({
       sessionId: input.sessionId,
       content: input.message,
       clientRequestId: input.clientRequestId,
@@ -29,7 +29,6 @@ export class CreateJobFlow {
       { type: 'message.upserted', sessionId: input.sessionId, message: created.message },
     ]);
 
-    // An idempotent request may return an already-running or terminal Job.
     if (created.job.status !== 'created') return created;
 
     const running = await this.attempts.start(created.job);

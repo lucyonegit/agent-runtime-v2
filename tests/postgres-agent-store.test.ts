@@ -10,11 +10,11 @@ import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { JobExecutorPort } from '../src/orchestration/jobs/job-executor.js';
 import { JobManager } from '../src/orchestration/jobs/job-manager.js';
-import { JobStore } from '../src/orchestration/jobs/shared/job-store.js';
+import { JobActions } from '../src/orchestration/jobs/shared/job-actions.js';
 import { AuditedChatModel } from '../src/runtime/model/audited-chat-model.js';
 import { executeDurableAgentLoop } from '../src/runtime/execution/helpers/durable-loop-execution.helper.js';
 import { ToolExecutor } from '../src/runtime/execution/tool-executor.js';
-import type { JobStorePort } from '../src/runtime/execution/types/react-execution.types.js';
+import type { JobActionsPort } from '../src/runtime/execution/types/react-execution.types.js';
 import { AgentLoop } from '../src/runtime/loop/agent-loop.js';
 import { RuntimeEventWriter } from '../src/runtime/events/runtime-event-writer.js';
 import { ContextFormatter } from '../src/runtime/context/helpers/context-formatter.helper.js';
@@ -78,7 +78,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('atomically creates a Job, user message, and Session version update', async () => {
-    await store.createSession({ id: 'session_create', nowMs: 10 });
+    await store.sessions.create({ id: 'session_create', nowMs: 10 });
 
     const result = await createJob(store, 'session_create', 'job_create', 'message_create', 20);
 
@@ -99,23 +99,23 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('rolls back every write when a Session already has an active Job', async () => {
-    await store.createSession({ id: 'session_conflict', nowMs: 10 });
+    await store.sessions.create({ id: 'session_conflict', nowMs: 10 });
     await createJob(store, 'session_conflict', 'job_first', 'message_first', 20);
 
     await expect(
       createJob(store, 'session_conflict', 'job_second', 'message_second', 30)
     ).rejects.toMatchObject({ code: 'ACTIVE_JOB_CONFLICT' });
 
-    expect(await store.getJob('job_second')).toBeUndefined();
-    expect(await store.listSessionMessages('session_conflict')).toHaveLength(1);
-    expect(await store.getSession('session_conflict')).toMatchObject({ version: 1, updatedAtMs: 20 });
+    expect(await store.jobs.get('job_second')).toBeUndefined();
+    expect(await store.sessions.listMessages('session_conflict')).toHaveLength(1);
+    expect(await store.sessions.get('session_conflict')).toMatchObject({ version: 1, updatedAtMs: 20 });
   });
 
   it('replays an identical clientRequestId and rejects payload drift', async () => {
-    await store.createSession({ id: 'session_idempotent', nowMs: 10 });
+    await store.sessions.create({ id: 'session_idempotent', nowMs: 10 });
     const jobIds = ['job_idempotent', 'job_unused', 'job_changed'];
     const messageIds = ['message_idempotent', 'message_unused', 'message_changed'];
-    const jobStore = new JobStore({
+    const jobActions = new JobActions({
       store,
       workerId: 'worker_idempotent',
       jobLeaseMs: 30_000,
@@ -127,7 +127,7 @@ describe('PostgresAgentStore Job transactions', () => {
       },
     });
     const manager = new JobManager({
-      jobStore,
+      jobActions,
       publisher: { publish: () => undefined },
       execution: noOpJobExecutor(),
     });
@@ -142,7 +142,7 @@ describe('PostgresAgentStore Job transactions', () => {
       message: 'same payload',
     });
     expect(replay).toEqual(first);
-    expect(await store.listSessionMessages('session_idempotent')).toHaveLength(1);
+    expect(await store.sessions.listMessages('session_idempotent')).toHaveLength(1);
 
     await expect(manager.createJob({
       sessionId: 'session_idempotent',
@@ -152,11 +152,11 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('allows exactly one concurrent attempt start and rejects stale or foreign renewals', async () => {
-    await store.createSession({ id: 'session_claim', nowMs: 10 });
+    await store.sessions.create({ id: 'session_claim', nowMs: 10 });
     await createJob(store, 'session_claim', 'job_claim', 'message_claim', 20);
 
     const attemptStarts = await Promise.allSettled([
-      store.startJobExecution({
+      store.jobs.startExecution({
         jobId: 'job_claim',
         expectedVersion: 0,
         workerId: 'worker_a',
@@ -164,7 +164,7 @@ describe('PostgresAgentStore Job transactions', () => {
         nowMs: 30,
         leaseUntilMs: 100,
       }),
-      store.startJobExecution({
+      store.jobs.startExecution({
         jobId: 'job_claim',
         expectedVersion: 0,
         workerId: 'worker_b',
@@ -181,8 +181,8 @@ describe('PostgresAgentStore Job transactions', () => {
       code: 'CONCURRENCY_CONFLICT',
     });
 
-    const startedJob = (fulfilled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof store.startJobExecution>>>).value;
-    await expect(store.renewJobExecutionLease({
+    const startedJob = (fulfilled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof store.jobs.startExecution>>>).value;
+    await expect(store.jobs.renewExecutionOwnership({
       jobId: startedJob.id,
       expectedVersion: startedJob.version,
       workerId: startedJob.leaseOwner!,
@@ -191,7 +191,7 @@ describe('PostgresAgentStore Job transactions', () => {
       leaseUntilMs: 120,
     })).rejects.toMatchObject({ code: 'JOB_LEASE_LOST' });
 
-    const renewed = await store.renewJobExecutionLease({
+    const renewed = await store.jobs.renewExecutionOwnership({
       jobId: startedJob.id,
       expectedVersion: startedJob.version,
       workerId: startedJob.leaseOwner!,
@@ -206,7 +206,7 @@ describe('PostgresAgentStore Job transactions', () => {
       updatedAtMs: startedJob.updatedAtMs,
     });
 
-    const paused = await store.markJobRecoveryRequired({
+    const paused = await store.jobs.markRecoveryRequired({
       jobId: renewed.id, expectedVersion: renewed.version, nowMs: 121,
     });
     expect(paused).toMatchObject({
@@ -216,7 +216,7 @@ describe('PostgresAgentStore Job transactions', () => {
     expect(paused).not.toHaveProperty('leaseOwner');
     expect(paused).not.toHaveProperty('leaseExpiresAtMs');
 
-    const recovered = await store.startJobExecution({
+    const recovered = await store.jobs.startExecution({
       jobId: paused.id,
       expectedVersion: paused.version,
       workerId: 'worker_recovery',
@@ -233,9 +233,9 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('commits tool calls before execution and atomically commits each tool result', async () => {
-    await store.createSession({ id: 'session_tools', nowMs: 10 });
+    await store.sessions.create({ id: 'session_tools', nowMs: 10 });
     await createJob(store, 'session_tools', 'job_tools', 'message_tools', 20);
-    const job = await store.startJobExecution({
+    const job = await store.jobs.startExecution({
       jobId: 'job_tools',
       expectedVersion: 0,
       workerId: 'worker_tools',
@@ -243,7 +243,7 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 30,
       leaseUntilMs: 100,
     });
-    const committed = await store.commitModelToolCalls({
+    const committed = await store.execution.commitModelToolCalls({
       sessionId: 'session_tools',
       jobId: job.id,
       attemptId: job.currentAttemptId!,
@@ -282,12 +282,12 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     expect(lookupResult).toMatchObject({ type: 'completed', content: 'found:docs' });
     if (lookupResult.type !== 'completed') throw new Error('expected completed tool result');
-    expect(await store.getToolInvocation('job_tools', 'call_lookup')).toMatchObject({
+    expect(await store.execution.getToolInvocation('job_tools', 'call_lookup')).toMatchObject({
       status: 'running',
       version: 1,
     });
 
-    const lookupCommit = await store.commitToolResult({
+    const lookupCommit = await store.execution.commitToolResult({
       sessionId: 'session_tools',
       jobId: 'job_tools',
       attemptId: 'attempt_tools',
@@ -322,7 +322,7 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     expect(missingResult).toMatchObject({ type: 'failed', code: 'tool_not_found' });
     if (missingResult.type !== 'failed') throw new Error('expected failed tool result');
-    await expect(store.commitToolResult({
+    await expect(store.execution.commitToolResult({
       sessionId: 'session_tools',
       jobId: 'job_tools',
       attemptId: 'attempt_tools',
@@ -335,9 +335,9 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('rejects ToolInvocation execution acquisition after the Job lease is lost', async () => {
-    await store.createSession({ id: 'session_tool_fence', nowMs: 10 });
+    await store.sessions.create({ id: 'session_tool_fence', nowMs: 10 });
     await createJob(store, 'session_tool_fence', 'job_tool_fence', 'message_tool_fence', 20);
-    const job = await store.startJobExecution({
+    const job = await store.jobs.startExecution({
       jobId: 'job_tool_fence',
       expectedVersion: 0,
       workerId: 'worker_owner',
@@ -345,7 +345,7 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 30,
       leaseUntilMs: 40,
     });
-    await store.commitModelToolCalls({
+    await store.execution.commitModelToolCalls({
       sessionId: 'session_tool_fence',
       jobId: job.id,
       attemptId: job.currentAttemptId!,
@@ -371,16 +371,16 @@ describe('PostgresAgentStore Job transactions', () => {
         attemptId: 'attempt_owner',
       },
     })).rejects.toMatchObject({ code: 'lease_lost' });
-    expect(await store.getToolInvocation('job_tool_fence', 'call_fence')).toMatchObject({
+    expect(await store.execution.getToolInvocation('job_tool_fence', 'call_fence')).toMatchObject({
       status: 'pending',
       version: 0,
     });
   });
 
   it('answers multiple tool inputs atomically and gives resume ownership to exactly one answer', async () => {
-    await store.createSession({ id: 'session_inputs', nowMs: 10 });
+    await store.sessions.create({ id: 'session_inputs', nowMs: 10 });
     await createJob(store, 'session_inputs', 'job_inputs', 'message_inputs', 20);
-    const job = await store.startJobExecution({
+    const job = await store.jobs.startExecution({
       jobId: 'job_inputs',
       expectedVersion: 0,
       workerId: 'worker_inputs',
@@ -388,7 +388,7 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 30,
       leaseUntilMs: 100,
     });
-    await store.commitModelToolCalls({
+    await store.execution.commitModelToolCalls({
       sessionId: 'session_inputs',
       jobId: job.id,
       attemptId: 'attempt_inputs',
@@ -402,14 +402,14 @@ describe('PostgresAgentStore Job transactions', () => {
       ],
       nowMs: 31,
     });
-    await store.tryStartToolExecution({
+    await store.execution.tryStartTool({
       jobId: 'job_inputs',
       toolCallId: 'call_input_a',
       workerId: 'worker_inputs',
       attemptId: 'attempt_inputs',
       nowMs: 32,
     });
-    await store.tryStartToolExecution({
+    await store.execution.tryStartTool({
       jobId: 'job_inputs',
       toolCallId: 'call_input_b',
       workerId: 'worker_inputs',
@@ -417,7 +417,7 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 32,
     });
 
-    const waiting = await store.createInputRequestsAndMarkWaiting({
+    const waiting = await store.execution.waitForUserInput({
       sessionId: 'session_inputs',
       jobId: 'job_inputs',
       attemptId: 'attempt_inputs',
@@ -449,7 +449,7 @@ describe('PostgresAgentStore Job transactions', () => {
       .toEqual(['waiting_user_input', 'waiting_user_input']);
 
     const answers = await Promise.all([
-      store.saveUserInputAnswerAndResumeIfReady({
+      store.execution.answerUserInput({
         requestId: 'input_a',
         expectedVersion: 0,
         clientAnswerId: 'answer_a',
@@ -460,7 +460,7 @@ describe('PostgresAgentStore Job transactions', () => {
         nowMs: 40,
         leaseUntilMs: 100,
       }),
-      store.saveUserInputAnswerAndResumeIfReady({
+      store.execution.answerUserInput({
         requestId: 'input_b',
         expectedVersion: 0,
         clientAnswerId: 'answer_b',
@@ -485,7 +485,7 @@ describe('PostgresAgentStore Job transactions', () => {
     expect(answers.map(answer => answer.answerMessage.messageType)).toEqual(['tool_result', 'tool_result']);
     expect(answers.map(answer => answer.invocation?.status)).toEqual(['completed', 'completed']);
 
-    await expect(store.saveUserInputAnswerAndResumeIfReady({
+    await expect(store.execution.answerUserInput({
       requestId: 'input_a',
       expectedVersion: 0,
       clientAnswerId: 'answer_a',
@@ -499,7 +499,7 @@ describe('PostgresAgentStore Job transactions', () => {
       request: { status: 'answered', clientAnswerId: 'answer_a' },
       shouldResume: false,
     });
-    await expect(store.saveUserInputAnswerAndResumeIfReady({
+    await expect(store.execution.answerUserInput({
       requestId: 'input_a',
       expectedVersion: 1,
       clientAnswerId: 'different_answer',
@@ -513,9 +513,9 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('runs a direct Job from model tool call through durable result to atomic final completion', async () => {
-    await store.createSession({ id: 'session_direct', nowMs: 10 });
+    await store.sessions.create({ id: 'session_direct', nowMs: 10 });
     await createJob(store, 'session_direct', 'job_direct', 'message_direct', 20);
-    const startedJob = await store.startJobExecution({
+    const startedJob = await store.jobs.startExecution({
       jobId: 'job_direct',
       expectedVersion: 0,
       workerId: 'worker_direct',
@@ -526,7 +526,7 @@ describe('PostgresAgentStore Job transactions', () => {
     let durableBeforeExternalExecution = false;
     const runtimeLookup = completedRuntimeTool('lookup', async (_arguments, context) => {
       durableBeforeExternalExecution = (
-        await store.getToolInvocation(context.jobId, context.toolCallId)
+        await store.execution.getToolInvocation(context.jobId, context.toolCallId)
       )?.status === 'running';
       return {
         content: 'lookup result',
@@ -587,7 +587,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const result = await executeDurableAgentLoop({
       loop,
       writer,
-      jobStore: jobStorePort(store, 'worker_direct', 36),
+      jobActions: jobActionsPort(store, 'worker_direct', 36),
       input: {
         job: startedJob,
         loopInput: {
@@ -617,7 +617,7 @@ describe('PostgresAgentStore Job transactions', () => {
         content: 'final direct answer',
       },
     });
-    expect((await store.listSessionMessages('session_direct')).map(message => ({
+    expect((await store.sessions.listMessages('session_direct')).map(message => ({
       rowId: message.rowId,
       type: message.messageType,
     }))).toEqual([
@@ -685,7 +685,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('records malformed model tool arguments as a pre-execution failure and continues', async () => {
-    await store.createSession({ id: 'session_invalid_tool_args', nowMs: 10 });
+    await store.sessions.create({ id: 'session_invalid_tool_args', nowMs: 10 });
     await createJob(
       store,
       'session_invalid_tool_args',
@@ -693,7 +693,7 @@ describe('PostgresAgentStore Job transactions', () => {
       'message_invalid_tool_args',
       20
     );
-    const startedJob = await store.startJobExecution({
+    const startedJob = await store.jobs.startExecution({
       jobId: 'job_invalid_tool_args',
       expectedVersion: 0,
       workerId: 'worker_invalid_tool_args',
@@ -749,7 +749,7 @@ describe('PostgresAgentStore Job transactions', () => {
     const execution = {
       loop,
       writer,
-      jobStore: jobStorePort(store, 'worker_invalid_tool_args', 36),
+      jobActions: jobActionsPort(store, 'worker_invalid_tool_args', 36),
     };
 
     const result = await executeDurableAgentLoop({
@@ -782,7 +782,7 @@ describe('PostgresAgentStore Job transactions', () => {
       job: { status: 'completed' },
       message: { content: 'recovered after invalid tool arguments' },
     });
-    const invocation = await store.getToolInvocation(
+    const invocation = await store.execution.getToolInvocation(
       'job_invalid_tool_args',
       'call_invalid_tool_args'
     );
@@ -792,7 +792,7 @@ describe('PostgresAgentStore Job transactions', () => {
       error: { code: 'invalid_tool_arguments', message: 'Malformed args.' },
     });
     expect(invocation).not.toHaveProperty('startedAtMs');
-    const messages = await store.listSessionMessages('session_invalid_tool_args');
+    const messages = await store.sessions.listMessages('session_invalid_tool_args');
     expect(messages.map(message => message.messageType)).toEqual([
       'user_message',
       'tool_call',
@@ -803,7 +803,7 @@ describe('PostgresAgentStore Job transactions', () => {
       toolCallId: 'call_invalid_tool_args',
       toolResult: { status: 'failed', error: 'Malformed args.' },
     });
-    expect(await store.listModelCalls('job_invalid_tool_args')).toMatchObject([
+    expect(await store.models.listCalls('job_invalid_tool_args')).toMatchObject([
       {
         outputId: 'invalid_tool_output_1', outputDisposition: 'accepted',
         resultType: 'tool_calls', toolNames: ['lookup'],
@@ -817,9 +817,9 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('persists accepted and rejected ModelCall output dispositions', async () => {
-    await store.createSession({ id: 'session_disposition', nowMs: 10 });
+    await store.sessions.create({ id: 'session_disposition', nowMs: 10 });
     await createJob(store, 'session_disposition', 'job_disposition', 'message_disposition', 20);
-    const startedJob = await store.startJobExecution({
+    const startedJob = await store.jobs.startExecution({
       jobId: 'job_disposition', expectedVersion: 0, workerId: 'worker_disposition',
       attemptId: 'attempt_disposition', nowMs: 30, leaseUntilMs: 100,
     });
@@ -845,7 +845,7 @@ describe('PostgresAgentStore Job transactions', () => {
         store, workerId: 'worker_disposition', tools: [], requireModelCallAudit: true,
         clock: { nowMs: () => 36 },
       }),
-      jobStore: jobStorePort(store, 'worker_disposition', 36),
+      jobActions: jobActionsPort(store, 'worker_disposition', 36),
     };
     const result = await executeDurableAgentLoop({
       ...execution,
@@ -868,7 +868,7 @@ describe('PostgresAgentStore Job transactions', () => {
     });
 
     expect(result).toMatchObject({ type: 'completed', message: { content: 'accepted final' } });
-    expect(await store.listModelCalls('job_disposition')).toMatchObject([
+    expect(await store.models.listCalls('job_disposition')).toMatchObject([
       {
         outputId: 'output_disposition_1', outputDisposition: 'rejected',
         outputDispositionReason: 'Complete the durable work first.',
@@ -878,9 +878,9 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('runs direct HITL through waiting, answer-as-tool-result, resumed execution, and final completion', async () => {
-    await store.createSession({ id: 'session_hitl', nowMs: 10 });
+    await store.sessions.create({ id: 'session_hitl', nowMs: 10 });
     await createJob(store, 'session_hitl', 'job_hitl', 'message_hitl', 20);
-    const startedJob = await store.startJobExecution({
+    const startedJob = await store.jobs.startExecution({
       jobId: 'job_hitl',
       expectedVersion: 0,
       workerId: 'worker_hitl',
@@ -915,7 +915,7 @@ describe('PostgresAgentStore Job transactions', () => {
       },
       clock: { nowMs: () => writerNowMs },
     });
-    const jobStore = new JobStore({
+    const jobActions = new JobActions({
       store,
       workerId: 'worker_hitl',
       jobLeaseMs: 30_000,
@@ -927,7 +927,7 @@ describe('PostgresAgentStore Job transactions', () => {
       },
     });
     const jobManager = new JobManager({
-      jobStore,
+      jobActions,
       publisher: { publish: () => undefined },
       execution: noOpJobExecutor(),
     });
@@ -947,7 +947,7 @@ describe('PostgresAgentStore Job transactions', () => {
         clock: { nowMs: () => 35 },
       }),
       writer,
-      jobStore: jobStorePort(store, 'worker_hitl', 40),
+      jobActions: jobActionsPort(store, 'worker_hitl', 40),
     };
     const waiting = await executeDurableAgentLoop({
       ...waitingExecution,
@@ -1000,7 +1000,7 @@ describe('PostgresAgentStore Job transactions', () => {
         clock: { nowMs: () => 41 },
       }),
       writer,
-      jobStore: jobStorePort(store, 'worker_hitl', 42),
+      jobActions: jobActionsPort(store, 'worker_hitl', 42),
     };
     const resumed = await executeDurableAgentLoop({
       ...resumeExecution,
@@ -1023,9 +1023,9 @@ describe('PostgresAgentStore Job transactions', () => {
       job: { status: 'completed', version: 4 },
       message: { content: 'resumed final answer' },
     });
-    expect((await store.listSessionMessages('session_hitl')).map(message => message.messageType))
+    expect((await store.sessions.listMessages('session_hitl')).map(message => message.messageType))
       .toEqual(['user_message', 'tool_call', 'tool_result', 'assistant_message']);
-    expect((await store.listModelCalls('job_hitl')).map(call => ({
+    expect((await store.models.listCalls('job_hitl')).map(call => ({
       logicalCallKey: call.logicalCallKey,
       callAttemptNo: call.callAttemptNo,
       attemptId: call.attemptId,
@@ -1050,13 +1050,13 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('applies versioned Plan snapshots inside the single Job loop', async () => {
-    await store.createSession({ id: 'session_plan_tool', nowMs: 10 });
+    await store.sessions.create({ id: 'session_plan_tool', nowMs: 10 });
     await createJob(store, 'session_plan_tool', 'job_plan_tool', 'message_plan_tool', 20);
-    const job = await store.startJobExecution({
+    const job = await store.jobs.startExecution({
       jobId: 'job_plan_tool', expectedVersion: 0, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', nowMs: 30, leaseUntilMs: 200,
     });
-    const created = await store.applyPlanUpdate({
+    const created = await store.plans.applyUpdate({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 0,
       title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 31,
@@ -1070,7 +1070,7 @@ describe('PostgresAgentStore Job transactions', () => {
       plan: { id: 'plan_tool', status: 'active', version: 0 },
       steps: [{ key: 'research', status: 'in_progress' }, { key: 'write', status: 'pending' }],
     });
-    const replayedCreate = await store.applyPlanUpdate({
+    const replayedCreate = await store.plans.applyUpdate({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 0,
       title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 32,
@@ -1082,7 +1082,7 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     expect(replayedCreate.plan).toMatchObject({ version: 0, updatedAtMs: 31 });
 
-    const advanced = await store.applyPlanUpdate({
+    const advanced = await store.plans.applyUpdate({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 0,
       title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 32,
@@ -1102,7 +1102,7 @@ describe('PostgresAgentStore Job transactions', () => {
         { key: 'write', status: 'in_progress' },
       ],
     });
-    await store.commitModelToolCalls({
+    await store.execution.commitModelToolCalls({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', outputId: 'output_plan_write',
       messageId: 'message_plan_write_call', content: '', nowMs: 32,
@@ -1113,11 +1113,11 @@ describe('PostgresAgentStore Job transactions', () => {
         sideEffectLevel: 'idempotent', idempotencyKey: 'job_plan_tool:call_plan_write',
       }],
     });
-    await store.tryStartToolExecution({
+    await store.execution.tryStartTool({
       jobId: job.id, toolCallId: 'call_plan_write', workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', nowMs: 32,
     });
-    await store.commitToolResult({
+    await store.execution.commitToolResult({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', toolCallId: 'call_plan_write',
       messageId: 'message_plan_write_result', nowMs: 32,
@@ -1132,7 +1132,7 @@ describe('PostgresAgentStore Job transactions', () => {
         }],
       },
     });
-    expect(await store.listPlanSteps('plan_tool')).toMatchObject([
+    expect(await store.plans.listSteps('plan_tool')).toMatchObject([
       { key: 'research' },
       {
         key: 'write',
@@ -1142,7 +1142,7 @@ describe('PostgresAgentStore Job transactions', () => {
         },
       },
     ]);
-    await expect(store.applyPlanUpdate({
+    await expect(store.plans.applyUpdate({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 1,
       title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 33,
@@ -1152,7 +1152,7 @@ describe('PostgresAgentStore Job transactions', () => {
       ],
     })).rejects.toMatchObject({ code: 'INVALID_PLAN_STATE' });
 
-    const completed = await store.applyPlanUpdate({
+    const completed = await store.plans.applyUpdate({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 1,
       title: 'Research and write', goal: 'hello job_plan_tool', nowMs: 34,
@@ -1181,7 +1181,7 @@ describe('PostgresAgentStore Job transactions', () => {
         artifactIds: ['artifact_plan_write'],
       },
     });
-    await expect(store.applyPlanUpdate({
+    await expect(store.plans.applyUpdate({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', planId: 'plan_tool', expectedVersion: 2,
       title: 'Reopen completed work', goal: 'hello job_plan_tool', nowMs: 35,
@@ -1197,7 +1197,7 @@ describe('PostgresAgentStore Job transactions', () => {
         },
       ],
     })).rejects.toMatchObject({ code: 'INVALID_PLAN_STATE' });
-    await expect(store.completeJobWithFinalMessage({
+    await expect(store.execution.completeWithFinalMessage({
       sessionId: job.sessionId, jobId: job.id, workerId: 'worker_plan_tool',
       attemptId: 'attempt_plan_tool', outputId: 'output_plan_tool',
       messageId: 'message_plan_tool_final', content: 'Report complete', nowMs: 36,
@@ -1208,9 +1208,9 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('audits ModelCalls, accumulates usage, abandons orphaned calls, and replaces summaries', async () => {
-    await store.createSession({ id: 'session_audit', nowMs: 10 });
+    await store.sessions.create({ id: 'session_audit', nowMs: 10 });
     await createJob(store, 'session_audit', 'job_audit', 'message_audit', 20);
-    const job = await store.startJobExecution({
+    const job = await store.jobs.startExecution({
       jobId: 'job_audit', expectedVersion: 0, workerId: 'worker_audit',
       attemptId: 'attempt_audit', nowMs: 30, leaseUntilMs: 200,
     });
@@ -1225,7 +1225,7 @@ describe('PostgresAgentStore Job transactions', () => {
         system: 10, tools: 0, summaries: 0, messages: 70, reservedOutput: 10,
       },
     };
-    await store.startModelCall({
+    await store.models.startCall({
       id: 'model_call_1', sessionId: 'session_audit', jobId: job.id,
       attemptId: 'attempt_audit', workerId: 'worker_audit',
       logicalCallKey: 'job.react:1', callAttemptNo: 1, callType: 'job.react',
@@ -1233,7 +1233,7 @@ describe('PostgresAgentStore Job transactions', () => {
       inputManifest: manifest, inputMessages: [], inputChecksum: 'checksum_1',
       maxContextTokens: 100, reservedOutputTokens: 10, estimatedInputTokens: 80, nowMs: 31,
     });
-    const completed = await store.completeModelCall({
+    const completed = await store.models.completeCall({
       id: 'model_call_1', status: 'completed', usageSource: 'provider',
       actualInputTokens: 95, actualOutputTokens: 5, actualTotalTokens: 100,
       outputId: 'output_audit', resultType: 'text', resultPayload: { content: 'done' }, nowMs: 32,
@@ -1249,7 +1249,7 @@ describe('PostgresAgentStore Job transactions', () => {
         warningLevel: 'critical',
       },
     });
-    await store.startModelCall({
+    await store.models.startCall({
       id: 'model_call_2', sessionId: 'session_audit', jobId: job.id,
       attemptId: 'attempt_audit', workerId: 'worker_audit',
       logicalCallKey: 'job.react:2', callAttemptNo: 1, callType: 'job.react',
@@ -1257,28 +1257,28 @@ describe('PostgresAgentStore Job transactions', () => {
       inputManifest: manifest, inputMessages: [], inputChecksum: 'checksum_2',
       maxContextTokens: 100, reservedOutputTokens: 10, estimatedInputTokens: 10, nowMs: 33,
     });
-    await expect(store.abandonStartedModelCalls(201)).resolves.toMatchObject([{
+    await expect(store.models.abandonStartedCalls(201)).resolves.toMatchObject([{
       id: 'model_call_2', status: 'failed', errorCode: 'model_call_abandoned',
     }]);
-    expect(await store.getModelUsageStats('session_audit')).toMatchObject({
+    expect(await store.models.getUsageStats('session_audit')).toMatchObject({
       totalModelCalls: 2,
       totalEstimatedInputTokens: 90,
       totalTokens: 100,
     });
-    expect(await store.listRecentSessionModelCalls('session_audit', 1)).toMatchObject([{
+    expect(await store.models.listRecentSessionCalls('session_audit', 1)).toMatchObject([{
       id: 'model_call_2', status: 'failed',
     }]);
-    expect((await store.listRecentSessionModelCalls('session_audit', 100)).map(call => call.id))
+    expect((await store.models.listRecentSessionCalls('session_audit', 100)).map(call => call.id))
       .toEqual(['model_call_1', 'model_call_2']);
 
-    const firstSummary = await store.replaceContextSummary({
+    const firstSummary = await store.context.replaceSummary({
       id: 'summary_audit_1', sessionId: 'session_audit',
       ownerType: 'session', ownerId: 'session_audit', purpose: 'conversation',
       contextRulesVersion: 'context-v1', summaryType: 'rolling',
       sourceRowIdStart: 1, sourceRowIdEnd: 1, summary: 'first', summaryFormat: 'markdown',
       sourceMessageCount: 1, compressionPromptVersion: 'compress-v1', checksum: 'sum_1', nowMs: 35,
     });
-    const secondSummary = await store.replaceContextSummary({
+    const secondSummary = await store.context.replaceSummary({
       id: 'summary_audit_2', sessionId: 'session_audit',
       ownerType: 'session', ownerId: 'session_audit', purpose: 'conversation',
       contextRulesVersion: 'context-v1', summaryType: 'rolling',
@@ -1287,10 +1287,10 @@ describe('PostgresAgentStore Job transactions', () => {
       compressionPromptVersion: 'compress-v1', checksum: 'sum_2', nowMs: 36,
     });
     expect(secondSummary).toMatchObject({ replacesSummaryId: 'summary_audit_1', status: 'active' });
-    expect(await store.listActiveContextSummaries(
+    expect(await store.context.listActiveSummaries(
       'session', 'session_audit', 'conversation', 'context-v1'
     )).toEqual([secondSummary]);
-    expect((await store.getContextSummariesByIds([
+    expect((await store.context.getSummariesByIds([
       'summary_audit_2', 'summary_audit_1', 'missing_summary',
     ])).map(summary => [summary.id, summary.status])).toEqual([
       ['summary_audit_2', 'active'],
@@ -1302,9 +1302,9 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('fails descendants atomically, preserves side-effect uncertainty, and creates retry as a new Job', async () => {
-    await store.createSession({ id: 'session_fail', nowMs: 10 });
+    await store.sessions.create({ id: 'session_fail', nowMs: 10 });
     await createJob(store, 'session_fail', 'job_fail', 'message_fail', 20);
-    const startedJob = await store.startJobExecution({
+    const startedJob = await store.jobs.startExecution({
       jobId: 'job_fail',
       expectedVersion: 0,
       workerId: 'worker_fail',
@@ -1314,7 +1314,7 @@ describe('PostgresAgentStore Job transactions', () => {
     });
     await seedRunningDescendants(pool!, startedJob.currentAttemptId!);
 
-    const failed = await store.failJob({
+    const failed = await store.jobs.fail({
       jobId: startedJob.id,
       expectedVersion: startedJob.version,
       workerId: startedJob.leaseOwner!,
@@ -1348,8 +1348,8 @@ describe('PostgresAgentStore Job transactions', () => {
       input_status: 'cancelled',
     });
 
-    const messageCountBeforeRetry = (await store.listSessionMessages('session_fail')).length;
-    const retry = await store.createRetryJob({
+    const messageCountBeforeRetry = (await store.sessions.listMessages('session_fail')).length;
+    const retry = await store.jobs.createRetry({
       sessionId: 'session_fail',
       jobId: 'job_retry',
       retryOfJobId: 'job_fail',
@@ -1361,14 +1361,14 @@ describe('PostgresAgentStore Job transactions', () => {
       retryOfJobId: 'job_fail',
       status: 'created',
     });
-    expect(await store.listSessionMessages('session_fail')).toHaveLength(messageCountBeforeRetry);
+    expect(await store.sessions.listMessages('session_fail')).toHaveLength(messageCountBeforeRetry);
   });
 
   it('cancels a created Job without requiring a lease', async () => {
-    await store.createSession({ id: 'session_cancel', nowMs: 10 });
+    await store.sessions.create({ id: 'session_cancel', nowMs: 10 });
     await createJob(store, 'session_cancel', 'job_cancel', 'message_cancel', 20);
 
-    await expect(store.cancelJob({
+    await expect(store.jobs.cancel({
       jobId: 'job_cancel',
       expectedVersion: 0,
       nowMs: 30,
@@ -1380,24 +1380,24 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('lists created and lease-expired Jobs for runtime recovery', async () => {
-    await store.createSession({ id: 'session_recover_created', nowMs: 10 });
+    await store.sessions.create({ id: 'session_recover_created', nowMs: 10 });
     await createJob(store, 'session_recover_created', 'job_recover_created', 'message_created', 20);
 
-    await store.createSession({ id: 'session_recover_expired', nowMs: 11 });
+    await store.sessions.create({ id: 'session_recover_expired', nowMs: 11 });
     await createJob(store, 'session_recover_expired', 'job_recover_expired', 'message_expired', 21);
-    await store.startJobExecution({
+    await store.jobs.startExecution({
       jobId: 'job_recover_expired', expectedVersion: 0, workerId: 'worker_dead',
       attemptId: 'attempt_expired', nowMs: 30, leaseUntilMs: 100,
     });
 
-    await store.createSession({ id: 'session_recover_live', nowMs: 12 });
+    await store.sessions.create({ id: 'session_recover_live', nowMs: 12 });
     await createJob(store, 'session_recover_live', 'job_recover_live', 'message_live', 22);
-    await store.startJobExecution({
+    await store.jobs.startExecution({
       jobId: 'job_recover_live', expectedVersion: 0, workerId: 'worker_live',
       attemptId: 'attempt_live', nowMs: 31, leaseUntilMs: 101,
     });
 
-    await expect(store.listJobsNeedingRuntimeRecovery({
+    await expect(store.jobs.listNeedingRecovery({
       nowMs: 100, createdBeforeMs: 100, limit: 10,
     })).resolves.toEqual(
       expect.arrayContaining([
@@ -1405,7 +1405,7 @@ describe('PostgresAgentStore Job transactions', () => {
         expect.objectContaining({ id: 'job_recover_expired', status: 'running' }),
       ])
     );
-    const recoverableIds = (await store.listJobsNeedingRuntimeRecovery({
+    const recoverableIds = (await store.jobs.listNeedingRecovery({
       nowMs: 100, createdBeforeMs: 100, limit: 10,
     }))
       .map(job => job.id);
@@ -1413,7 +1413,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('resumes a checkpointed tool batch and retries only safe interrupted invocations', async () => {
-    await store.createSession({ id: 'session_checkpoint_resume', nowMs: 10 });
+    await store.sessions.create({ id: 'session_checkpoint_resume', nowMs: 10 });
     await createJob(
       store,
       'session_checkpoint_resume',
@@ -1421,11 +1421,11 @@ describe('PostgresAgentStore Job transactions', () => {
       'message_checkpoint_resume',
       20
     );
-    const firstAttempt = await store.startJobExecution({
+    const firstAttempt = await store.jobs.startExecution({
       jobId: 'job_checkpoint_resume', expectedVersion: 0, workerId: 'worker_dead',
       attemptId: 'attempt_checkpoint_1', nowMs: 30, leaseUntilMs: 100,
     });
-    await store.commitModelToolCalls({
+    await store.execution.commitModelToolCalls({
       sessionId: firstAttempt.sessionId,
       jobId: firstAttempt.id,
       workerId: 'worker_dead',
@@ -1451,7 +1451,7 @@ describe('PostgresAgentStore Job transactions', () => {
         },
       ],
     });
-    await store.tryStartToolExecution({
+    await store.execution.tryStartTool({
       jobId: firstAttempt.id,
       toolCallId: 'call_checkpoint_1',
       workerId: 'worker_dead',
@@ -1459,11 +1459,11 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 50,
     });
 
-    const expired = (await store.getJob(firstAttempt.id))!;
-    const paused = await store.markJobRecoveryRequired({
+    const expired = (await store.jobs.get(firstAttempt.id))!;
+    const paused = await store.jobs.markRecoveryRequired({
       jobId: expired.id, expectedVersion: expired.version, nowMs: 101,
     });
-    const resumed = await store.startJobExecution({
+    const resumed = await store.jobs.startExecution({
       jobId: paused.id,
       expectedVersion: paused.version,
       workerId: 'worker_recovery',
@@ -1471,7 +1471,7 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 101,
       leaseUntilMs: 200,
     });
-    const prepared = await store.prepareToolInvocationsForRecovery({
+    const prepared = await store.execution.prepareToolsForRecovery({
       jobId: resumed.id,
       workerId: 'worker_recovery',
       attemptId: 'attempt_checkpoint_2',
@@ -1502,7 +1502,7 @@ describe('PostgresAgentStore Job transactions', () => {
   });
 
   it('marks an interrupted side-effecting tool unknown instead of replaying it', async () => {
-    await store.createSession({ id: 'session_checkpoint_unknown', nowMs: 10 });
+    await store.sessions.create({ id: 'session_checkpoint_unknown', nowMs: 10 });
     await createJob(
       store,
       'session_checkpoint_unknown',
@@ -1510,12 +1510,12 @@ describe('PostgresAgentStore Job transactions', () => {
       'message_checkpoint_unknown',
       20
     );
-    const firstAttempt = await store.startJobExecution({
+    const firstAttempt = await store.jobs.startExecution({
       jobId: 'job_checkpoint_unknown', expectedVersion: 0, workerId: 'worker_dead',
       attemptId: 'attempt_unknown_1', nowMs: 30, leaseUntilMs: 100,
     });
     const args = { command: 'deploy' };
-    await store.commitModelToolCalls({
+    await store.execution.commitModelToolCalls({
       sessionId: firstAttempt.sessionId,
       jobId: firstAttempt.id,
       workerId: 'worker_dead',
@@ -1532,18 +1532,18 @@ describe('PostgresAgentStore Job transactions', () => {
         idempotencyKey: 'job_checkpoint_unknown:call_unknown',
       }],
     });
-    await store.tryStartToolExecution({
+    await store.execution.tryStartTool({
       jobId: firstAttempt.id,
       toolCallId: 'call_unknown',
       workerId: 'worker_dead',
       attemptId: 'attempt_unknown_1',
       nowMs: 50,
     });
-    const expired = (await store.getJob(firstAttempt.id))!;
-    const paused = await store.markJobRecoveryRequired({
+    const expired = (await store.jobs.get(firstAttempt.id))!;
+    const paused = await store.jobs.markRecoveryRequired({
       jobId: expired.id, expectedVersion: expired.version, nowMs: 101,
     });
-    const resumed = await store.startJobExecution({
+    const resumed = await store.jobs.startExecution({
       jobId: paused.id,
       expectedVersion: paused.version,
       workerId: 'worker_recovery',
@@ -1551,7 +1551,7 @@ describe('PostgresAgentStore Job transactions', () => {
       nowMs: 101,
       leaseUntilMs: 200,
     });
-    const prepared = await store.prepareToolInvocationsForRecovery({
+    const prepared = await store.execution.prepareToolsForRecovery({
       jobId: resumed.id,
       workerId: 'worker_recovery',
       attemptId: 'attempt_unknown_2',
@@ -1561,18 +1561,18 @@ describe('PostgresAgentStore Job transactions', () => {
     expect(prepared.blockedInvocations).toEqual([
       expect.objectContaining({ toolCallId: 'call_unknown', status: 'unknown' }),
     ]);
-    expect(await store.getToolInvocation(resumed.id, 'call_unknown')).toMatchObject({
+    expect(await store.execution.getToolInvocation(resumed.id, 'call_unknown')).toMatchObject({
       status: 'unknown',
       error: { code: 'side_effect_status_unknown' },
     });
   });
 
   it('allows a cancelled Job to be continued as a new retry Job', async () => {
-    await store.createSession({ id: 'session_cancel_retry', nowMs: 10 });
+    await store.sessions.create({ id: 'session_cancel_retry', nowMs: 10 });
     await createJob(store, 'session_cancel_retry', 'job_cancel_retry', 'message_cancel_retry', 20);
-    await store.cancelJob({ jobId: 'job_cancel_retry', expectedVersion: 0, nowMs: 30 });
+    await store.jobs.cancel({ jobId: 'job_cancel_retry', expectedVersion: 0, nowMs: 30 });
 
-    await expect(store.createRetryJob({
+    await expect(store.jobs.createRetry({
       sessionId: 'session_cancel_retry',
       jobId: 'job_after_cancel',
       retryOfJobId: 'job_cancel_retry',
@@ -1616,8 +1616,8 @@ async function loadPersistedToolMessages(
   sessionId: string
 ): Promise<BaseMessage[]> {
   const [messages, invocations] = await Promise.all([
-    store.listSessionMessages(sessionId),
-    store.listSessionToolInvocations(sessionId),
+    store.sessions.listMessages(sessionId),
+    store.sessions.listToolInvocations(sessionId),
   ]);
   const formatter = new ContextFormatter();
   return new MessageGroupBuilder()
@@ -1722,7 +1722,7 @@ async function createJob(
   userMessageId: string,
   nowMs: number
 ) {
-  return store.createJobAndAppendUserMessage({
+  return store.jobs.createWithUserMessage({
     sessionId,
     jobId,
     userMessageId,
@@ -1740,16 +1740,16 @@ function noOpJobExecutor(): JobExecutorPort {
   };
 }
 
-function jobStorePort(
+function jobActionsPort(
   store: PostgresAgentStore,
   workerId: string,
   nowMs: number
-): JobStorePort {
+): JobActionsPort {
   return {
-    getJob: jobId => store.getJob(jobId),
+    getJob: jobId => store.jobs.get(jobId),
     fail: (job, error) => {
       if (!job.currentAttemptId) throw new Error(`Job ${job.id} has no active attempt.`);
-      return store.failJob({
+      return store.jobs.fail({
         jobId: job.id,
         expectedVersion: job.version,
         workerId,
@@ -1758,7 +1758,7 @@ function jobStorePort(
         nowMs,
       });
     },
-    cancel: (jobId, expectedVersion) => store.cancelJob({
+    cancel: (jobId, expectedVersion) => store.jobs.cancel({
       jobId,
       expectedVersion,
       nowMs,

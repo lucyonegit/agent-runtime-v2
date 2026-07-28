@@ -152,19 +152,20 @@ export interface TokenBudgetItem<T> {
   originalOrder: number;
 }
 
-export type ReActContextStore = Pick<AgentStore,
-  | 'listSessionJobs'
-  | 'listSessionMessages'
-  | 'listSessionToolInvocations'
-  | 'listActiveContextSummaries'
-  | 'listRecentSessionModelCalls'
-> & Partial<Pick<AgentStore,
-  | 'listSessionPlans'
-  | 'listSessionPlanSteps'
-  | 'listSessionArtifacts'
-  | 'listSessionUserInputRequests'
-  | 'replaceContextSummary'
->>;
+export interface ReActContextStore {
+  sessions: Pick<AgentStore['sessions'],
+    | 'listJobs'
+    | 'listMessages'
+    | 'listToolInvocations'
+    | 'listPlans'
+    | 'listPlanSteps'
+    | 'listArtifacts'
+    | 'listUserInputRequests'
+  >;
+  models: Pick<AgentStore['models'], 'listRecentSessionCalls'>;
+  context: Pick<AgentStore['context'], 'listActiveSummaries'>
+    & Partial<Pick<AgentStore['context'], 'replaceSummary'>>;
+}
 
 export interface ReActContextMaterialOptions {
   store: ReActContextStore;

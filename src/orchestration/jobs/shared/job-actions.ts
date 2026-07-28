@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   resolveJobGoalMessage,
   withGoalMessageId,
@@ -14,22 +15,22 @@ import {
 } from '../../../storage/agent-store.js';
 import { RuntimeError, mapStoreError } from '../../../runtime/errors/runtime-error.js';
 
-export interface JobStoreClock {
+export interface JobActionsClock {
   nowMs(): number;
 }
 
-export interface JobStoreIds {
+export interface JobActionsIds {
   jobId(): string;
   messageId(): string;
   attemptId(): string;
 }
 
-export interface JobStoreOptions {
+export interface JobActionsOptions {
   store: AgentStore;
   workerId: string;
   jobLeaseMs: number;
-  clock: JobStoreClock;
-  ids?: JobStoreIds;
+  clock: JobActionsClock;
+  ids?: JobActionsIds;
 }
 
 export interface CreateJobInput {
@@ -62,17 +63,17 @@ export interface SaveUserInputAnswerInput {
 }
 
 /**
- * Job-specific storage gateway for durable commands.
+ * Application-level Job actions backed by the durable AgentStore.
  *
  * This class makes database-backed AgentStore operations explicit at call
  * sites. It owns persistence preconditions, generated IDs and store-error
  * mapping. Business sequencing, realtime publication and background dispatch
  * deliberately stay in the owning orchestration Flow.
  */
-export class JobStore {
-  readonly #ids: JobStoreIds;
+export class JobActions {
+  readonly #ids: JobActionsIds;
 
-  constructor(private readonly options: JobStoreOptions) {
+  constructor(private readonly options: JobActionsOptions) {
     this.#ids = options.ids ?? randomIds;
   }
 
@@ -81,7 +82,7 @@ export class JobStore {
     const jobId = input.jobId ?? this.#ids.jobId();
     const userMessageId = input.userMessageId ?? this.#ids.messageId();
     try {
-      return await this.options.store.createJobAndAppendUserMessage({
+      return await this.options.store.jobs.createWithUserMessage({
         sessionId: input.sessionId,
         jobId,
         userMessageId,
@@ -106,7 +107,7 @@ export class JobStore {
   async createRetryFromOriginalGoal(input: CreateRetryJobInput): Promise<CreateRetryJobResult> {
     const { source, sourceGoalMessageId } = await this.#loadRetrySource(input.failedJobId);
     try {
-      return await this.options.store.createRetryJob({
+      return await this.options.store.jobs.createRetry({
         sessionId: source.sessionId,
         jobId: input.jobId ?? this.#ids.jobId(),
         retryOfJobId: source.id,
@@ -125,7 +126,7 @@ export class JobStore {
     const { source } = await this.#loadRetrySource(input.failedJobId);
     const userMessageId = input.userMessageId ?? this.#ids.messageId();
     try {
-      return await this.options.store.createJobAndAppendUserMessage({
+      return await this.options.store.jobs.createWithUserMessage({
         sessionId: source.sessionId,
         jobId: input.jobId ?? this.#ids.jobId(),
         userMessageId,
@@ -143,7 +144,7 @@ export class JobStore {
   async startAttempt(job: AgentJob): Promise<AgentJob> {
     const nowMs = this.options.clock.nowMs();
     try {
-      return await this.options.store.startJobExecution({
+      return await this.options.store.jobs.startExecution({
         jobId: job.id,
         expectedVersion: job.version,
         workerId: this.options.workerId,
@@ -179,7 +180,7 @@ export class JobStore {
       );
     }
     try {
-      return await this.options.store.prepareToolInvocationsForRecovery({
+      return await this.options.store.execution.prepareToolsForRecovery({
         jobId: job.id,
         workerId: this.options.workerId,
         attemptId: job.currentAttemptId,
@@ -192,7 +193,7 @@ export class JobStore {
 
   async getJob(jobId: string): Promise<AgentJob | undefined> {
     try {
-      return await this.options.store.getJob(jobId);
+      return await this.options.store.jobs.get(jobId);
     } catch (error) {
       throw mapStoreError(error);
     }
@@ -208,7 +209,7 @@ export class JobStore {
     }
     const nowMs = this.options.clock.nowMs();
     try {
-      return await this.options.store.renewJobExecutionLease({
+      return await this.options.store.jobs.renewExecutionOwnership({
         jobId: job.id,
         expectedVersion: job.version,
         workerId: this.options.workerId,
@@ -223,7 +224,7 @@ export class JobStore {
 
   async markRecoveryRequired(jobId: string, expectedVersion: number): Promise<AgentJob> {
     try {
-      return await this.options.store.markJobRecoveryRequired({
+      return await this.options.store.jobs.markRecoveryRequired({
         jobId,
         expectedVersion,
         nowMs: this.options.clock.nowMs(),
@@ -238,7 +239,7 @@ export class JobStore {
       throw new RuntimeError('lease_lost', `Job ${JSON.stringify(job.id)} has no active attempt.`);
     }
     try {
-      return await this.options.store.failJob({
+      return await this.options.store.jobs.fail({
         jobId: job.id,
         expectedVersion: job.version,
         workerId: this.options.workerId,
@@ -253,7 +254,7 @@ export class JobStore {
 
   async cancel(jobId: string, expectedVersion: number): Promise<AgentJob> {
     try {
-      return await this.options.store.cancelJob({
+      return await this.options.store.jobs.cancel({
         jobId,
         expectedVersion,
         nowMs: this.options.clock.nowMs(),
@@ -266,7 +267,7 @@ export class JobStore {
   async answerUserInput(input: SaveUserInputAnswerInput): Promise<SaveUserInputAnswerResult> {
     const nowMs = this.options.clock.nowMs();
     try {
-      return await this.options.store.saveUserInputAnswerAndResumeIfReady({
+      return await this.options.store.execution.answerUserInput({
         requestId: input.requestId,
         expectedVersion: input.expectedVersion,
         clientAnswerId: input.clientAnswerId,
@@ -299,7 +300,7 @@ export class JobStore {
         `Retry source Job ${JSON.stringify(source.id)} must be failed or cancelled, not ${source.status}.`
       );
     }
-    const sourceMessages = await this.options.store.listSessionMessages(source.sessionId);
+    const sourceMessages = await this.options.store.sessions.listMessages(source.sessionId);
     const sourceGoalMessage = resolveJobGoalMessage(source, sourceMessages);
     if (!sourceGoalMessage) {
       throw new RuntimeError(
@@ -311,7 +312,7 @@ export class JobStore {
   }
 }
 
-const randomIds: JobStoreIds = {
+const randomIds: JobActionsIds = {
   jobId: () => `job_${randomUUID()}`,
   messageId: () => `message_${randomUUID()}`,
   attemptId: () => `attempt_${randomUUID()}`,
@@ -322,9 +323,9 @@ async function resolveIdempotentCreate(
   input: CreateJobInput
 ): Promise<CreateJobAndAppendUserMessageResult> {
   const [session, job, messages] = await Promise.all([
-    store.getSession(input.sessionId),
-    store.getJobByClientRequestId(input.sessionId, input.clientRequestId!),
-    store.listSessionMessages(input.sessionId),
+    store.sessions.get(input.sessionId),
+    store.jobs.getByClientRequestId(input.sessionId, input.clientRequestId!),
+    store.sessions.listMessages(input.sessionId),
   ]);
   const message = job && messages.find(candidate => (
     candidate.jobId === job.id && candidate.messageType === 'user_message'
@@ -344,4 +345,3 @@ async function resolveIdempotentCreate(
   }
   return { session, job, message };
 }
-import { randomUUID } from 'node:crypto';

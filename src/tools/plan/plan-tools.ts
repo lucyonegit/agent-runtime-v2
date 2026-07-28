@@ -79,9 +79,9 @@ export function createPlanTools(options: CreatePlanToolsOptions): RuntimeTool[] 
       if (context.attemptId.length === 0) throw new Error('update_plan requires an active Job attempt.');
       const input = parsePlanInput(rawInput as Record<string, unknown>);
       const [job, messages, existingPlan] = await Promise.all([
-        options.store.getJob(context.jobId),
-        options.store.listSessionMessages(context.sessionId),
-        options.store.getPlanByJobId(context.jobId),
+        options.store.jobs.get(context.jobId),
+        options.store.sessions.listMessages(context.sessionId),
+        options.store.plans.getByJobId(context.jobId),
       ]);
       if (!job || job.sessionId !== context.sessionId) {
         throw new Error(`Job ${JSON.stringify(context.jobId)} was not found.`);
@@ -89,10 +89,10 @@ export function createPlanTools(options: CreatePlanToolsOptions): RuntimeTool[] 
       const goal = resolveJobGoalMessage(job, messages)?.content;
       if (!goal) throw new Error(`Job ${JSON.stringify(job.id)} has no original user goal.`);
       const existingSteps = existingPlan
-        ? await options.store.listPlanSteps(existingPlan.id)
+        ? await options.store.plans.listSteps(existingPlan.id)
         : [];
       const existingByKey = new Map(existingSteps.map(step => [step.key, step]));
-      const result = await options.store.applyPlanUpdate({
+      const result = await options.store.plans.applyUpdate({
         sessionId: context.sessionId,
         jobId: context.jobId,
         workerId: options.workerId,

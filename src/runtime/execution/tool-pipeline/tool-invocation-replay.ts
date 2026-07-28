@@ -16,7 +16,7 @@ export class ToolInvocationReplay {
         message: `Tool invocation is ${invocation.status} without a committed result message.`,
       };
     }
-    const messages = await this.store.listSessionMessages(invocation.sessionId);
+    const messages = await this.store.sessions.listMessages(invocation.sessionId);
     const message = messages.find(candidate => candidate.id === invocation.resultMessageId);
     if (!message?.toolResult) {
       throw new FatalToolExecutionError(

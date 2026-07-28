@@ -22,7 +22,7 @@ export class SessionView {
   ) {}
 
   async load(sessionId: string): Promise<SessionViewV1> {
-    const session = await this.store.getSession(sessionId);
+    const session = await this.store.sessions.get(sessionId);
     if (!session) {
       throw new AgentStoreError('SESSION_NOT_FOUND', `Agent session ${JSON.stringify(sessionId)} was not found.`);
     }
@@ -37,15 +37,15 @@ export class SessionView {
       userInputRequests,
       modelUsage,
     ] = await Promise.all([
-      this.store.listSessionJobs(sessionId),
-      this.store.listSessionPlans(sessionId),
-      this.store.listSessionPlanSteps(sessionId),
-      this.store.listSessionMessages(sessionId),
-      this.store.listSessionToolInvocations(sessionId),
-      this.store.listSessionArtifacts(sessionId),
+      this.store.sessions.listJobs(sessionId),
+      this.store.sessions.listPlans(sessionId),
+      this.store.sessions.listPlanSteps(sessionId),
+      this.store.sessions.listMessages(sessionId),
+      this.store.sessions.listToolInvocations(sessionId),
+      this.store.sessions.listArtifacts(sessionId),
       this.processReader?.listSessionProcesses(sessionId) ?? Promise.resolve([]),
-      this.store.listSessionUserInputRequests(sessionId),
-      this.store.getModelUsageStats(sessionId),
+      this.store.sessions.listUserInputRequests(sessionId),
+      this.store.models.getUsageStats(sessionId),
     ]);
     const visibleMessages = allMessages.filter(message => message.visibility === 'ui');
     const projected = projectSensitiveAnswers(visibleMessages, toolInvocations, userInputRequests);

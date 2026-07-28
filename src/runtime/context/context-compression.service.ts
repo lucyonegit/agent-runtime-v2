@@ -29,7 +29,7 @@ import type {
 } from './types/context.types.js';
 import type { ContextMemoryV1 } from './types/context-memory.types.js';
 
-type ContextCompressionStore = Pick<AgentStore, 'replaceContextSummary'>;
+type ContextCompressionStore = Pick<AgentStore['context'], 'replaceSummary'>;
 
 export interface ContextCompressionServiceOptions {
   store: ContextCompressionStore;
@@ -190,7 +190,7 @@ export class ContextCompressionService {
 
     // 原子替换 Session 当前的 rolling summary，同时保留 parentSummaryId 和输入清单用于审计。
     // 成功落库后返回 true，构建循环会重新读取数据，此时已覆盖的原文将不再进入模型上下文。
-    await this.options.store.replaceContextSummary({
+    await this.options.store.replaceSummary({
       id: this.#ids.summaryId(),
       sessionId: input.job.sessionId,
       jobId: input.job.id,

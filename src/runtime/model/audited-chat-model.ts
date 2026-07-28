@@ -105,7 +105,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       throw error;
     } finally {
       if (!completed) {
-        const cancelled = await this.#options.store.completeModelCall({
+        const cancelled = await this.#options.store.models.completeCall({
           id: callId,
           status: 'cancelled',
           usageSource: combined?.usage_metadata ? 'provider' : 'unavailable',
@@ -127,7 +127,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
     const manifest = typeof this.#options.baseManifest === 'function'
       ? this.#options.baseManifest()
       : this.#options.baseManifest;
-    await this.#options.store.startModelCall({
+    await this.#options.store.models.startCall({
       id,
       sessionId: this.#options.target.sessionId,
       jobId: this.#options.target.jobId,
@@ -164,7 +164,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       toolNames?: string[];
     }
   ): Promise<void> {
-    const completed = await this.#options.store.completeModelCall({
+    const completed = await this.#options.store.models.completeCall({
       id,
       status: 'completed',
       usageSource: usage ? 'provider' : 'unavailable',
@@ -176,7 +176,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
   }
 
   async #fail(id: string, error: unknown): Promise<void> {
-    const completed = await this.#options.store.completeModelCall({
+    const completed = await this.#options.store.models.completeCall({
       id,
       status: 'failed',
       usageSource: 'unavailable',
@@ -188,7 +188,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
   }
 
   async #cancel(id: string, error: unknown, usage?: UsageMetadata): Promise<void> {
-    const completed = await this.#options.store.completeModelCall({
+    const completed = await this.#options.store.models.completeCall({
       id,
       status: 'cancelled',
       usageSource: usage ? 'provider' : 'unavailable',
@@ -200,7 +200,9 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
     await this.#publishUsage(completed.usage);
   }
 
-  async #publishUsage(stats: Awaited<ReturnType<AgentStore['completeModelCall']>>['usage']): Promise<void> {
+  async #publishUsage(
+    stats: Awaited<ReturnType<AgentStore['models']['completeCall']>>['usage']
+  ): Promise<void> {
     try {
       await this.#options.publisher?.publish({
         type: 'model_usage.updated',

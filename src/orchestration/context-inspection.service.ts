@@ -13,6 +13,7 @@ import { ReActContextService } from '../runtime/context/react-context.service.js
 import type {
   BuiltContext,
   ContextModelBudget,
+  ReActContextStore,
 } from '../runtime/context/types/context.types.js';
 import { RuntimeError } from '../runtime/errors/runtime-error.js';
 import { stableStringify } from '../runtime/helpers/stable-json.helper.js';
@@ -36,20 +37,11 @@ export interface ContextSnapshot {
 
 const ACTIVE_JOB_STATUS_SET = new Set<AgentJob['status']>(ACTIVE_JOB_STATUSES);
 
-export type ContextInspectionStore = Pick<AgentStore,
-  | 'getSession'
-  | 'getJob'
-  | 'getModelCall'
-  | 'listSessionJobs'
-  | 'listSessionMessages'
-  | 'listSessionToolInvocations'
-  | 'listSessionPlans'
-  | 'listSessionPlanSteps'
-  | 'listSessionArtifacts'
-  | 'listSessionUserInputRequests'
-  | 'listActiveContextSummaries'
-  | 'listRecentSessionModelCalls'
->;
+export interface ContextInspectionStore extends ReActContextStore {
+  sessions: ReActContextStore['sessions'] & Pick<AgentStore['sessions'], 'get'>;
+  jobs: Pick<AgentStore['jobs'], 'get'>;
+  models: ReActContextStore['models'] & Pick<AgentStore['models'], 'getCall'>;
+}
 
 export interface ContextInspectionServiceOptions {
   store: ContextInspectionStore;
@@ -91,20 +83,20 @@ export class ContextInspectionService {
   }
 
   async #nextTurn(query: Extract<ContextQuery, { kind: 'next_turn' }>): Promise<ContextSnapshot> {
-    const session = await this.options.store.getSession(query.sessionId);
+    const session = await this.options.store.sessions.get(query.sessionId);
     if (!session) {
       throw new AgentStoreError(
         'SESSION_NOT_FOUND',
         `Agent session ${JSON.stringify(query.sessionId)} was not found.`
       );
     }
-    const jobs = await this.options.store.listSessionJobs(query.sessionId);
+    const jobs = await this.options.store.sessions.listJobs(query.sessionId);
     assertNoActiveJob(jobs);
     const preview = await this.#contexts.previewNextTurn(session.id);
     const snapshot = this.#snapshot(query, session.id, preview.built, {
       basedOnLatestJobId: preview.latestJobId,
     });
-    assertNoActiveJob(await this.options.store.listSessionJobs(query.sessionId));
+    assertNoActiveJob(await this.options.store.sessions.listJobs(query.sessionId));
     return snapshot;
   }
 
@@ -119,7 +111,7 @@ export class ContextInspectionService {
   }
 
   async #modelCall(modelCallId: string, query: ContextQuery): Promise<ContextSnapshot> {
-    const call = await this.options.store.getModelCall(modelCallId);
+    const call = await this.options.store.models.getCall(modelCallId);
     if (!call) throw new Error(`ModelCall ${JSON.stringify(modelCallId)} was not found.`);
     const built = reconstructRecordedModelCall(call);
     return this.#snapshot(query, call.sessionId, built, {
@@ -133,7 +125,7 @@ export class ContextInspectionService {
   }
 
   async #requireJob(jobId: string): Promise<AgentJob> {
-    const job = await this.options.store.getJob(jobId);
+    const job = await this.options.store.jobs.get(jobId);
     if (!job) throw new Error(`Job ${JSON.stringify(jobId)} was not found.`);
     return job;
   }

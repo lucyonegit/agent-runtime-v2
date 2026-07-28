@@ -8,8 +8,8 @@ export class PendingToolCallLoader {
   async load(job: AgentJob, callMessageId?: string) {
     if (!callMessageId) return [];
     const [messages, invocations] = await Promise.all([
-      this.store.listSessionMessages(job.sessionId),
-      this.store.listSessionToolInvocations(job.sessionId),
+      this.store.sessions.listMessages(job.sessionId),
+      this.store.sessions.listToolInvocations(job.sessionId),
     ]);
     const callMessage = messages.find(message => message.id === callMessageId);
     if (!callMessage?.toolCalls?.length) {

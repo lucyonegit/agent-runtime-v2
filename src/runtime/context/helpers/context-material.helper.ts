@@ -39,7 +39,7 @@ export async function loadJobContextMaterial(
 ): Promise<ContextMaterial> {
   const [facts, modelCalls] = await Promise.all([
     loadSessionFacts(options, job.sessionId),
-    options.store.listRecentSessionModelCalls(
+    options.store.models.listRecentSessionCalls(
       job.sessionId,
       (options.contextConfig ?? DEFAULT_CONTEXT_CONFIG).projection.recentModelCallLimit
     ),
@@ -63,7 +63,7 @@ export async function loadNextTurnContextMaterial(
 ): Promise<{ material: ContextMaterial; latestJobId?: string }> {
   const [facts, modelCalls] = await Promise.all([
     loadSessionFacts(options, sessionId),
-    options.store.listRecentSessionModelCalls(
+    options.store.models.listRecentSessionCalls(
       sessionId,
       (options.contextConfig ?? DEFAULT_CONTEXT_CONFIG).projection.recentModelCallLimit
     ),
@@ -99,19 +99,19 @@ async function loadSessionFacts(
   const [
     jobs, messages, invocations, summaries, plans, planSteps, artifacts, userInputRequests,
   ] = await Promise.all([
-    options.store.listSessionJobs(sessionId),
-    options.store.listSessionMessages(sessionId),
-    options.store.listSessionToolInvocations(sessionId),
-    options.store.listActiveContextSummaries(
+    options.store.sessions.listJobs(sessionId),
+    options.store.sessions.listMessages(sessionId),
+    options.store.sessions.listToolInvocations(sessionId),
+    options.store.context.listActiveSummaries(
       'session',
       sessionId,
       'conversation',
       CONTEXT_RULES_VERSION
     ),
-    options.store.listSessionPlans?.(sessionId) ?? Promise.resolve([]),
-    options.store.listSessionPlanSteps?.(sessionId) ?? Promise.resolve([]),
-    options.store.listSessionArtifacts?.(sessionId) ?? Promise.resolve([]),
-    options.store.listSessionUserInputRequests?.(sessionId) ?? Promise.resolve([]),
+    options.store.sessions.listPlans(sessionId),
+    options.store.sessions.listPlanSteps(sessionId),
+    options.store.sessions.listArtifacts(sessionId),
+    options.store.sessions.listUserInputRequests(sessionId),
   ]);
   const built = new MessageGroupBuilder().build(messages, invocations);
   const groups = built.groups.filter(isModelVisibleGroup);
@@ -135,7 +135,7 @@ function buildContextMaterial(
     sessionId: string;
     facts: SessionFacts;
     modelCalls: Awaited<ReturnType<
-      ReActContextMaterialOptions['store']['listRecentSessionModelCalls']
+      ReActContextMaterialOptions['store']['models']['listRecentSessionCalls']
     >>;
     job?: AgentJob;
     contextRulesVersion: string;

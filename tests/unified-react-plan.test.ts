@@ -19,6 +19,7 @@ import { ReActContextService } from '../src/runtime/context/react-context.servic
 import type {
   BuiltContext,
   ContextMaterial,
+  ReActContextStore,
   TurnBundle,
 } from '../src/runtime/context/types/context.types.js';
 import type { RuntimeToolContext } from '../src/runtime/execution/tool-executor.js';
@@ -27,7 +28,9 @@ import { createPlanTools } from '../src/tools/plan/plan-tools.js';
 
 describe('unified ReAct planning', () => {
   it('persists update_plan through the durable store and publishes Plan entities', async () => {
-    const applyPlanUpdate = vi.fn(async (input: Parameters<AgentStore['applyPlanUpdate']>[0]) => ({
+    const applyPlanUpdate = vi.fn(async (
+      input: Parameters<AgentStore['plans']['applyUpdate']>[0]
+    ) => ({
       plan: plan({ id: input.planId, title: input.title, goal: input.goal }),
       steps: input.steps.map(step => planStep(step)),
     }));
@@ -36,11 +39,13 @@ describe('unified ReAct planning', () => {
       publishedTypes.push(event.type);
     });
     const store = {
-      getJob: async () => job(),
-      listSessionMessages: async () => [goalMessage()],
-      getPlanByJobId: async () => undefined,
-      listPlanSteps: async () => [],
-      applyPlanUpdate,
+      jobs: { get: async () => job() },
+      sessions: { listMessages: async () => [goalMessage()] },
+      plans: {
+        getByJobId: async () => undefined,
+        listSteps: async () => [],
+        applyUpdate: applyPlanUpdate,
+      },
     } as unknown as AgentStore;
     const runtimeTool = createPlanTools({
       store,
@@ -103,12 +108,18 @@ describe('unified ReAct planning', () => {
     const call = planCallMessage();
     const result = planResultMessage();
     const store = {
-      listSessionJobs: async () => [job()],
-      listSessionMessages: async () => [goalMessage(), call, result],
-      listSessionToolInvocations: async () => [planInvocation(call, result)],
-      listActiveContextSummaries: async () => [],
-      listRecentSessionModelCalls: async () => [],
-    };
+      sessions: {
+        listJobs: async () => [job()],
+        listMessages: async () => [goalMessage(), call, result],
+        listToolInvocations: async () => [planInvocation(call, result)],
+        listPlans: async () => [],
+        listPlanSteps: async () => [],
+        listArtifacts: async () => [],
+        listUserInputRequests: async () => [],
+      },
+      context: { listActiveSummaries: async () => [] },
+      models: { listRecentSessionCalls: async () => [] },
+    } as unknown as ReActContextStore;
     const contexts = new ReActContextService({
       store,
       systemPrompt: 'system',
@@ -135,16 +146,18 @@ describe('unified ReAct planning', () => {
     });
     const contexts = new ReActContextService({
       store: {
-        listSessionJobs: async () => [job()],
-        listSessionMessages: async () => [goalMessage()],
-        listSessionToolInvocations: async () => [],
-        listActiveContextSummaries: async () => [],
-        listRecentSessionModelCalls: async () => [],
-        listSessionPlans: async () => [currentPlan],
-        listSessionPlanSteps: async () => [currentStep],
-        listSessionArtifacts: async () => [],
-        listSessionUserInputRequests: async () => [],
-      },
+        sessions: {
+          listJobs: async () => [job()],
+          listMessages: async () => [goalMessage()],
+          listToolInvocations: async () => [],
+          listPlans: async () => [currentPlan],
+          listPlanSteps: async () => [currentStep],
+          listArtifacts: async () => [],
+          listUserInputRequests: async () => [],
+        },
+        context: { listActiveSummaries: async () => [] },
+        models: { listRecentSessionCalls: async () => [] },
+      } as unknown as ReActContextStore,
       systemPrompt: 'system',
       systemPromptVersion: 'system-v1',
       model: { provider: 'test', name: 'model', maxContextTokens: 10_000, reservedOutputTokens: 500 },

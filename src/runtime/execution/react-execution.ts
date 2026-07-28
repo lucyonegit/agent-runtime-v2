@@ -4,7 +4,7 @@ import type { AgentJob } from '../../domain/index.js';
 import { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';
 import type {
-  JobStorePort,
+  JobActionsPort,
   ReActJobExecutionResult,
 } from './types/react-execution.types.js';
 import type { BuiltContext } from '../context/types/context.types.js';
@@ -21,7 +21,7 @@ import { PendingToolCallLoader } from './recovery/pending-tool-call-loader.js';
 
 export interface ReActExecutionOptions {
   store: AgentStore;
-  jobStore: JobStorePort;
+  jobActions: JobActionsPort;
   context: Pick<ReActContextService, 'buildForJob'>;
   workerId: string;
   publisher: RuntimeEventPublisher;
@@ -54,7 +54,7 @@ export class ReActExecution {
     job: AgentJob;
     signal?: AbortSignal;
   }): Promise<ReActJobExecutionResult> {
-    const checkpoint = await this.options.store.getLatestLoopCheckpoint(input.job.id);
+    const checkpoint = await this.options.store.execution.getLatestLoopCheckpoint(input.job.id);
     const pendingToolCalls = await this.#pendingToolCallLoader.load(
       input.job,
       checkpoint?.callMessageId
@@ -83,7 +83,7 @@ export class ReActExecution {
         streaming: this.options.streaming,
       }),
       writer: this.#writer(),
-      jobStore: this.options.jobStore,
+      jobActions: this.options.jobActions,
       input: {
         job: input.job,
         loopInput: {

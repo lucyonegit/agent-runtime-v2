@@ -30,11 +30,9 @@ export class ReActContextService {
   readonly #compression?: ContextCompressionService;
 
   constructor(private readonly options: ReActContextServiceOptions) {
-    if (options.modelFactory && options.store.replaceContextSummary) {
+    if (options.modelFactory && options.store.context.replaceSummary) {
       this.#compression = new ContextCompressionService({
-        store: {
-          replaceContextSummary: input => options.store.replaceContextSummary!(input),
-        },
+        store: { replaceSummary: options.store.context.replaceSummary },
         modelName: options.model.name,
         contextConfig: options.contextConfig,
       });

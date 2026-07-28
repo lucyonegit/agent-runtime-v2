@@ -110,18 +110,26 @@ function store(input: {
   activeSummaries?: () => AgentContextSummary[];
 }): ContextInspectionStore {
   return {
-    getSession: async () => session(),
-    getJob: async id => input.jobs.find(item => item.id === id),
-    getModelCall: async () => input.getModelCall?.(),
-    listSessionJobs: async () => input.jobs,
-    listSessionMessages: async () => input.messages,
-    listSessionToolInvocations: async () => [],
-    listSessionPlans: async () => [],
-    listSessionPlanSteps: async () => [],
-    listSessionArtifacts: async () => [],
-    listSessionUserInputRequests: async () => [],
-    listActiveContextSummaries: async () => input.activeSummaries?.() ?? [],
-    listRecentSessionModelCalls: async () => [],
+    sessions: {
+      get: async () => session(),
+      listJobs: async () => input.jobs,
+      listMessages: async () => input.messages,
+      listToolInvocations: async () => [],
+      listPlans: async () => [],
+      listPlanSteps: async () => [],
+      listArtifacts: async () => [],
+      listUserInputRequests: async () => [],
+    } as ContextInspectionStore['sessions'],
+    jobs: {
+      get: async id => input.jobs.find(item => item.id === id),
+    } as ContextInspectionStore['jobs'],
+    models: {
+      getCall: async () => input.getModelCall?.(),
+      listRecentSessionCalls: async () => [],
+    } as ContextInspectionStore['models'],
+    context: {
+      listActiveSummaries: async () => input.activeSummaries?.() ?? [],
+    } as ContextInspectionStore['context'],
   };
 }
 

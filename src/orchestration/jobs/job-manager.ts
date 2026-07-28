@@ -21,10 +21,10 @@ import type { JobExecutorPort } from './job-executor.js';
 import { JobAttemptStarter } from './shared/job-attempt-starter.js';
 import { JobEventPublisher } from './shared/job-event-publisher.js';
 import { JobExecutionDispatcher } from './shared/job-execution-dispatcher.js';
-import { JobStore } from './shared/job-store.js';
+import { JobActions } from './shared/job-actions.js';
 
 export interface JobManagerOptions {
-  jobStore: JobStore;
+  jobActions: JobActions;
   publisher: RuntimeEventPublisher;
   execution: JobExecutorPort;
 }
@@ -53,24 +53,24 @@ export class JobManager implements JobManagerPort {
 
   constructor(private readonly options: JobManagerOptions) {
     const events = new JobEventPublisher(options.publisher);
-    const attempts = new JobAttemptStarter(options.jobStore, events);
+    const attempts = new JobAttemptStarter(options.jobActions, events);
     const dispatcher = new JobExecutionDispatcher(options.execution);
-    this.#create = new CreateJobFlow(options.jobStore, attempts, events, dispatcher);
-    this.#retry = new RetryJobFlow(options.jobStore, attempts, events, dispatcher);
+    this.#create = new CreateJobFlow(options.jobActions, attempts, events, dispatcher);
+    this.#retry = new RetryJobFlow(options.jobActions, attempts, events, dispatcher);
     this.#continueAsNew = new ContinueAsNewJobFlow(
-      options.jobStore,
+      options.jobActions,
       attempts,
       events,
       dispatcher
     );
     this.#resume = new ResumeJobFlow(
-      options.jobStore,
+      options.jobActions,
       attempts,
       events,
       dispatcher
     );
-    this.#cancel = new CancelJobFlow(options.jobStore, events, options.execution);
-    this.#answerUserInput = new AnswerUserInputFlow(options.jobStore, events, dispatcher);
+    this.#cancel = new CancelJobFlow(options.jobActions, events, options.execution);
+    this.#answerUserInput = new AnswerUserInputFlow(options.jobActions, events, dispatcher);
   }
 
   start(): Promise<void> {

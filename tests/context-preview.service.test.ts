@@ -132,15 +132,22 @@ describe('ContextPreviewService', () => {
 
   it('exposes Job and ModelCall inspection through the preview facade', async () => {
     const calls: unknown[] = [];
+    const baseStore = storeFixture();
     const service = previewService({
-      ...storeFixture(),
-      getJob: async id => {
-        calls.push({ kind: 'job', id });
-        return completedJob;
+      ...baseStore,
+      jobs: {
+        ...baseStore.jobs,
+        get: async id => {
+          calls.push({ kind: 'job', id });
+          return completedJob;
+        },
       },
-      getModelCall: async id => {
-        calls.push({ kind: 'model_call', id });
-        return undefined;
+      models: {
+        ...baseStore.models,
+        getCall: async id => {
+          calls.push({ kind: 'model_call', id });
+          return undefined;
+        },
       },
     });
 
@@ -175,18 +182,26 @@ function storeFixture(overrides: {
   const jobs = overrides.jobs ?? [completedJob];
   const messages = overrides.messages ?? historyMessages();
   return {
-    getSession: async () => session,
-    getJob: async () => jobs[0],
-    getModelCall: async () => undefined,
-    listSessionJobs: async () => jobs,
-    listSessionMessages: async () => messages,
-    listSessionToolInvocations: async () => [toolInvocation],
-    listSessionPlans: async () => [],
-    listSessionPlanSteps: async () => [],
-    listSessionArtifacts: async () => [],
-    listSessionUserInputRequests: async () => [],
-    listActiveContextSummaries: async () => [],
-    listRecentSessionModelCalls: async () => [],
+    sessions: {
+      get: async () => session,
+      listJobs: async () => jobs,
+      listMessages: async () => messages,
+      listToolInvocations: async () => [toolInvocation],
+      listPlans: async () => [],
+      listPlanSteps: async () => [],
+      listArtifacts: async () => [],
+      listUserInputRequests: async () => [],
+    } as ContextPreviewStore['sessions'],
+    jobs: {
+      get: async () => jobs[0],
+    } as ContextPreviewStore['jobs'],
+    models: {
+      getCall: async () => undefined,
+      listRecentSessionCalls: async () => [],
+    } as ContextPreviewStore['models'],
+    context: {
+      listActiveSummaries: async () => [],
+    } as ContextPreviewStore['context'],
   };
 }
 

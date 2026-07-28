@@ -8,7 +8,7 @@ import type {
 } from '../src/domain/index.js';
 import type { JobExecutorPort } from '../src/orchestration/jobs/job-executor.js';
 import { JobManager } from '../src/orchestration/jobs/job-manager.js';
-import { JobStore } from '../src/orchestration/jobs/shared/job-store.js';
+import { JobActions } from '../src/orchestration/jobs/shared/job-actions.js';
 import { resolveExecutionLimits } from '../src/runtime/settings/execution-limits.js';
 import {
   AgentStoreError,
@@ -30,12 +30,12 @@ describe('JobManager', () => {
       leaseExpiresAtMs: 31_000,
       startedAtMs: 1_000,
     });
-    vi.mocked(store.createJobAndAppendUserMessage).mockResolvedValue({
+    vi.mocked(store.jobs.createWithUserMessage).mockResolvedValue({
       session: sessionFixture,
       job: createdJob,
       message,
     });
-    vi.mocked(store.startJobExecution).mockResolvedValue(runningJob);
+    vi.mocked(store.jobs.startExecution).mockResolvedValue(runningJob);
     const { manager, execution } = createManager(store, 1_000);
 
     await expect(manager.createJob({
@@ -44,7 +44,7 @@ describe('JobManager', () => {
       clientRequestId: 'request_1',
     })).resolves.toMatchObject({ job: runningJob, message });
 
-    expect(store.startJobExecution).toHaveBeenCalledWith({
+    expect(store.jobs.startExecution).toHaveBeenCalledWith({
       jobId: 'job_2',
       expectedVersion: 0,
       workerId: 'worker_1',
@@ -65,13 +65,13 @@ describe('JobManager', () => {
       clientRequestId: 'request_1',
     });
     const committedMessage = messageFixtureFor(completedJob);
-    vi.mocked(store.createJobAndAppendUserMessage).mockRejectedValue(new AgentStoreError(
+    vi.mocked(store.jobs.createWithUserMessage).mockRejectedValue(new AgentStoreError(
       'CLIENT_REQUEST_CONFLICT',
       'duplicate request'
     ));
-    vi.mocked(store.getSession).mockResolvedValue(sessionFixture);
-    vi.mocked(store.getJobByClientRequestId).mockResolvedValue(completedJob);
-    vi.mocked(store.listSessionMessages).mockResolvedValue([committedMessage]);
+    vi.mocked(store.sessions.get).mockResolvedValue(sessionFixture);
+    vi.mocked(store.jobs.getByClientRequestId).mockResolvedValue(completedJob);
+    vi.mocked(store.sessions.listMessages).mockResolvedValue([committedMessage]);
     const { manager, execution } = createManager(store, 1_000);
 
     await expect(manager.createJob({
@@ -83,19 +83,19 @@ describe('JobManager', () => {
       job: completedJob,
       message: committedMessage,
     });
-    expect(store.startJobExecution).not.toHaveBeenCalled();
+    expect(store.jobs.startExecution).not.toHaveBeenCalled();
     expect(execution.startExecution).not.toHaveBeenCalled();
   });
 
   it('rejects client request reuse with a different payload', async () => {
     const store = createStore();
-    vi.mocked(store.createJobAndAppendUserMessage).mockRejectedValue(new AgentStoreError(
+    vi.mocked(store.jobs.createWithUserMessage).mockRejectedValue(new AgentStoreError(
       'CLIENT_REQUEST_CONFLICT',
       'duplicate request'
     ));
-    vi.mocked(store.getSession).mockResolvedValue(sessionFixture);
-    vi.mocked(store.getJobByClientRequestId).mockResolvedValue(jobFixture({ id: 'job_2' }));
-    vi.mocked(store.listSessionMessages).mockResolvedValue([
+    vi.mocked(store.sessions.get).mockResolvedValue(sessionFixture);
+    vi.mocked(store.jobs.getByClientRequestId).mockResolvedValue(jobFixture({ id: 'job_2' }));
+    vi.mocked(store.sessions.listMessages).mockResolvedValue([
       messageFixtureFor(jobFixture({ id: 'job_2' })),
     ]);
     const { manager } = createManager(store, 1_000);
@@ -124,13 +124,13 @@ describe('JobManager', () => {
       leaseOwner: 'worker_1',
       leaseExpiresAtMs: 31_000,
     });
-    vi.mocked(store.getJob).mockResolvedValue(failedJob);
-    vi.mocked(store.listSessionMessages).mockResolvedValue([messageFixture]);
-    vi.mocked(store.createRetryJob).mockResolvedValue({
+    vi.mocked(store.jobs.get).mockResolvedValue(failedJob);
+    vi.mocked(store.sessions.listMessages).mockResolvedValue([messageFixture]);
+    vi.mocked(store.jobs.createRetry).mockResolvedValue({
       session: sessionFixture,
       job: retryJob,
     });
-    vi.mocked(store.startJobExecution).mockResolvedValue(runningRetry);
+    vi.mocked(store.jobs.startExecution).mockResolvedValue(runningRetry);
     const { manager, execution } = createManager(store, 1_000);
 
     const retry = await manager.retryJob({
@@ -140,12 +140,12 @@ describe('JobManager', () => {
 
     expect(retry.job).toBe(runningRetry);
     expect(retry).not.toHaveProperty('message');
-    expect(store.createRetryJob).toHaveBeenCalledWith(expect.objectContaining({
+    expect(store.jobs.createRetry).toHaveBeenCalledWith(expect.objectContaining({
       retryOfJobId: 'job_1',
       jobId: 'job_2',
       jobMetadata: expect.objectContaining({ goalMessageId: 'message_1' }),
     }));
-    expect(store.createJobAndAppendUserMessage).not.toHaveBeenCalled();
+    expect(store.jobs.createWithUserMessage).not.toHaveBeenCalled();
     expect(execution.startExecution).toHaveBeenCalledWith('job_2');
   });
 
@@ -163,14 +163,14 @@ describe('JobManager', () => {
       leaseOwner: 'worker_1',
       leaseExpiresAtMs: 31_000,
     });
-    vi.mocked(store.getJob).mockResolvedValue(failedJob);
-    vi.mocked(store.listSessionMessages).mockResolvedValue([messageFixture]);
-    vi.mocked(store.createJobAndAppendUserMessage).mockResolvedValue({
+    vi.mocked(store.jobs.get).mockResolvedValue(failedJob);
+    vi.mocked(store.sessions.listMessages).mockResolvedValue([messageFixture]);
+    vi.mocked(store.jobs.createWithUserMessage).mockResolvedValue({
       session: sessionFixture,
       job: continuation,
       message,
     });
-    vi.mocked(store.startJobExecution).mockResolvedValue(running);
+    vi.mocked(store.jobs.startExecution).mockResolvedValue(running);
     const { manager, execution } = createManager(store, 1_000);
 
     await expect(manager.continueAsNewJob({
@@ -179,12 +179,12 @@ describe('JobManager', () => {
       message: 'Use a different implementation.',
     })).resolves.toMatchObject({ job: running, message });
 
-    expect(store.createJobAndAppendUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+    expect(store.jobs.createWithUserMessage).toHaveBeenCalledWith(expect.objectContaining({
       retryOfJobId: failedJob.id,
       content: 'Use a different implementation.',
       userMessageId: 'message_2',
     }));
-    expect(store.createRetryJob).not.toHaveBeenCalled();
+    expect(store.jobs.createRetry).not.toHaveBeenCalled();
     expect(execution.startExecution).toHaveBeenCalledWith(running.id);
   });
 
@@ -196,7 +196,7 @@ describe('JobManager', () => {
       completedAtMs: 1_000,
     });
     const store = createStore();
-    vi.mocked(store.cancelJob).mockImplementation(async () => {
+    vi.mocked(store.jobs.cancel).mockImplementation(async () => {
       order.push('persisted');
       return cancelled;
     });
@@ -224,9 +224,9 @@ describe('JobManager', () => {
       leaseOwner: 'worker_1',
       leaseExpiresAtMs: 31_000,
     });
-    vi.mocked(store.getJob).mockResolvedValue(paused);
-    vi.mocked(store.startJobExecution).mockResolvedValue(running);
-    vi.mocked(store.prepareToolInvocationsForRecovery).mockResolvedValue({
+    vi.mocked(store.jobs.get).mockResolvedValue(paused);
+    vi.mocked(store.jobs.startExecution).mockResolvedValue(running);
+    vi.mocked(store.execution.prepareToolsForRecovery).mockResolvedValue({
       invocations: [],
       blockedInvocations: [],
     });
@@ -234,7 +234,7 @@ describe('JobManager', () => {
 
     await expect(manager.resumeJob(paused.id, paused.version)).resolves.toBe(running);
 
-    expect(store.startJobExecution).toHaveBeenCalledWith(expect.objectContaining({
+    expect(store.jobs.startExecution).toHaveBeenCalledWith(expect.objectContaining({
       jobId: paused.id,
       expectedVersion: paused.version,
       workerId: 'worker_1',
@@ -263,18 +263,18 @@ describe('JobManager', () => {
       leaseOwner: 'worker_1',
       completedAtMs: 1_000,
     });
-    vi.mocked(store.getJob).mockResolvedValue(paused);
-    vi.mocked(store.startJobExecution).mockResolvedValue(running);
-    vi.mocked(store.prepareToolInvocationsForRecovery).mockResolvedValue({
+    vi.mocked(store.jobs.get).mockResolvedValue(paused);
+    vi.mocked(store.jobs.startExecution).mockResolvedValue(running);
+    vi.mocked(store.execution.prepareToolsForRecovery).mockResolvedValue({
       invocations: [],
       blockedInvocations: [blockedInvocation],
     });
-    vi.mocked(store.failJob).mockResolvedValue(failed);
+    vi.mocked(store.jobs.fail).mockResolvedValue(failed);
     const { manager, execution } = createManager(store, 1_000);
 
     await expect(manager.resumeJob(paused.id, paused.version)).resolves.toBe(failed);
 
-    expect(store.failJob).toHaveBeenCalledWith(expect.objectContaining({
+    expect(store.jobs.fail).toHaveBeenCalledWith(expect.objectContaining({
       jobId: running.id,
       attemptId: running.currentAttemptId,
       error: expect.objectContaining({ code: 'unsafe_tool_recovery' }),
@@ -315,7 +315,7 @@ describe('JobManager', () => {
       jobId: running.id,
       content: 'true',
     };
-    vi.mocked(store.saveUserInputAnswerAndResumeIfReady).mockResolvedValue({
+    vi.mocked(store.execution.answerUserInput).mockResolvedValue({
       request,
       answerMessage,
       job: running,
@@ -331,20 +331,20 @@ describe('JobManager', () => {
       answer: true,
     });
 
-    expect(store.saveUserInputAnswerAndResumeIfReady).toHaveBeenCalledOnce();
-    expect(store.startJobExecution).not.toHaveBeenCalled();
+    expect(store.execution.answerUserInput).toHaveBeenCalledOnce();
+    expect(store.jobs.startExecution).not.toHaveBeenCalled();
     expect(execution.startExecution).toHaveBeenCalledWith(running.id);
   });
 
   it('maps a stale start version into a stable runtime error', async () => {
     const store = createStore();
     const createdJob = jobFixture({ id: 'job_2' });
-    vi.mocked(store.createJobAndAppendUserMessage).mockResolvedValue({
+    vi.mocked(store.jobs.createWithUserMessage).mockResolvedValue({
       session: sessionFixture,
       job: createdJob,
       message: messageFixtureFor(createdJob),
     });
-    vi.mocked(store.startJobExecution).mockRejectedValue(new AgentStoreError(
+    vi.mocked(store.jobs.startExecution).mockRejectedValue(new AgentStoreError(
       'CONCURRENCY_CONFLICT',
       'stale'
     ));
@@ -375,7 +375,7 @@ function createManager(
   nowMs: number,
   execution = executionSupervisor()
 ): { manager: JobManager; execution: JobExecutorPort } {
-  const jobStore = new JobStore({
+  const jobActions = new JobActions({
     store,
     workerId: 'worker_1',
     jobLeaseMs: 30_000,
@@ -388,7 +388,7 @@ function createManager(
   });
   return {
     manager: new JobManager({
-      jobStore,
+      jobActions,
       publisher: { publish: vi.fn(async () => undefined) },
       execution,
     }),
@@ -410,50 +410,62 @@ function executionSupervisor(
 
 function createStore(): AgentStore {
   return {
-    createSession: vi.fn<AgentStore['createSession']>(),
-    listSessions: vi.fn<AgentStore['listSessions']>(),
-    deleteSession: vi.fn<AgentStore['deleteSession']>(),
-    getSession: vi.fn<AgentStore['getSession']>(),
-    getJob: vi.fn<AgentStore['getJob']>(),
-    getJobByClientRequestId: vi.fn<AgentStore['getJobByClientRequestId']>(),
-    getToolInvocation: vi.fn<AgentStore['getToolInvocation']>(),
-    getLatestLoopCheckpoint: vi.fn<AgentStore['getLatestLoopCheckpoint']>(),
-    getPlanByJobId: vi.fn<AgentStore['getPlanByJobId']>(),
-    listPlanSteps: vi.fn<AgentStore['listPlanSteps']>(),
-    getModelCall: vi.fn<AgentStore['getModelCall']>(),
-    listModelCalls: vi.fn<AgentStore['listModelCalls']>(),
-    listRecentSessionModelCalls: vi.fn<AgentStore['listRecentSessionModelCalls']>(),
-    getModelUsageStats: vi.fn<AgentStore['getModelUsageStats']>(),
-    listActiveContextSummaries: vi.fn<AgentStore['listActiveContextSummaries']>(),
-    getContextSummariesByIds: vi.fn<AgentStore['getContextSummariesByIds']>(),
-    listSessionMessages: vi.fn<AgentStore['listSessionMessages']>(),
-    listSessionJobs: vi.fn<AgentStore['listSessionJobs']>(),
-    listSessionPlans: vi.fn<AgentStore['listSessionPlans']>(),
-    listSessionPlanSteps: vi.fn<AgentStore['listSessionPlanSteps']>(),
-    listSessionToolInvocations: vi.fn<AgentStore['listSessionToolInvocations']>(),
-    listSessionArtifacts: vi.fn<AgentStore['listSessionArtifacts']>(),
-    listSessionUserInputRequests: vi.fn<AgentStore['listSessionUserInputRequests']>(),
-    listJobsNeedingRuntimeRecovery: vi.fn<AgentStore['listJobsNeedingRuntimeRecovery']>(),
-    markJobRecoveryRequired: vi.fn<AgentStore['markJobRecoveryRequired']>(),
-    createJobAndAppendUserMessage: vi.fn<AgentStore['createJobAndAppendUserMessage']>(),
-    createRetryJob: vi.fn<AgentStore['createRetryJob']>(),
-    startJobExecution: vi.fn<AgentStore['startJobExecution']>(),
-    renewJobExecutionLease: vi.fn<AgentStore['renewJobExecutionLease']>(),
-    commitModelToolCalls: vi.fn<AgentStore['commitModelToolCalls']>(),
-    tryStartToolExecution: vi.fn<AgentStore['tryStartToolExecution']>(),
-    prepareToolInvocationsForRecovery: vi.fn<AgentStore['prepareToolInvocationsForRecovery']>(),
-    commitToolResult: vi.fn<AgentStore['commitToolResult']>(),
-    completeJobWithFinalMessage: vi.fn<AgentStore['completeJobWithFinalMessage']>(),
-    createInputRequestsAndMarkWaiting: vi.fn<AgentStore['createInputRequestsAndMarkWaiting']>(),
-    saveUserInputAnswerAndResumeIfReady: vi.fn<AgentStore['saveUserInputAnswerAndResumeIfReady']>(),
-    applyPlanUpdate: vi.fn<AgentStore['applyPlanUpdate']>(),
-    startModelCall: vi.fn<AgentStore['startModelCall']>(),
-    completeModelCall: vi.fn<AgentStore['completeModelCall']>(),
-    setModelCallOutputDisposition: vi.fn<AgentStore['setModelCallOutputDisposition']>(),
-    abandonStartedModelCalls: vi.fn<AgentStore['abandonStartedModelCalls']>(),
-    replaceContextSummary: vi.fn<AgentStore['replaceContextSummary']>(),
-    failJob: vi.fn<AgentStore['failJob']>(),
-    cancelJob: vi.fn<AgentStore['cancelJob']>(),
+    sessions: {
+      create: vi.fn<AgentStore['sessions']['create']>(),
+      list: vi.fn<AgentStore['sessions']['list']>(),
+      delete: vi.fn<AgentStore['sessions']['delete']>(),
+      get: vi.fn<AgentStore['sessions']['get']>(),
+      listMessages: vi.fn<AgentStore['sessions']['listMessages']>(),
+      listJobs: vi.fn<AgentStore['sessions']['listJobs']>(),
+      listPlans: vi.fn<AgentStore['sessions']['listPlans']>(),
+      listPlanSteps: vi.fn<AgentStore['sessions']['listPlanSteps']>(),
+      listToolInvocations: vi.fn<AgentStore['sessions']['listToolInvocations']>(),
+      listArtifacts: vi.fn<AgentStore['sessions']['listArtifacts']>(),
+      listUserInputRequests: vi.fn<AgentStore['sessions']['listUserInputRequests']>(),
+    },
+    jobs: {
+      get: vi.fn<AgentStore['jobs']['get']>(),
+      getByClientRequestId: vi.fn<AgentStore['jobs']['getByClientRequestId']>(),
+      listNeedingRecovery: vi.fn<AgentStore['jobs']['listNeedingRecovery']>(),
+      markRecoveryRequired: vi.fn<AgentStore['jobs']['markRecoveryRequired']>(),
+      createWithUserMessage: vi.fn<AgentStore['jobs']['createWithUserMessage']>(),
+      createRetry: vi.fn<AgentStore['jobs']['createRetry']>(),
+      startExecution: vi.fn<AgentStore['jobs']['startExecution']>(),
+      renewExecutionOwnership: vi.fn<AgentStore['jobs']['renewExecutionOwnership']>(),
+      fail: vi.fn<AgentStore['jobs']['fail']>(),
+      cancel: vi.fn<AgentStore['jobs']['cancel']>(),
+    },
+    execution: {
+      getToolInvocation: vi.fn<AgentStore['execution']['getToolInvocation']>(),
+      getLatestLoopCheckpoint: vi.fn<AgentStore['execution']['getLatestLoopCheckpoint']>(),
+      commitModelToolCalls: vi.fn<AgentStore['execution']['commitModelToolCalls']>(),
+      tryStartTool: vi.fn<AgentStore['execution']['tryStartTool']>(),
+      prepareToolsForRecovery: vi.fn<AgentStore['execution']['prepareToolsForRecovery']>(),
+      commitToolResult: vi.fn<AgentStore['execution']['commitToolResult']>(),
+      completeWithFinalMessage: vi.fn<AgentStore['execution']['completeWithFinalMessage']>(),
+      waitForUserInput: vi.fn<AgentStore['execution']['waitForUserInput']>(),
+      answerUserInput: vi.fn<AgentStore['execution']['answerUserInput']>(),
+    },
+    plans: {
+      getByJobId: vi.fn<AgentStore['plans']['getByJobId']>(),
+      listSteps: vi.fn<AgentStore['plans']['listSteps']>(),
+      applyUpdate: vi.fn<AgentStore['plans']['applyUpdate']>(),
+    },
+    models: {
+      getCall: vi.fn<AgentStore['models']['getCall']>(),
+      listCalls: vi.fn<AgentStore['models']['listCalls']>(),
+      listRecentSessionCalls: vi.fn<AgentStore['models']['listRecentSessionCalls']>(),
+      getUsageStats: vi.fn<AgentStore['models']['getUsageStats']>(),
+      startCall: vi.fn<AgentStore['models']['startCall']>(),
+      completeCall: vi.fn<AgentStore['models']['completeCall']>(),
+      setCallOutputDisposition: vi.fn<AgentStore['models']['setCallOutputDisposition']>(),
+      abandonStartedCalls: vi.fn<AgentStore['models']['abandonStartedCalls']>(),
+    },
+    context: {
+      listActiveSummaries: vi.fn<AgentStore['context']['listActiveSummaries']>(),
+      getSummariesByIds: vi.fn<AgentStore['context']['getSummariesByIds']>(),
+      replaceSummary: vi.fn<AgentStore['context']['replaceSummary']>(),
+    },
   };
 }
 

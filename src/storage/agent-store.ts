@@ -399,69 +399,106 @@ export interface ReplaceContextSummaryInput {
   nowMs: number;
 }
 
-export interface AgentStore {
-  createSession(input: CreateSessionInput): Promise<AgentSession>;
-  listSessions(): Promise<AgentSession[]>;
-  deleteSession(sessionId: string): Promise<boolean>;
-  getSession(sessionId: string): Promise<AgentSession | undefined>;
-  getJob(jobId: string): Promise<AgentJob | undefined>;
-  getJobByClientRequestId(
+/** Session aggregate queries and lifecycle commands. */
+export interface SessionStore {
+  create(input: CreateSessionInput): Promise<AgentSession>;
+  list(): Promise<AgentSession[]>;
+  delete(sessionId: string): Promise<boolean>;
+  get(sessionId: string): Promise<AgentSession | undefined>;
+  listMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
+  listJobs(sessionId: string): Promise<AgentJob[]>;
+  listPlans(sessionId: string): Promise<AgentPlan[]>;
+  listPlanSteps(sessionId: string): Promise<AgentPlanStep[]>;
+  listToolInvocations(sessionId: string): Promise<AgentToolInvocation[]>;
+  listArtifacts(sessionId: string): Promise<AgentArtifact[]>;
+  listUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
+}
+
+/** Durable Job lifecycle commands. Cross-table commands remain atomic. */
+export interface JobStore {
+  get(jobId: string): Promise<AgentJob | undefined>;
+  getByClientRequestId(
     sessionId: string,
     clientRequestId: string
   ): Promise<AgentJob | undefined>;
+  listNeedingRecovery(input: ListJobsNeedingRuntimeRecoveryInput): Promise<AgentJob[]>;
+  markRecoveryRequired(input: MarkJobRecoveryRequiredInput): Promise<AgentJob>;
+  createWithUserMessage(
+    input: CreateJobAndAppendUserMessageInput
+  ): Promise<CreateJobAndAppendUserMessageResult>;
+  createRetry(input: CreateRetryJobInput): Promise<CreateRetryJobResult>;
+  startExecution(input: StartJobExecutionInput): Promise<AgentJob>;
+  renewExecutionOwnership(input: RenewJobExecutionLeaseInput): Promise<AgentJob>;
+  fail(input: FailJobInput): Promise<AgentJob>;
+  cancel(input: CancelJobInput): Promise<AgentJob>;
+}
+
+/** ReAct checkpoint, tool and HITL persistence. */
+export interface ExecutionStore {
   getToolInvocation(jobId: string, toolCallId: string): Promise<AgentToolInvocation | undefined>;
   getLatestLoopCheckpoint(jobId: string): Promise<AgentLoopCheckpoint | undefined>;
-  getPlanByJobId(jobId: string): Promise<AgentPlan | undefined>;
-  listPlanSteps(planId: string): Promise<AgentPlanStep[]>;
-  getModelCall(modelCallId: string): Promise<AgentModelCall | undefined>;
-  listModelCalls(jobId: string): Promise<AgentModelCall[]>;
-  listRecentSessionModelCalls(sessionId: string, limit: number): Promise<AgentModelCall[]>;
-  getModelUsageStats(sessionId: string): Promise<AgentModelUsageStats | undefined>;
-  listActiveContextSummaries(
+  commitModelToolCalls(input: CommitModelToolCallsInput): Promise<CommitModelToolCallsResult>;
+  tryStartTool(input: TryStartToolExecutionInput): Promise<TryStartToolExecutionResult>;
+  prepareToolsForRecovery(
+    input: PrepareToolInvocationsForRecoveryInput
+  ): Promise<PrepareToolInvocationsForRecoveryResult>;
+  commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult>;
+  completeWithFinalMessage(
+    input: CompleteJobWithFinalMessageInput
+  ): Promise<CompleteJobWithFinalMessageResult>;
+  waitForUserInput(
+    input: CreateInputRequestsAndMarkWaitingInput
+  ): Promise<CreateInputRequestsAndMarkWaitingResult>;
+  answerUserInput(
+    input: SaveUserInputAnswerInput
+  ): Promise<SaveUserInputAnswerResult>;
+}
+
+/** Plan projection and update commands. */
+export interface PlanStore {
+  getByJobId(jobId: string): Promise<AgentPlan | undefined>;
+  listSteps(planId: string): Promise<AgentPlanStep[]>;
+  applyUpdate(input: ApplyPlanUpdateInput): Promise<ApplyPlanUpdateResult>;
+}
+
+/** Model-call audit and token-usage persistence. */
+export interface ModelStore {
+  getCall(modelCallId: string): Promise<AgentModelCall | undefined>;
+  listCalls(jobId: string): Promise<AgentModelCall[]>;
+  listRecentSessionCalls(sessionId: string, limit: number): Promise<AgentModelCall[]>;
+  getUsageStats(sessionId: string): Promise<AgentModelUsageStats | undefined>;
+  startCall(input: StartModelCallInput): Promise<AgentModelCall>;
+  completeCall(input: CompleteModelCallInput): Promise<CompleteModelCallResult>;
+  setCallOutputDisposition(
+    input: SetModelCallOutputDispositionInput
+  ): Promise<AgentModelCall>;
+  abandonStartedCalls(nowMs: number): Promise<AgentModelCall[]>;
+}
+
+/** Context-summary queries and replacement command. */
+export interface ContextStore {
+  listActiveSummaries(
     ownerType: AgentContextOwnerType,
     ownerId: string,
     purpose: AgentContextPurpose,
     contextRulesVersion: string
   ): Promise<AgentContextSummary[]>;
-  getContextSummariesByIds(ids: string[]): Promise<AgentContextSummary[]>;
-  listSessionMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
-  listSessionJobs(sessionId: string): Promise<AgentJob[]>;
-  listSessionPlans(sessionId: string): Promise<AgentPlan[]>;
-  listSessionPlanSteps(sessionId: string): Promise<AgentPlanStep[]>;
-  listSessionToolInvocations(sessionId: string): Promise<AgentToolInvocation[]>;
-  listSessionArtifacts(sessionId: string): Promise<AgentArtifact[]>;
-  listSessionUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
-  listJobsNeedingRuntimeRecovery(input: ListJobsNeedingRuntimeRecoveryInput): Promise<AgentJob[]>;
-  markJobRecoveryRequired(input: MarkJobRecoveryRequiredInput): Promise<AgentJob>;
-  createJobAndAppendUserMessage(
-    input: CreateJobAndAppendUserMessageInput
-  ): Promise<CreateJobAndAppendUserMessageResult>;
-  createRetryJob(input: CreateRetryJobInput): Promise<CreateRetryJobResult>;
-  startJobExecution(input: StartJobExecutionInput): Promise<AgentJob>;
-  renewJobExecutionLease(input: RenewJobExecutionLeaseInput): Promise<AgentJob>;
-  commitModelToolCalls(input: CommitModelToolCallsInput): Promise<CommitModelToolCallsResult>;
-  tryStartToolExecution(input: TryStartToolExecutionInput): Promise<TryStartToolExecutionResult>;
-  prepareToolInvocationsForRecovery(
-    input: PrepareToolInvocationsForRecoveryInput
-  ): Promise<PrepareToolInvocationsForRecoveryResult>;
-  commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult>;
-  completeJobWithFinalMessage(
-    input: CompleteJobWithFinalMessageInput
-  ): Promise<CompleteJobWithFinalMessageResult>;
-  createInputRequestsAndMarkWaiting(
-    input: CreateInputRequestsAndMarkWaitingInput
-  ): Promise<CreateInputRequestsAndMarkWaitingResult>;
-  saveUserInputAnswerAndResumeIfReady(
-    input: SaveUserInputAnswerInput
-  ): Promise<SaveUserInputAnswerResult>;
-  applyPlanUpdate(input: ApplyPlanUpdateInput): Promise<ApplyPlanUpdateResult>;
-  startModelCall(input: StartModelCallInput): Promise<AgentModelCall>;
-  completeModelCall(input: CompleteModelCallInput): Promise<CompleteModelCallResult>;
-  setModelCallOutputDisposition(
-    input: SetModelCallOutputDispositionInput
-  ): Promise<AgentModelCall>;
-  abandonStartedModelCalls(nowMs: number): Promise<AgentModelCall[]>;
-  replaceContextSummary(input: ReplaceContextSummaryInput): Promise<AgentContextSummary>;
-  failJob(input: FailJobInput): Promise<AgentJob>;
-  cancelJob(input: CancelJobInput): Promise<AgentJob>;
+  getSummariesByIds(ids: string[]): Promise<AgentContextSummary[]>;
+  replaceSummary(input: ReplaceContextSummaryInput): Promise<AgentContextSummary>;
+}
+
+/**
+ * The single persistence root used by Runtime and Orchestration.
+ *
+ * Each property exposes one cohesive storage capability. Callers can now read
+ * `store.jobs.startExecution()` or `store.models.completeCall()` without
+ * searching a flat list of unrelated database operations.
+ */
+export interface AgentStore {
+  readonly sessions: SessionStore;
+  readonly jobs: JobStore;
+  readonly execution: ExecutionStore;
+  readonly plans: PlanStore;
+  readonly models: ModelStore;
+  readonly context: ContextStore;
 }

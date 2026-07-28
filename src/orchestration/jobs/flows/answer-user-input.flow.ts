@@ -3,15 +3,15 @@ import { projectSensitiveAnswers } from '../../../view/session-view.js';
 import { JobEventPublisher } from '../shared/job-event-publisher.js';
 import { JobExecutionDispatcher } from '../shared/job-execution-dispatcher.js';
 import {
-  JobStore,
+  JobActions,
   type SaveUserInputAnswerInput,
-} from '../shared/job-store.js';
+} from '../shared/job-actions.js';
 
 export type AnswerUserInputRequestInput = SaveUserInputAnswerInput;
 
 export class AnswerUserInputFlow {
   constructor(
-    private readonly jobStore: JobStore,
+    private readonly jobActions: JobActions,
     private readonly events: JobEventPublisher,
     private readonly execution: JobExecutionDispatcher
   ) {}
@@ -19,7 +19,7 @@ export class AnswerUserInputFlow {
   async execute(
     input: Omit<AnswerUserInputRequestInput, 'answerMessageId'>
   ): Promise<SaveUserInputAnswerResult> {
-    const result = await this.jobStore.answerUserInput(input);
+    const result = await this.jobActions.answerUserInput(input);
     const projection = projectSensitiveAnswers(
       [result.answerMessage],
       result.invocation ? [result.invocation] : [],

@@ -106,7 +106,7 @@ export class ToolExecutor implements ToolExecutorPort {
   async execute(request: ToolExecutionRequest): Promise<ToolExecutionResult> {
     let startResult;
     try {
-      startResult = await this.#store.tryStartToolExecution({
+      startResult = await this.#store.execution.tryStartTool({
         jobId: request.target.jobId,
         toolCallId: request.call.id,
         workerId: this.#workerId,

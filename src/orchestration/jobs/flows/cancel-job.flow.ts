@@ -2,11 +2,11 @@ import type { AgentJob } from '../../../domain/index.js';
 import { RuntimeError } from '../../../runtime/errors/runtime-error.js';
 import type { JobExecutorPort } from '../job-executor.js';
 import { JobEventPublisher } from '../shared/job-event-publisher.js';
-import { JobStore } from '../shared/job-store.js';
+import { JobActions } from '../shared/job-actions.js';
 
 export class CancelJobFlow {
   constructor(
-    private readonly jobStore: JobStore,
+    private readonly jobActions: JobActions,
     private readonly events: JobEventPublisher,
     private readonly execution: JobExecutorPort
   ) {}
@@ -21,10 +21,10 @@ export class CancelJobFlow {
 
   async #cancelLatest(jobId: string, expectedVersion: number): Promise<AgentJob> {
     try {
-      return await this.jobStore.cancel(jobId, expectedVersion);
+      return await this.jobActions.cancel(jobId, expectedVersion);
     } catch (error) {
       if (!(error instanceof RuntimeError && error.code === 'concurrency_conflict')) throw error;
-      const latest = await this.jobStore.getJob(jobId);
+      const latest = await this.jobActions.getJob(jobId);
       if (!latest) throw error;
       if (latest.status === 'cancelled') return latest;
       if (![
@@ -34,7 +34,7 @@ export class CancelJobFlow {
         'resuming',
         'recovery_required',
       ].includes(latest.status)) throw error;
-      return this.jobStore.cancel(jobId, latest.version);
+      return this.jobActions.cancel(jobId, latest.version);
     }
   }
 }

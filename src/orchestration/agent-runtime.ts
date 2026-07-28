@@ -35,7 +35,7 @@ export class AgentRuntime {
   }
 
   async createSession(input: { title?: string }) {
-    return this.#store.createSession({
+    return this.#store.sessions.create({
       id: this.#ids.sessionId(),
       title: input.title,
       nowMs: this.#clock.nowMs(),
@@ -43,7 +43,7 @@ export class AgentRuntime {
   }
 
   listSessions() {
-    return this.#store.listSessions();
+    return this.#store.sessions.list();
   }
 
   getSessionView(sessionId: string) {
@@ -60,7 +60,7 @@ export class AgentRuntime {
 
   async deleteSession(sessionId: string) {
     await this.#beforeDeleteSession?.(sessionId);
-    const deleted = await this.#store.deleteSession(sessionId);
+    const deleted = await this.#store.sessions.delete(sessionId);
     if (deleted) await this.#removeSessionWorkspace?.(sessionId);
     return deleted;
   }

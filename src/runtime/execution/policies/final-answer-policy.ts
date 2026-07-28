@@ -6,9 +6,9 @@ export class FinalAnswerPolicy {
 
   async validate(jobId: string) {
     try {
-      const plan = await this.store.getPlanByJobId(jobId);
+      const plan = await this.store.plans.getByJobId(jobId);
       if (!plan || plan.status === 'completed') return { type: 'accept' as const };
-      const steps = await this.store.listPlanSteps(plan.id);
+      const steps = await this.store.plans.listSteps(plan.id);
       if (plan.status === 'failed' || plan.status === 'cancelled') {
         return {
           type: 'fail' as const,

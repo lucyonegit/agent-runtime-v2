@@ -6,7 +6,7 @@ import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-w
 import type { AgentStore } from '../../storage/agent-store.js';
 import { ExecutionOwnershipService } from './shared/execution-ownership.service.js';
 import { InterruptedJobScanner } from './shared/interrupted-job-scanner.js';
-import { JobStore } from './shared/job-store.js';
+import { JobActions } from './shared/job-actions.js';
 
 export interface JobExecutorPort {
   start(): Promise<void>;
@@ -17,7 +17,7 @@ export interface JobExecutorPort {
 
 export interface JobExecutorOptions {
   store: AgentStore;
-  jobStore: JobStore;
+  jobActions: JobActions;
   reactExecution: Pick<ReActExecution, 'runJob'>;
   workerId: string;
   publisher: RuntimeEventPublisher;
@@ -39,10 +39,10 @@ export class JobExecutor implements JobExecutorPort {
     completion: Promise<void>;
   }>();
   readonly #options: Required<Omit<JobExecutorOptions,
-    'store' | 'jobStore' | 'reactExecution' | 'publisher' | 'workerId'>>
+    'store' | 'jobActions' | 'reactExecution' | 'publisher' | 'workerId'>>
     & JobExecutorOptions;
   readonly #reactExecution: Pick<ReActExecution, 'runJob'>;
-  readonly #jobStore: JobStore;
+  readonly #jobActions: JobActions;
   readonly #executionOwnership: ExecutionOwnershipService;
   readonly #interruptedJobScanner: InterruptedJobScanner;
   #stopping = false;
@@ -67,17 +67,17 @@ export class JobExecutor implements JobExecutorPort {
       || this.#options.recoveryBatchSize <= 0) {
       throw new RangeError('recoveryBatchSize must be a positive integer.');
     }
-    this.#jobStore = this.#options.jobStore;
+    this.#jobActions = this.#options.jobActions;
     this.#reactExecution = this.#options.reactExecution;
     this.#executionOwnership = new ExecutionOwnershipService({
       store: this.#options.store,
-      jobStore: this.#jobStore,
+      jobActions: this.#jobActions,
       workerId: this.#options.workerId,
       refreshIntervalMs: this.#options.ownershipRefreshMs,
     });
     this.#interruptedJobScanner = new InterruptedJobScanner({
       store: this.#options.store,
-      jobStore: this.#jobStore,
+      jobActions: this.#jobActions,
       publisher: this.#options.publisher,
       scanIntervalMs: this.#options.recoveryIntervalMs,
       batchSize: this.#options.recoveryBatchSize,
@@ -146,7 +146,7 @@ export class JobExecutor implements JobExecutorPort {
   }
 
   async #loadRunnableOwnedJob(jobId: string): Promise<AgentJob> {
-    const job = await this.#options.store.getJob(jobId);
+    const job = await this.#options.store.jobs.get(jobId);
     if (!job) throw new Error(`Job ${jobId} was not found.`);
     if (!['running', 'resuming'].includes(job.status)
       || job.leaseOwner !== this.#options.workerId
@@ -159,11 +159,11 @@ export class JobExecutor implements JobExecutorPort {
   }
 
   async #failJobIfStillOwned(jobId: string, error: unknown): Promise<void> {
-    const job = await this.#options.store.getJob(jobId);
+    const job = await this.#options.store.jobs.get(jobId);
     if (!job || !job.currentAttemptId || job.leaseOwner !== this.#options.workerId
       || !['running', 'resuming'].includes(job.status)) return;
     try {
-      const failedJob = await this.#jobStore.fail(job, {
+      const failedJob = await this.#jobActions.fail(job, {
         code: error instanceof RuntimeError ? error.code : 'runtime_error',
         message: error instanceof Error ? error.message : 'Runtime execution failed.',
       });

@@ -88,7 +88,7 @@ export class RuntimeEventWriter {
       throw new TypeError('A tool-call model output cannot complete a Job as final.');
     }
     try {
-      const committed = await this.#store.completeJobWithFinalMessage({
+      const committed = await this.#store.execution.completeWithFinalMessage({
         sessionId: target.sessionId,
         jobId: target.jobId,
         attemptId: target.attemptId,
@@ -120,7 +120,7 @@ export class RuntimeEventWriter {
   ) {
     if (events.length === 0) throw new TypeError('Input waiting requires at least one event.');
     try {
-      const committed = await this.#store.createInputRequestsAndMarkWaiting({
+      const committed = await this.#store.execution.waitForUserInput({
         sessionId: target.sessionId,
         jobId: target.jobId,
         attemptId: target.attemptId,

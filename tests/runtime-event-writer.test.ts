@@ -8,7 +8,9 @@ describe('RuntimeEventWriter rejected model output', () => {
     const publish = vi.fn(async () => undefined);
     const setModelCallOutputDisposition = vi.fn(async () => ({}) as never);
     const writer = new RuntimeEventWriter({
-      store: { setModelCallOutputDisposition } as unknown as AgentStore,
+      store: {
+        models: { setCallOutputDisposition: setModelCallOutputDisposition },
+      } as unknown as AgentStore,
       workerId: 'worker_1',
       tools: [],
       publisher: { publish },

@@ -1,9 +1,9 @@
 import type { AgentStore } from '../../../storage/agent-store.js';
-import type { JobStore } from './job-store.js';
+import type { JobActions } from './job-actions.js';
 
 export interface ExecutionOwnershipServiceOptions {
   store: AgentStore;
-  jobStore: JobStore;
+  jobActions: JobActions;
   workerId: string;
   refreshIntervalMs: number;
 }
@@ -30,11 +30,11 @@ export class ExecutionOwnershipService {
   }
 
   async #refresh(jobId: string): Promise<void> {
-    const job = await this.#options.store.getJob(jobId);
+    const job = await this.#options.store.jobs.get(jobId);
     if (!job || !['running', 'resuming'].includes(job.status)
       || job.leaseOwner !== this.#options.workerId || !job.currentAttemptId) return;
     try {
-      await this.#options.jobStore.renewExecutionOwnership(job);
+      await this.#options.jobActions.renewExecutionOwnership(job);
     } catch {
       // A later fenced write will observe that execution ownership was lost.
     }
