@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isTerminalTaskStatus, type AgentTask } from '../../../domain/index.js';
 import type {
   AgentStore,
+  CreateRetryTaskResult,
   CreateTaskWithUserMessageResult,
 } from '../../../storage/agent-store.js';
 import { RuntimeError } from '../../../runtime/errors/runtime-error.js';
@@ -68,4 +69,34 @@ export async function resolveIdempotentTaskCreate(
     );
   }
   return { session, task, message };
+}
+
+/** Reconstructs the committed result of an idempotent retry request. */
+export async function resolveIdempotentTaskRetry(
+  store: AgentStore,
+  input: { source: AgentTask; clientRequestId: string }
+): Promise<CreateRetryTaskResult> {
+  const [session, task] = await Promise.all([
+    store.sessions.get(input.source.sessionId),
+    store.tasks.getByClientRequestId(input.source.sessionId, input.clientRequestId),
+  ]);
+  if (!session || !task) {
+    throw new RuntimeError(
+      'storage_error',
+      'Idempotent Task retry replay could not load its committed entities.'
+    );
+  }
+  if (task.retryOfTaskId !== input.source.id) {
+    throw new RuntimeError(
+      'idempotency_conflict',
+      `clientRequestId ${JSON.stringify(input.clientRequestId)} was reused with a different request.`,
+      {
+        details: {
+          sessionId: input.source.sessionId,
+          clientRequestId: input.clientRequestId,
+        },
+      }
+    );
+  }
+  return { session, task };
 }

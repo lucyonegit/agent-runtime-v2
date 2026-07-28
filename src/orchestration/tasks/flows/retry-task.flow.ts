@@ -1,9 +1,17 @@
-import type { AgentStore, CreateRetryTaskResult } from '../../../storage/agent-store.js';
+import {
+  AgentStoreError,
+  type AgentStore,
+  type CreateRetryTaskResult,
+} from '../../../storage/agent-store.js';
 import { mapStoreError } from '../../../runtime/errors/runtime-error.js';
 import { TaskRunStarter } from '../shared/task-run-starter.js';
 import { TaskEventPublisher } from '../shared/task-event-publisher.js';
 import { TaskExecutionDispatcher } from '../shared/task-execution-dispatcher.js';
-import { loadTerminalTask, type TaskFlowClock } from '../shared/task-flow.helper.js';
+import {
+  loadTerminalTask,
+  resolveIdempotentTaskRetry,
+  type TaskFlowClock,
+} from '../shared/task-flow.helper.js';
 
 export interface RetryTaskInput {
   sourceTaskId: string;
@@ -24,14 +32,28 @@ export class RetryTaskFlow {
   async execute(input: RetryTaskInput): Promise<CreateRetryTaskResult> {
     try {
       const source = await loadTerminalTask(this.store, input.sourceTaskId);
-      const created = await this.store.tasks.createRetry({
-        sessionId: source.sessionId,
-        taskId: this.nextTaskId(),
-        retryOfTaskId: source.id,
-        clientRequestId: input.clientRequestId,
-        nowMs: this.clock.nowMs(),
-      });
+      let created: CreateRetryTaskResult;
+      try {
+        created = await this.store.tasks.createRetry({
+          sessionId: source.sessionId,
+          taskId: this.nextTaskId(),
+          retryOfTaskId: source.id,
+          clientRequestId: input.clientRequestId,
+          nowMs: this.clock.nowMs(),
+        });
+      } catch (error) {
+        if (error instanceof AgentStoreError && error.code === 'CLIENT_REQUEST_CONFLICT') {
+          created = await resolveIdempotentTaskRetry(this.store, {
+            source,
+            clientRequestId: input.clientRequestId,
+          });
+        } else {
+          throw error;
+        }
+      }
       await this.events.publishTask(created.task);
+      if (created.task.status !== 'created') return created;
+
       const started = await this.taskRuns.start(created.task, 'initial');
       this.execution.dispatch(started.task.id);
       return { ...created, task: started.task };
