@@ -8,6 +8,7 @@ export type LoopFailureCode =
   | 'context_build_error'
   | 'model_protocol_error'
   | 'invalid_plan_state'
+  | 'tool_state_unknown'
   | 'model_error'
   | 'model_output_truncated'
   | 'model_input_too_large';

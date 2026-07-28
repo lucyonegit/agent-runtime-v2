@@ -50,6 +50,8 @@ TaskExecutor 周期扫描 `running` 且 `ownershipExpiresAtMs <= now` 的 TaskRu
 - `side_effecting`：ToolRun 与 ToolCall 进入 `outcome_unknown`，不自动重放。
 - 已完成 ToolCall：从 `resultMessageId` 读取既有 ToolMessage，不再次调用工具。
 
+同一规则也适用于进程仍存活时的失败与取消：参数校验、工具查找等确认发生在实际调用前的失败仍记为 `failed`；`side_effecting` 工具一旦开始调用，随后异常、非零退出或取消都进入 `outcome_unknown`。该转换与 Task=`recovery_required`、TaskRun=`interrupted` 在同一事务提交，当前 ReAct 立即停止，不能继续调用模型或兄弟工具。
+
 ## 4. Retry
 
 Retry 创建新的 Task，并设置 `retryOfTaskId`。新 Task 直接复用原始不可变 HumanMessage 的 `goalMessageId`，不会重复写一条用户消息；旧 Task、TaskRun、ToolCall、ToolRun 和 Message 保持不变。UI 只显示重试链最末端未被后续 Task 替代的失败/取消卡片。

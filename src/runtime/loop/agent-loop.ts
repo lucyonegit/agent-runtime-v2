@@ -74,7 +74,13 @@ export type ToolCallsValidator = (candidate: {
 
 export type ToolExecutionResult =
   | { type: 'completed'; content: string; result?: unknown; artifacts?: AgentArtifactDraft[] }
-  | { type: 'failed'; code: string; message: string; details?: unknown }
+  | {
+      type: 'failed';
+      code: string;
+      message: string;
+      details?: unknown;
+      executionStarted?: boolean;
+    }
   | { type: 'requires_user_input'; request: ToolUserInputRequest };
 
 export interface ToolExecutionRequest {
@@ -462,7 +468,7 @@ export class AgentLoop {
           type: LOOP_EVENT_TYPES.ToolResultFailed,
           modelToolCallId: call.id,
           toolName: call.name,
-          executionStarted: true,
+          executionStarted: result.executionStarted ?? true,
           code: result.code,
           message: result.message,
           details: result.details,

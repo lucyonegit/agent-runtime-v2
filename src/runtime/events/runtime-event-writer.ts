@@ -37,6 +37,7 @@ export type RuntimeEventRecordResult =
   | { type: 'discarded_output' }
   | { type: 'committed_tool_calls'; message: AgentMessage }
   | { type: 'committed_tool_result'; message: AgentMessage }
+  | { type: 'recovery_required'; task: AgentTask; message: AgentMessage }
   | { type: 'final_candidate'; event: Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted }> }
   | { type: 'input_required'; event: Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ToolInputRequired }> };
 

@@ -251,6 +251,10 @@ export interface CompleteToolCallResult {
   toolCall: AgentToolCall;
   toolRun: AgentToolRun;
   artifacts: AgentArtifact[];
+  recoveryRequired?: {
+    task: AgentTask;
+    taskRun: AgentTaskRun;
+  };
 }
 
 export interface CompleteTaskWithFinalMessageInput {

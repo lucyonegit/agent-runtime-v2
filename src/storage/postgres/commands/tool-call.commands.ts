@@ -249,10 +249,9 @@ export async function completeToolCallCommand(
     const task = await selectTask(client, input.taskId, true);
     if (!task || task.session_id !== input.sessionId) throw taskNotFound(input.taskId);
     const taskRun = await selectTaskRun(client, input.taskRunId, true);
-    assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
     const call = await selectToolCall(client, input.taskId, input.modelToolCallId, true);
     if (!call) throw toolCallNotFound(input.taskId, input.modelToolCallId);
-    if (['completed', 'failed'].includes(call.status) && call.result_message_id) {
+    if (['completed', 'failed', 'outcome_unknown'].includes(call.status) && call.result_message_id) {
       const message = await client.query<AgentMessageRow>(
         `select * from agent_messages where id = $1`,
         [call.result_message_id]
@@ -270,8 +269,17 @@ export async function completeToolCallCommand(
         toolCall: mapAgentToolCallRow(call),
         toolRun: mapAgentToolRunRow(requireRow(run.rows[0], 'load tool run')),
         artifacts: artifacts.rows.map(mapAgentArtifactRow),
+        ...(call.status === 'outcome_unknown' && task.status === 'recovery_required'
+          ? {
+              recoveryRequired: {
+                task: mapAgentTaskRow(task),
+                taskRun: mapAgentTaskRunRow(requireRow(taskRun, 'load interrupted task run')),
+              },
+            }
+          : {}),
       };
     }
+    assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
     if (call.status !== 'running') {
       throw new AgentStoreError(
         'INVALID_TOOL_CALL_STATE',
@@ -292,6 +300,30 @@ export async function completeToolCallCommand(
       [call.call_message_id]
     );
     const contextScope = requireRow(callMessage.rows[0], 'load tool call message').context_scope;
+    const outcomeUnknown = input.outcome.status === 'failed'
+      && input.outcome.executionStarted !== false
+      && call.side_effect_level === 'side_effecting';
+    const terminalStatus = outcomeUnknown ? 'outcome_unknown' : input.outcome.status;
+    const errorCode = input.outcome.status === 'failed'
+      ? outcomeUnknown ? 'side_effect_outcome_unknown' : input.outcome.code
+      : null;
+    const errorMessage = input.outcome.status === 'failed'
+      ? outcomeUnknown
+        ? `The side-effecting tool failed after execution started; its outcome is unknown. ${input.outcome.message}`
+        : input.outcome.message
+      : null;
+    const errorDetails = input.outcome.status === 'failed'
+      ? outcomeUnknown
+        ? {
+            executionStarted: true,
+            originalError: {
+              code: input.outcome.code,
+              message: input.outcome.message,
+              details: input.outcome.details,
+            },
+          }
+        : input.outcome.details
+      : undefined;
     const toolResult = input.outcome.status === 'completed'
       ? {
           status: 'completed' as const,
@@ -300,14 +332,14 @@ export async function completeToolCallCommand(
         }
       : {
           status: 'failed' as const,
-          code: input.outcome.code,
-          error: input.outcome.message,
-          details: input.outcome.details,
+          code: errorCode!,
+          error: errorMessage!,
+          details: errorDetails,
           durationMs: input.outcome.durationMs,
         };
     const content = input.outcome.status === 'completed'
       ? input.outcome.content
-      : input.outcome.message;
+      : errorMessage!;
     const messageResult = await client.query<AgentMessageRow>(
       `insert into agent_messages(
          id, session_id, task_id, task_run_id,
@@ -331,7 +363,6 @@ export async function completeToolCallCommand(
         input.nowMs,
       ]
     );
-    const terminalStatus = input.outcome.status;
     const runResult = await client.query<AgentToolRunRow>(
       `update agent_tool_runs
        set status = $2, error_code = $3, error_message = $4, error_details = $5,
@@ -340,10 +371,10 @@ export async function completeToolCallCommand(
       [
         activeRun.id,
         terminalStatus,
-        input.outcome.status === 'failed' ? input.outcome.code : null,
-        input.outcome.status === 'failed' ? input.outcome.message : null,
-        input.outcome.status === 'failed' && input.outcome.details !== undefined
-          ? JSON.stringify(input.outcome.details)
+        errorCode,
+        errorMessage,
+        errorDetails !== undefined
+          ? JSON.stringify(errorDetails)
           : null,
         input.nowMs,
         input.outcome.durationMs,
@@ -353,16 +384,21 @@ export async function completeToolCallCommand(
       `update agent_tool_calls
        set status = $2, result_message_id = $3,
            error_code = $4, error_message = $5, error_details = $6,
-           version = version + 1, completed_at_ms = $7, updated_at_ms = $7
+           version = version + 1,
+           completed_at_ms = case
+             when $2::text in ('completed', 'failed') then $7::bigint
+             else null::bigint
+           end,
+           updated_at_ms = $7
        where id = $1 returning *`,
       [
         call.id,
         terminalStatus,
         input.messageId,
-        input.outcome.status === 'failed' ? input.outcome.code : null,
-        input.outcome.status === 'failed' ? input.outcome.message : null,
-        input.outcome.status === 'failed' && input.outcome.details !== undefined
-          ? JSON.stringify(input.outcome.details)
+        errorCode,
+        errorMessage,
+        errorDetails !== undefined
+          ? JSON.stringify(errorDetails)
           : null,
         input.nowMs,
       ]
@@ -410,12 +446,35 @@ export async function completeToolCallCommand(
         artifactRows.push(requireRow(result.rows[0], 'save artifact'));
       }
     }
+    let recoveryRequired: CompleteToolCallResult['recoveryRequired'];
+    if (outcomeUnknown) {
+      const interruptedRun = await client.query<AgentTaskRunRow>(
+        `update agent_task_runs
+         set status = 'interrupted', owner_id = null, ownership_expires_at_ms = null,
+             error_code = $2, error_message = $3, error_details = $4,
+             updated_at_ms = $5, ended_at_ms = $5
+         where id = $1 returning *`,
+        [taskRun.id, errorCode, errorMessage, JSON.stringify(errorDetails), input.nowMs]
+      );
+      const blockedTask = await client.query<AgentTaskRow>(
+        `update agent_tasks
+         set status = 'recovery_required', error_code = $2, error_message = $3, error_details = $4,
+             version = version + 1, updated_at_ms = $5
+         where id = $1 returning *`,
+        [task.id, errorCode, errorMessage, JSON.stringify(errorDetails), input.nowMs]
+      );
+      recoveryRequired = {
+        task: mapAgentTaskRow(requireRow(blockedTask.rows[0], 'require tool outcome recovery')),
+        taskRun: mapAgentTaskRunRow(requireRow(interruptedRun.rows[0], 'interrupt unknown tool run')),
+      };
+    }
     await touchSession(client, input.sessionId, input.nowMs);
     return {
       message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'save tool result message')),
       toolCall: mapAgentToolCallRow(requireRow(callResult.rows[0], 'complete tool call')),
       toolRun: mapAgentToolRunRow(requireRow(runResult.rows[0], 'complete tool run')),
       artifacts: artifactRows.map(mapAgentArtifactRow),
+      ...(recoveryRequired ? { recoveryRequired } : {}),
     };
   });
 }

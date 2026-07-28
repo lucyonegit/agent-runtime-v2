@@ -159,6 +159,23 @@ export class LoopEventHandler {
       for (const artifact of committed.artifacts) {
         await this.options.publish({ type: 'artifact.upserted', sessionId: target.sessionId, artifact });
       }
+      if (committed.recoveryRequired) {
+        await this.options.publish({
+          type: 'task_run.upserted',
+          sessionId: target.sessionId,
+          taskRun: committed.recoveryRequired.taskRun,
+        });
+        await this.options.publish({
+          type: 'task.upserted',
+          sessionId: target.sessionId,
+          task: committed.recoveryRequired.task,
+        });
+        return {
+          type: 'recovery_required',
+          task: committed.recoveryRequired.task,
+          message: committed.message,
+        };
+      }
       return { type: 'committed_tool_result', message: committed.message };
     } catch (error) {
       throw mapStoreError(error);

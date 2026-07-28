@@ -44,6 +44,14 @@ export async function executeDurableAgentLoop(
       const recorded = await writer.record(next.value, target);
       if (recorded.type === 'final_candidate') finalCandidates.set(recorded.event.outputId, recorded.event);
       else if (recorded.type === 'input_required') inputEvents.push(recorded.event);
+      else if (recorded.type === 'recovery_required') {
+        await iterator.return({
+          type: 'failed',
+          code: 'tool_state_unknown',
+          message: 'A side-effecting tool outcome is unknown and requires manual recovery.',
+        });
+        return { type: 'recovery_required', task: recorded.task };
+      }
       continue;
     }
 

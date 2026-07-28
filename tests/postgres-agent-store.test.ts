@@ -273,6 +273,194 @@ describe('PostgresAgentStore converged model', () => {
       expect.objectContaining({ id: 'tool_call_side_effect', status: 'outcome_unknown' }),
     ]);
   });
+
+  it('requires recovery when a side-effecting tool fails after execution starts', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await store.execution.saveToolCalls({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      outputId: 'output_side_effect',
+      messageId: 'message_side_effect',
+      content: '',
+      contextScope: 'task',
+      toolCalls: [{
+        id: 'tool_call_side_effect',
+        call: { id: 'model_side_effect', name: 'run_shell', args: { command: 'deploy' }, type: 'tool_call' },
+        argumentsChecksum: 'side_effect_checksum',
+        sideEffectLevel: 'side_effecting',
+        idempotencyKey: 'side_effect_key',
+      }],
+      nowMs: 21,
+    });
+    await store.execution.startToolRun({
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      modelToolCallId: 'model_side_effect',
+      toolRunId: 'tool_run_side_effect',
+      workerId: 'worker_1',
+      nowMs: 22,
+    });
+
+    const input = {
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      modelToolCallId: 'model_side_effect',
+      messageId: 'message_side_effect_result',
+      outcome: {
+        status: 'failed' as const,
+        executionStarted: true,
+        code: 'shell_exit_nonzero',
+        message: 'The command exited with status 1.',
+        durationMs: 5,
+      },
+      nowMs: 27,
+    };
+    const unknown = await store.execution.completeToolCall(input);
+
+    expect(unknown).toMatchObject({
+      toolCall: {
+        status: 'outcome_unknown',
+        error: { code: 'side_effect_outcome_unknown' },
+      },
+      toolRun: {
+        status: 'outcome_unknown',
+        error: { code: 'side_effect_outcome_unknown' },
+      },
+      message: {
+        toolResult: { status: 'failed', code: 'side_effect_outcome_unknown' },
+      },
+      recoveryRequired: {
+        task: { status: 'recovery_required' },
+        taskRun: { status: 'interrupted' },
+      },
+    });
+    await expect(store.execution.completeToolCall(input)).resolves.toMatchObject({
+      toolCall: { status: 'outcome_unknown' },
+      recoveryRequired: { task: { status: 'recovery_required' } },
+    });
+  });
+
+  it('keeps pre-execution side-effect failures replay-safe', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await store.execution.saveToolCalls({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      outputId: 'output_side_effect',
+      messageId: 'message_side_effect',
+      content: '',
+      contextScope: 'task',
+      toolCalls: [{
+        id: 'tool_call_side_effect',
+        call: { id: 'model_side_effect', name: 'run_shell', args: { command: '' }, type: 'tool_call' },
+        argumentsChecksum: 'side_effect_checksum',
+        sideEffectLevel: 'side_effecting',
+        idempotencyKey: 'side_effect_key',
+      }],
+      nowMs: 21,
+    });
+    await store.execution.startToolRun({
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      modelToolCallId: 'model_side_effect',
+      toolRunId: 'tool_run_side_effect',
+      workerId: 'worker_1',
+      nowMs: 22,
+    });
+
+    const failed = await store.execution.completeToolCall({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      modelToolCallId: 'model_side_effect',
+      messageId: 'message_side_effect_result',
+      outcome: {
+        status: 'failed',
+        executionStarted: false,
+        code: 'invalid_tool_arguments',
+        message: 'The command is required.',
+        durationMs: 0,
+      },
+      nowMs: 23,
+    });
+
+    expect(failed).toMatchObject({
+      toolCall: { status: 'failed', error: { code: 'invalid_tool_arguments' } },
+      toolRun: { status: 'failed' },
+    });
+    expect(failed.recoveryRequired).toBeUndefined();
+    await expect(store.tasks.get(task.id)).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('keeps an in-flight side effect outcome unknown when the Task is cancelled', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await store.execution.saveToolCalls({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      outputId: 'output_tools',
+      messageId: 'message_tools',
+      content: '',
+      contextScope: 'task',
+      toolCalls: [
+        {
+          id: 'tool_call_side_effect',
+          call: { id: 'model_side_effect', name: 'run_shell', args: { command: 'deploy' }, type: 'tool_call' },
+          argumentsChecksum: 'side_effect_checksum',
+          sideEffectLevel: 'side_effecting',
+          idempotencyKey: 'side_effect_key',
+        },
+        {
+          id: 'tool_call_read',
+          call: { id: 'model_read', name: 'read_file', args: { path: 'code/a.ts' }, type: 'tool_call' },
+          argumentsChecksum: 'read_checksum',
+          sideEffectLevel: 'read_only',
+          idempotencyKey: 'read_key',
+        },
+      ],
+      nowMs: 21,
+    });
+    for (const [modelToolCallId, toolRunId] of [
+      ['model_side_effect', 'tool_run_side_effect'],
+      ['model_read', 'tool_run_read'],
+    ] as const) {
+      await store.execution.startToolRun({
+        taskId: task.id,
+        taskRunId: started.taskRun.id,
+        modelToolCallId,
+        toolRunId,
+        workerId: 'worker_1',
+        nowMs: 22,
+      });
+    }
+
+    await store.tasks.cancel({
+      taskId: task.id,
+      expectedTaskVersion: started.task.version,
+      nowMs: 23,
+    });
+    const calls = await store.sessions.listToolCalls(task.sessionId);
+    const runs = await store.sessions.listToolRuns(task.sessionId);
+
+    expect(calls.find(call => call.id === 'tool_call_side_effect')).toMatchObject({
+      status: 'outcome_unknown', error: { code: 'side_effect_outcome_unknown' },
+    });
+    expect(runs.find(run => run.id === 'tool_run_side_effect')).toMatchObject({
+      status: 'outcome_unknown', error: { code: 'side_effect_outcome_unknown' },
+    });
+    expect(calls.find(call => call.id === 'tool_call_read')).toMatchObject({ status: 'cancelled' });
+    expect(runs.find(run => run.id === 'tool_run_read')).toMatchObject({ status: 'cancelled' });
+  });
 });
 
 async function createTask() {

@@ -447,15 +447,48 @@ export async function cancelTaskCommand(
       [task.id, input.nowMs]
     );
     await client.query(
-      `update agent_tool_runs
-       set status = 'cancelled', ended_at_ms = $2
-       where task_id = $1 and status = 'running'`,
+      `update agent_tool_runs run
+       set status = case
+             when call.side_effect_level = 'side_effecting' then 'outcome_unknown'
+             else 'cancelled'
+           end,
+           error_code = case
+             when call.side_effect_level = 'side_effecting' then 'side_effect_outcome_unknown'
+             else null
+           end,
+           error_message = case
+             when call.side_effect_level = 'side_effecting'
+               then 'The Task was cancelled after the side-effecting tool started; its outcome is unknown.'
+             else null
+           end,
+           ended_at_ms = $2
+       from agent_tool_calls call
+       where run.tool_call_id = call.id and run.task_id = $1 and run.status = 'running'`,
       [task.id, input.nowMs]
     );
     await client.query(
       `update agent_tool_calls
-       set status = 'cancelled', version = version + 1,
-           completed_at_ms = $2, updated_at_ms = $2
+       set status = case
+             when status = 'running' and side_effect_level = 'side_effecting' then 'outcome_unknown'
+             else 'cancelled'
+           end,
+           error_code = case
+             when status = 'running' and side_effect_level = 'side_effecting'
+               then 'side_effect_outcome_unknown'
+             else null
+           end,
+           error_message = case
+             when status = 'running' and side_effect_level = 'side_effecting'
+               then 'The Task was cancelled after the side-effecting tool started; its outcome is unknown.'
+             else null
+           end,
+           error_details = null,
+           version = version + 1,
+           completed_at_ms = case
+             when status = 'running' and side_effect_level = 'side_effecting' then null::bigint
+             else $2::bigint
+           end,
+           updated_at_ms = $2
        where task_id = $1 and status in ('pending', 'running', 'waiting_for_user')`,
       [task.id, input.nowMs]
     );

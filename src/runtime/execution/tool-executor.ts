@@ -144,7 +144,12 @@ export class ToolExecutor implements ToolExecutorPort {
     }
     const runtimeTool = this.#tools.get(request.call.name);
     if (!runtimeTool) {
-      return { type: 'failed', code: 'tool_not_found', message: `Tool not found: ${request.call.name}` };
+      return {
+        type: 'failed',
+        code: 'tool_not_found',
+        message: `Tool not found: ${request.call.name}`,
+        executionStarted: false,
+      };
     }
     if (
       toolCall.toolName !== request.call.name
@@ -160,7 +165,7 @@ export class ToolExecutor implements ToolExecutorPort {
       request.call.args,
       runtimeTool.argumentLimits
     );
-    if (argumentLimitFailure) return argumentLimitFailure;
+    if (argumentLimitFailure) return { ...argumentLimitFailure, executionStarted: false };
 
     const context: RuntimeToolContext = {
       sessionId: request.target.sessionId,
@@ -185,6 +190,7 @@ export class ToolExecutor implements ToolExecutorPort {
       if (request.signal?.aborted || isAbortError(error)) throw error;
       return {
         type: 'failed',
+        executionStarted: true,
         code: error instanceof ToolInputParsingException
           ? 'invalid_tool_arguments'
           : error instanceof RuntimeToolExecutionError
