@@ -210,6 +210,7 @@ export async function startToolRunCommand(
        where id = $1 returning *`,
       [call.id, input.nowMs]
     );
+    await touchSession(client, task.session_id, input.nowMs);
     return {
       toolCall: mapAgentToolCallRow(requireRow(callResult.rows[0], 'start tool call')),
       toolRun: mapAgentToolRunRow(requireRow(runResult.rows[0], 'start tool run')),

@@ -68,6 +68,64 @@ describe('PostgresAgentStore converged model', () => {
     });
   });
 
+  it('advances the Session revision when model usage becomes visible', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await store.models.startCall({
+      id: 'model_call_1',
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      logicalCallKey: 'task.react:1',
+      callType: 'task.react',
+      provider: 'test',
+      model: 'test-model',
+      contextRulesVersion: '1',
+      inputManifest: {
+        purpose: 'task',
+        contextRulesVersion: '1',
+        systemPromptVersion: '1',
+        messageGroupIds: [],
+        summaryIds: [],
+        fixedPrefixChecksum: 'fixed',
+        estimatedBreakdown: {
+          system: 1,
+          tools: 0,
+          summaries: 0,
+          messages: 1,
+          reservedOutput: 1,
+        },
+      },
+      inputMessages: [],
+      inputChecksum: 'input',
+      maxContextTokens: 100,
+      reservedOutputTokens: 10,
+      estimatedInputTokens: 2,
+      nowMs: 21,
+    });
+    const revisionBeforeUsage = (await store.sessions.get(task.sessionId))!.version;
+
+    await store.models.completeCall({
+      id: 'model_call_1',
+      status: 'completed',
+      usageSource: 'provider',
+      actualInputTokens: 2,
+      actualOutputTokens: 3,
+      actualTotalTokens: 5,
+      resultType: 'text',
+      resultPayload: { content: 'done' },
+      nowMs: 22,
+    });
+
+    await expect(store.sessions.get(task.sessionId)).resolves.toMatchObject({
+      version: revisionBeforeUsage + 1,
+    });
+    await expect(store.sessions.loadSnapshot(task.sessionId)).resolves.toMatchObject({
+      modelUsage: { latestModelCallId: 'model_call_1', totalTokens: 5 },
+    });
+  });
+
   it('persists Task, TaskRun, ToolCall and ToolRun while Message owns the result fact', async () => {
     const { task, message: goal } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
@@ -93,6 +151,7 @@ describe('PostgresAgentStore converged model', () => {
       id: 'tool_call_1', status: 'pending', createdInTaskRunId: 'task_run_1',
     });
 
+    const revisionBeforeToolStart = (await store.sessions.get(task.sessionId))!.version;
     const toolStarted = await store.execution.startToolRun({
       taskId: task.id,
       taskRunId: 'task_run_1',
@@ -105,6 +164,9 @@ describe('PostgresAgentStore converged model', () => {
       started: true,
       toolCall: { status: 'running' },
       toolRun: { id: 'tool_run_1', runNo: 1, status: 'running' },
+    });
+    await expect(store.sessions.get(task.sessionId)).resolves.toMatchObject({
+      version: revisionBeforeToolStart + 1,
     });
 
     const completedTool = await store.execution.completeToolCall({

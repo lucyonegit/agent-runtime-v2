@@ -22,6 +22,7 @@ import {
   selectTask,
   selectTaskRun,
   taskNotFound,
+  touchSession,
 } from './command-helpers.js';
 
 export async function startModelCallCommand(
@@ -96,6 +97,12 @@ export async function completeModelCallCommand(
   input: CompleteModelCallInput
 ): Promise<CompleteModelCallResult> {
   return withPostgresTransaction(client, async () => {
+    const candidate = await client.query<Pick<AgentModelCallRow, 'session_id'>>(
+      `select session_id from agent_model_calls where id = $1`,
+      [input.id]
+    );
+    const sessionId = requireRow(candidate.rows[0], 'find model call').session_id;
+    await lockAgentSession(client, sessionId);
     const locked = await client.query<AgentModelCallRow>(
       `select * from agent_model_calls where id = $1 for update`,
       [input.id]
@@ -137,6 +144,7 @@ export async function completeModelCallCommand(
       ]
     );
     const usage = await upsertModelUsageStats(client, call, input);
+    await touchSession(client, call.session_id, input.nowMs);
     return {
       call: mapAgentModelCallRow(requireRow(result.rows[0], 'complete model call')),
       usage: mapAgentModelUsageStatsRow(usage),
@@ -174,6 +182,9 @@ export async function abandonStartedModelCallsCommand(client: PoolClient, nowMs:
         nowMs,
       });
       completed.push(mapAgentModelCallRow(call));
+    }
+    for (const sessionId of new Set(result.rows.map(call => call.session_id))) {
+      await touchSession(client, sessionId, nowMs);
     }
     return completed;
   });

@@ -59,7 +59,9 @@ export async function createAgentApplication(
 
     const clock = { nowMs: () => Date.now() };
     const store = new PostgresAgentStore(pool);
-    const events = new RuntimeEventBus();
+    const events = new RuntimeEventBus({
+      readSessionRevision: async sessionId => (await store.sessions.get(sessionId))?.version,
+    });
     const managedProcesses = new ManagedProcessManager(
       events,
       clock,
