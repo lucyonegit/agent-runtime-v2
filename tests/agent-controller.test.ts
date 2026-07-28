@@ -10,7 +10,6 @@ describe('AgentController SSE', () => {
     const controller = new AgentController(
       null as never,
       new RuntimeEventBus(),
-      null as never,
       null as never
     );
     const received: unknown[] = [];

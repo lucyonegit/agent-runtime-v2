@@ -9,6 +9,7 @@ describe('runtime configuration', () => {
       AGENT_RUNTIME_WORKER_ID: 'worker_test',
       AGENT_SERVER_PORT: '3100',
       AGENT_SERVER_AUTH_TOKEN: 'test-runtime-auth-token-32-characters',
+      AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS: 'true',
       TASK_OWNERSHIP_TIMEOUT_MS: '45000',
       TASK_OWNERSHIP_REFRESH_MS: '15000',
       AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS: 'true',
@@ -17,7 +18,11 @@ describe('runtime configuration', () => {
 
     expect(config).toMatchObject({
       workerId: 'worker_test',
-      server: { port: 3_100, authToken: 'test-runtime-auth-token-32-characters' },
+      server: {
+        port: 3_100,
+        authToken: 'test-runtime-auth-token-32-characters',
+        debugEndpointsEnabled: true,
+      },
       postgres: { url: 'postgres://runtime' },
       model: { provider: 'dashscope', apiKey: 'test-secret', modelName: 'qwen3.7-max' },
       modelTokenLimits: {

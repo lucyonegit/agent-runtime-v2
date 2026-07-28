@@ -29,6 +29,7 @@ export interface ServerConfig {
   host: string;
   port: number;
   authToken: string;
+  debugEndpointsEnabled: boolean;
   logger: ServerLogLevel[];
   cors: {
     origin: string[];

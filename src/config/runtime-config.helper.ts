@@ -62,6 +62,9 @@ function applyEnvironmentOverrides(
   assignString(env, 'AGENT_SERVER_HOST', value => { config.server.host = value; });
   assignPositiveInteger(env, 'AGENT_SERVER_PORT', value => { config.server.port = value; });
   assignString(env, 'AGENT_SERVER_AUTH_TOKEN', value => { config.server.authToken = value; });
+  assignBoolean(env, 'AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS', value => {
+    config.server.debugEndpointsEnabled = value;
+  });
   assignString(env, 'DATABASE_URL', value => { config.postgres.url = value; });
 
   if (env.DASHSCOPE_API_KEY?.trim()) {
@@ -115,6 +118,7 @@ function validateConfig(config: RuntimeConfigFile): void {
   if (config.server.authToken.length > 0 && config.server.authToken.length < 32) {
     throw new RangeError('server.authToken must contain at least 32 characters when configured.');
   }
+  booleanValue(config.server.debugEndpointsEnabled, 'server.debugEndpointsEnabled');
   if (config.server.logger.length === 0) throw new RangeError('server.logger cannot be empty.');
   if (!Array.isArray(config.server.cors.origin) || config.server.cors.origin.length === 0) {
     throw new TypeError('server.cors.origin must be a non-empty array of explicit origins.');

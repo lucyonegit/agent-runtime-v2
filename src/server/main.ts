@@ -17,7 +17,8 @@ const app = await NestFactory.create<NestFastifyApplication>(
     application.events,
     application.contextPreview,
     application.managedProcesses,
-    authToken
+    authToken,
+    config.server.debugEndpointsEnabled
   ),
   new FastifyAdapter(),
   { logger: config.server.logger }

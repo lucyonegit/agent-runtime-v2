@@ -11,7 +11,6 @@ import {
 } from '@nestjs/common';
 import { interval, map, merge, type Observable } from 'rxjs';
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
-import { ContextPreviewService } from '../debug/context-preview.service.js';
 import { RuntimeEventBus } from '../runtime/runtime-event-bus.js';
 import { ManagedProcessManager } from '../../tools/index.js';
 
@@ -20,7 +19,6 @@ export class AgentController {
   constructor(
     private readonly runtime: AgentRuntime,
     private readonly events: RuntimeEventBus,
-    private readonly contextPreview: ContextPreviewService,
     private readonly managedProcesses: ManagedProcessManager
   ) {}
 
@@ -37,21 +35,6 @@ export class AgentController {
   @Get('sessions/:sessionId/view')
   getSessionView(@Param('sessionId') sessionId: string) {
     return this.runtime.getSessionView(sessionId);
-  }
-
-  @Get('sessions/:sessionId/context-preview')
-  getContextPreview(@Param('sessionId') sessionId: string) {
-    return this.contextPreview.preview(sessionId);
-  }
-
-  @Get('tasks/:taskId/context-preview')
-  getTaskContextPreview(@Param('taskId') taskId: string) {
-    return this.contextPreview.previewTask(taskId);
-  }
-
-  @Get('model-calls/:modelCallId/context')
-  getModelCallContext(@Param('modelCallId') modelCallId: string) {
-    return this.contextPreview.previewModelCall(modelCallId);
   }
 
   @Delete('sessions/:sessionId')

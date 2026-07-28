@@ -6,6 +6,8 @@
 
 standalone HTTP 默认 fail closed：启动前必须设置至少 32 字符的 `AGENT_SERVER_AUTH_TOKEN`，Web 使用相同的 `VITE_AGENT_API_TOKEN`。所有普通请求和 SSE 都发送 `Authorization: Bearer <token>`。CORS 只允许 `runtime.json` 中列出的显式 Origin，默认是本机 5174 开发端口；不要把带有构建期 token 的 Web 静态包公开部署。
 
+Context Preview 可能包含敏感答案、工具参数和模型输入，三个 Debug Context HTTP 路由默认不注册。仅在受控的本地排障环境中设置 `AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS=true`；Electron 内部 IPC 的 Context Preview 不受这个 HTTP 开关影响。
+
 ## 2. 破坏式重建数据库
 
 开发环境执行：
@@ -36,7 +38,12 @@ NODE_ENV=development npm run schema:reset -- --confirm-agent-runtime-reset
 - `POST /tasks/:taskId/resume`
 - `POST /user-input-requests/:requestId/answer`
 - `GET /sessions/:sessionId/events`
+
+以下 Debug Context 路由仅在显式启用后存在：
+
 - `GET /sessions/:sessionId/context-preview`
+- `GET /tasks/:taskId/context-preview`
+- `GET /model-calls/:modelCallId/context`
 
 Electron IPC 使用对应的 `task.create/task.cancel/task.retry/task.resume` 命令，不暴露 HTTP 给 Renderer。
 

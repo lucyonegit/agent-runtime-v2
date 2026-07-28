@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ExecutionContext } from '@nestjs/common';
 import { DEFAULT_SERVER_CONFIG } from '../src/config/runtime-config.js';
+import { AgentDebugController } from '../src/server/http/agent-debug.controller.js';
+import { AgentController } from '../src/server/http/agent.controller.js';
+import { AgentHttpModule } from '../src/server/http/agent-http.module.js';
 import {
   requireRuntimeHttpAuthToken,
   RuntimeHttpAuthGuard,
@@ -23,6 +26,15 @@ describe('Agent HTTP CORS configuration', () => {
     expect(DEFAULT_SERVER_CONFIG.cors.credentials).toBe(false);
     expect(DEFAULT_SERVER_CONFIG.cors.allowedHeaders).toContain('authorization');
     expect(DEFAULT_SERVER_CONFIG.cors.allowedHeaders).toContain('content-type');
+    expect(DEFAULT_SERVER_CONFIG.debugEndpointsEnabled).toBe(false);
+  });
+
+  it('does not register Debug Context routes unless explicitly enabled', () => {
+    expect(httpModule(false).controllers).toEqual([AgentController]);
+    expect(httpModule(true).controllers).toEqual([
+      AgentController,
+      AgentDebugController,
+    ]);
   });
 
   it('requires a long bearer token before the HTTP server starts', () => {
@@ -54,4 +66,15 @@ function context(authorization: string | undefined): ExecutionContext {
       getRequest: () => ({ headers: { authorization } }),
     }),
   } as unknown as ExecutionContext;
+}
+
+function httpModule(debugEndpointsEnabled: boolean) {
+  return AgentHttpModule.forRoot(
+    null as never,
+    null as never,
+    null as never,
+    null as never,
+    'test-runtime-auth-token-32-characters',
+    debugEndpointsEnabled
+  );
 }
