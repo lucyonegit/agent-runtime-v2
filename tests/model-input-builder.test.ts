@@ -53,14 +53,16 @@ describe('ModelInputBuilder', () => {
       }),
       message({ rowId: 8, id: 'internal_none', taskId: 'task_current', contextScope: 'none' }),
     ];
-    const store = {
-      sessions: { listMessages: vi.fn(async () => messages) },
-      context: { getCompaction: vi.fn(async () => undefined) },
-      plans: { getActive: vi.fn(async () => ({
+    const loadInputSnapshot = vi.fn(async () => ({
+      messages,
+      activePlan: {
         sessionId: 'session_1', taskId: 'task_current', title: 'Current plan',
         steps: [{ step: 'Inspect', status: 'in_progress' as const }],
         version: 0, createdAtMs: 1, updatedAtMs: 1,
-      })) },
+      },
+    }));
+    const store = {
+      context: { loadInputSnapshot },
     } as unknown as AgentStore;
     const builder = new ModelInputBuilder({
       store,
@@ -92,6 +94,7 @@ describe('ModelInputBuilder', () => {
       'system', 'system', 'human', 'ai', 'human', 'ai', 'tool', 'system',
     ]);
     expect(input.inputManifest.purpose).toBe('task.react');
+    expect(loadInputSnapshot).toHaveBeenCalledOnce();
   });
 });
 

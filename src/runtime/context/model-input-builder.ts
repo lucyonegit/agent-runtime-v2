@@ -15,6 +15,7 @@ import type {
 } from '../../domain/index.js';
 import type { ContextConfig } from '../../config/runtime-config.js';
 import type { AgentStore } from '../../storage/agent-store.js';
+import type { AgentContextSnapshot } from '../../storage/agent-store.js';
 import { RuntimeError } from '../errors/runtime-error.js';
 import type { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { stableStringify } from '../helpers/stable-json.helper.js';
@@ -55,59 +56,62 @@ export class ModelInputBuilder {
 
   async buildForTask(task: AgentTask, taskRun: AgentTaskRun): Promise<ModelInput> {
     let built = await this.#build(task);
-    if (built.estimatedTokens <= built.inputTokenLimit) return built;
+    if (built.input.estimatedTokens <= built.input.inputTokenLimit) return built.input;
     if (!this.#compactor) {
       throw new RuntimeError('model_input_too_large', 'Model input exceeds the configured input token limit.');
     }
 
-    const rawMessages = await this.options.store.sessions.listMessages(task.sessionId);
-    const eligible = filterContextMessages(rawMessages, task);
-    const compaction = await this.options.store.context.getCompaction(task.sessionId);
+    const eligible = filterContextMessages(built.snapshot.messages, task);
     const updated = await this.#compactor.compact({
       task,
       taskRun,
       groups: buildCompleteMessageGroups(eligible),
-      current: compaction,
+      current: built.snapshot.compaction,
     });
     if (!updated) {
       throw new RuntimeError('model_input_too_large', 'Model input is too large and has no older complete messages to compact.');
     }
 
     built = await this.#build(task);
-    if (built.estimatedTokens > built.inputTokenLimit) {
+    if (built.input.estimatedTokens > built.input.inputTokenLimit) {
       throw new RuntimeError('model_input_too_large', 'Model input remains too large after one compaction pass.', {
         details: {
-          estimatedTokens: built.estimatedTokens,
-          inputTokenLimit: built.inputTokenLimit,
-          compactedThroughRowId: built.compactedThroughRowId,
+          estimatedTokens: built.input.estimatedTokens,
+          inputTokenLimit: built.input.inputTokenLimit,
+          compactedThroughRowId: built.input.compactedThroughRowId,
         },
       });
     }
-    return built;
+    return built.input;
   }
 
   /** Read-only inspection uses the exact builder without mutating compaction state. */
-  previewTask(task: AgentTask): Promise<ModelInput> {
-    return this.#build(task);
+  async previewTask(task: AgentTask): Promise<ModelInput> {
+    return (await this.#build(task)).input;
   }
 
   async previewNextTurn(sessionId: string): Promise<ModelInput> {
     const tasks = await this.options.store.sessions.listTasks(sessionId);
     const task = [...tasks].sort((left, right) => right.createdAtMs - left.createdAtMs)[0];
     if (!task) throw new RuntimeError('invalid_task_state', `Session ${sessionId} has no Task to inspect.`);
-    return this.#build(task);
+    return (await this.#build(task)).input;
   }
 
-  async #build(task: AgentTask): Promise<ModelInput> {
-    const [allMessages, compaction, activePlan, stableContext] = await Promise.all([
-      this.options.store.sessions.listMessages(task.sessionId),
-      this.options.store.context.getCompaction(task.sessionId),
-      this.options.store.plans.getActive(task.sessionId),
+  async #build(task: AgentTask): Promise<{
+    input: ModelInput;
+    snapshot: AgentContextSnapshot;
+  }> {
+    const [snapshot, stableContext] = await Promise.all([
+      this.options.store.context.loadInputSnapshot(task.sessionId),
       this.options.getStableContext(task.sessionId),
     ]);
-    const eligible = filterContextMessages(allMessages, task);
+    const eligible = filterContextMessages(snapshot.messages, task);
     const rawGroups = buildCompleteMessageGroups(eligible);
-    const groups = selectGroupsAfterCompaction(rawGroups, task, compaction?.throughMessageRowId ?? 0);
+    const groups = selectGroupsAfterCompaction(
+      rawGroups,
+      task,
+      snapshot.compaction?.throughMessageRowId ?? 0
+    );
     const projectedToolResultMessageIds: string[] = [];
     const projectedGroups = groups.map(group => projectToolResults(
       group,
@@ -118,10 +122,15 @@ export class ModelInputBuilder {
     const messages: BaseMessage[] = [
       new SystemMessage(this.options.systemPrompt),
       new SystemMessage(stableContext),
-      ...(compaction ? [new SystemMessage(`Earlier conversation summary:\n${compaction.summary}`)] : []),
+      ...(snapshot.compaction
+        ? [new SystemMessage(`Earlier conversation summary:\n${snapshot.compaction.summary}`)]
+        : []),
       ...projectedGroups.flatMap(group => group.messages.map(toLangChainMessage)),
-      ...(activePlan?.taskId === task.id ? [new SystemMessage(
-        `Active plan (authoritative):\n${JSON.stringify({ title: activePlan.title, steps: activePlan.steps })}`
+      ...(snapshot.activePlan?.taskId === task.id ? [new SystemMessage(
+        `Active plan (authoritative):\n${JSON.stringify({
+          title: snapshot.activePlan.title,
+          steps: snapshot.activePlan.steps,
+        })}`
       )] : []),
     ];
     const serialized = messages.map(message => `${message.getType()}:${message.text}`).join('\n');
@@ -131,20 +140,25 @@ export class ModelInputBuilder {
     const inputManifest = this.#manifest({
       groups: projectedGroups,
       messages: includedMessages,
-      compactionVersion: compaction?.version,
-      compactionSummary: compaction?.summary,
+      compactionVersion: snapshot.compaction?.version,
+      compactionSummary: snapshot.compaction?.summary,
       estimatedTokens,
       stableContext,
       projectedToolResultMessageIds,
     });
     return {
-      messages,
-      estimatedTokens,
-      inputTokenLimit: this.options.inputTokenLimit,
-      includedMessageIds: includedMessages.map(message => message.id),
-      ...(compaction ? { compactedThroughRowId: compaction.throughMessageRowId } : {}),
-      projectedToolResultMessageIds,
-      inputManifest,
+      snapshot,
+      input: {
+        messages,
+        estimatedTokens,
+        inputTokenLimit: this.options.inputTokenLimit,
+        includedMessageIds: includedMessages.map(message => message.id),
+        ...(snapshot.compaction
+          ? { compactedThroughRowId: snapshot.compaction.throughMessageRowId }
+          : {}),
+        projectedToolResultMessageIds,
+        inputManifest,
+      },
     };
   }
 

@@ -437,6 +437,12 @@ export interface AgentSessionSnapshot {
   modelUsage?: AgentModelUsageStats;
 }
 
+export interface AgentContextSnapshot {
+  messages: AgentMessage[];
+  activePlan?: AgentActivePlan;
+  compaction?: AgentContextCompaction;
+}
+
 export interface SessionStore {
   create(input: CreateSessionInput): Promise<AgentSession>;
   list(): Promise<AgentSession[]>;
@@ -499,6 +505,7 @@ export interface ModelStore {
 }
 
 export interface ContextStore {
+  loadInputSnapshot(sessionId: string): Promise<AgentContextSnapshot>;
   getCompaction(sessionId: string): Promise<AgentContextCompaction | undefined>;
   replaceCompaction(input: ReplaceContextCompactionInput): Promise<AgentContextCompaction>;
 }

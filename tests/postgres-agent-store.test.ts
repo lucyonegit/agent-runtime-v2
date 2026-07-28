@@ -68,6 +68,32 @@ describe('PostgresAgentStore converged model', () => {
     });
   });
 
+  it('loads all durable model-input sources through one context snapshot', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await store.plans.apply({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      title: 'Context plan',
+      steps: [{ step: 'Inspect', status: 'in_progress' }],
+      nowMs: 21,
+    });
+    await store.context.replaceCompaction({
+      sessionId: task.sessionId,
+      throughMessageRowId: 1,
+      summary: 'Earlier work',
+      nowMs: 22,
+    });
+
+    await expect(store.context.loadInputSnapshot(task.sessionId)).resolves.toMatchObject({
+      messages: [{ id: 'message_goal', content: 'Inspect the code.' }],
+      activePlan: { taskId: task.id, title: 'Context plan' },
+      compaction: { throughMessageRowId: 1, summary: 'Earlier work' },
+    });
+  });
+
   it('advances the Session revision when model usage becomes visible', async () => {
     const { task } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
