@@ -1,15 +1,9 @@
-import { randomUUID } from 'node:crypto';
 import type { AgentJob } from '../../domain/index.js';
 import type {
-  AgentStore,
   CreateJobAndAppendUserMessageResult,
   CreateRetryJobResult,
   SaveUserInputAnswerResult,
 } from '../../storage/agent-store.js';
-import {
-  resolveExecutionLimits,
-  type ExecutionLimits,
-} from '../../runtime/settings/execution-limits.js';
 import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
 import {
   AnswerUserInputFlow,
@@ -23,24 +17,16 @@ import {
 import { CreateJobFlow, type CreateManagedJobInput } from './flows/create-job.flow.js';
 import { ResumeJobFlow } from './flows/resume-job.flow.js';
 import { RetryJobFlow, type RetryManagedJobInput } from './flows/retry-job.flow.js';
-import type { JobExecutionSupervisorPort } from './job-execution-supervisor.js';
+import type { JobExecutorPort } from './job-executor.js';
 import { JobAttemptStarter } from './shared/job-attempt-starter.js';
 import { JobEventPublisher } from './shared/job-event-publisher.js';
 import { JobExecutionDispatcher } from './shared/job-execution-dispatcher.js';
-import {
-  JobStateTransitions,
-  type JobStateClock,
-  type JobStateIds,
-} from './shared/job-state-transitions.js';
+import { JobStore } from './shared/job-store.js';
 
 export interface JobManagerOptions {
-  store: AgentStore;
+  jobStore: JobStore;
   publisher: RuntimeEventPublisher;
-  execution: JobExecutionSupervisorPort;
-  workerId: string;
-  limits?: Partial<ExecutionLimits>;
-  clock?: JobStateClock;
-  ids?: JobStateIds;
+  execution: JobExecutorPort;
 }
 
 export interface JobManagerPort {
@@ -66,37 +52,25 @@ export class JobManager implements JobManagerPort {
   readonly #answerUserInput: AnswerUserInputFlow;
 
   constructor(private readonly options: JobManagerOptions) {
-    if (!options.workerId.trim()) throw new TypeError('workerId must not be empty.');
-    const limits = resolveExecutionLimits(options.limits);
-    const clock = options.clock ?? systemClock;
-    const state = new JobStateTransitions({
-      store: options.store,
-      workerId: options.workerId,
-      jobLeaseMs: limits.jobLeaseMs,
-      clock,
-      ids: options.ids ?? randomIds,
-    });
     const events = new JobEventPublisher(options.publisher);
-    const attempts = new JobAttemptStarter(state, events);
+    const attempts = new JobAttemptStarter(options.jobStore, events);
     const dispatcher = new JobExecutionDispatcher(options.execution);
-    this.#create = new CreateJobFlow(state, attempts, events, dispatcher);
-    this.#retry = new RetryJobFlow(state, attempts, events, dispatcher);
+    this.#create = new CreateJobFlow(options.jobStore, attempts, events, dispatcher);
+    this.#retry = new RetryJobFlow(options.jobStore, attempts, events, dispatcher);
     this.#continueAsNew = new ContinueAsNewJobFlow(
-      state,
+      options.jobStore,
       attempts,
       events,
       dispatcher
     );
     this.#resume = new ResumeJobFlow(
-      options.store,
-      state,
+      options.jobStore,
       attempts,
       events,
-      dispatcher,
-      clock
+      dispatcher
     );
-    this.#cancel = new CancelJobFlow(state, events, options.execution);
-    this.#answerUserInput = new AnswerUserInputFlow(state, events, dispatcher);
+    this.#cancel = new CancelJobFlow(options.jobStore, events, options.execution);
+    this.#answerUserInput = new AnswerUserInputFlow(options.jobStore, events, dispatcher);
   }
 
   start(): Promise<void> {
@@ -133,16 +107,6 @@ export class JobManager implements JobManagerPort {
     return this.#answerUserInput.execute(input);
   }
 }
-
-const systemClock: JobStateClock = {
-  nowMs: () => Date.now(),
-};
-
-const randomIds: JobStateIds = {
-  jobId: () => `job_${randomUUID()}`,
-  messageId: () => `message_${randomUUID()}`,
-  attemptId: () => `attempt_${randomUUID()}`,
-};
 
 export type {
   AnswerUserInputRequestInput,

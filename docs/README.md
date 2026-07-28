@@ -11,6 +11,7 @@
 4. [统一 Context 拼接、压缩与 Token 用量策略](./04-context-compression-token-strategy.md)：基于稳定 MessageGroup 的精确覆盖、统一 Context Memory、provider usage 校准与每轮 ReAct 预算。
 5. [后续 TODO 路线图](./05-runtime-roadmap-todo.md)：恢复闭环、调度背压、安全隔离、Durable SSE、历史精确回查、模型治理和故障评测的优先级与验收标准。
 6. [Job 执行所有权、写入围栏与故障恢复](./06-job-execution-ownership-and-recovery.md)：执行权有效期、定期刷新、Attempt fence、服务崩溃、人工 Resume 和工具副作用恢复的专项说明。
+7. [Context 压缩服务实现级设计](./07-context-compression-service-deep-dive.md)：逐步说明压缩触发、Group 选择、压缩前后 LangChain Messages、ContextMemory 数据结构、PostgreSQL 版本链、多轮滚动压缩、失败降级和当前实现风险。
 
 其余文档是专题说明；当它们与“当前实现全链路”冲突时，以全链路文档和代码为准。
 

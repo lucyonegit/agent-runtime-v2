@@ -9,26 +9,27 @@ import {
   type AgentStore,
   type CreateJobAndAppendUserMessageResult,
   type CreateRetryJobResult,
+  type PrepareToolInvocationsForRecoveryResult,
   type SaveUserInputAnswerResult,
 } from '../../../storage/agent-store.js';
 import { RuntimeError, mapStoreError } from '../../../runtime/errors/runtime-error.js';
 
-export interface JobStateClock {
+export interface JobStoreClock {
   nowMs(): number;
 }
 
-export interface JobStateIds {
+export interface JobStoreIds {
   jobId(): string;
   messageId(): string;
   attemptId(): string;
 }
 
-export interface JobStateTransitionsOptions {
+export interface JobStoreOptions {
   store: AgentStore;
   workerId: string;
   jobLeaseMs: number;
-  clock: JobStateClock;
-  ids?: JobStateIds;
+  clock: JobStoreClock;
+  ids?: JobStoreIds;
 }
 
 export interface CreateJobInput {
@@ -61,16 +62,17 @@ export interface SaveUserInputAnswerInput {
 }
 
 /**
- * Typed access to durable Job state transitions.
+ * Job-specific storage gateway for durable commands.
  *
- * This class contains storage calls, state preconditions and store-error
- * mapping only. Business sequencing, realtime publication and background
- * dispatch deliberately stay in the owning orchestration Flow.
+ * This class makes database-backed AgentStore operations explicit at call
+ * sites. It owns persistence preconditions, generated IDs and store-error
+ * mapping. Business sequencing, realtime publication and background dispatch
+ * deliberately stay in the owning orchestration Flow.
  */
-export class JobStateTransitions {
-  readonly #ids: JobStateIds;
+export class JobStore {
+  readonly #ids: JobStoreIds;
 
-  constructor(private readonly options: JobStateTransitionsOptions) {
+  constructor(private readonly options: JobStoreOptions) {
     this.#ids = options.ids ?? randomIds;
   }
 
@@ -166,6 +168,28 @@ export class JobStateTransitions {
     return job;
   }
 
+  async prepareToolInvocationsForRecovery(
+    job: AgentJob
+  ): Promise<PrepareToolInvocationsForRecoveryResult> {
+    if (!job.currentAttemptId || job.leaseOwner !== this.options.workerId) {
+      throw new RuntimeError(
+        'lease_lost',
+        `Job ${JSON.stringify(job.id)} is not owned by this Job executor.`,
+        { details: { jobId: job.id, workerId: this.options.workerId } }
+      );
+    }
+    try {
+      return await this.options.store.prepareToolInvocationsForRecovery({
+        jobId: job.id,
+        workerId: this.options.workerId,
+        attemptId: job.currentAttemptId,
+        nowMs: this.options.clock.nowMs(),
+      });
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
   async getJob(jobId: string): Promise<AgentJob | undefined> {
     try {
       return await this.options.store.getJob(jobId);
@@ -178,7 +202,7 @@ export class JobStateTransitions {
     if (!job.currentAttemptId || job.leaseOwner !== this.options.workerId) {
       throw new RuntimeError(
         'lease_lost',
-        `Job ${JSON.stringify(job.id)} is not owned by this execution supervisor.`,
+        `Job ${JSON.stringify(job.id)} is not owned by this Job executor.`,
         { details: { jobId: job.id, workerId: this.options.workerId } }
       );
     }
@@ -287,7 +311,7 @@ export class JobStateTransitions {
   }
 }
 
-const randomIds: JobStateIds = {
+const randomIds: JobStoreIds = {
   jobId: () => `job_${randomUUID()}`,
   messageId: () => `message_${randomUUID()}`,
   attemptId: () => `attempt_${randomUUID()}`,

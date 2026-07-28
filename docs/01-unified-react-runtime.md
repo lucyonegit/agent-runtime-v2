@@ -8,7 +8,7 @@
 flowchart TD
     U["UserMessage"] --> O["AgentRuntime / Orchestration"]
     O --> J["创建并领取 Job"]
-    J --> R["ReactExecution"]
+    J --> R["ReActExecution"]
     R --> C["加载完整 Job Context"]
     C --> L["AgentLoop"]
     L --> M["LangChain ChatModel"]
@@ -33,7 +33,7 @@ flowchart TD
 
 - `AgentRuntime` 是 HTTP 使用的应用入口，处理 Session，并将 Job 命令委托给 `JobManager`。
 - `JobManager` 组织创建、取消、Retry、Resume、HITL 和对应 SSE，不管理进程内执行。
-- `JobExecutionSupervisor` 管理恢复扫描、活动执行、AbortController、所有权续期，并组合 Runtime。
+- `JobExecutor` 只管理恢复扫描、活动执行、AbortController 和执行权续期。
 - `AgentStore` 提供 Job 状态迁移所需的原子持久化命令；编排层不实现 SQL。
 - `ContextInspectionService` 是独立的只读调试查询，不参与正式 Job 执行。
 
@@ -43,26 +43,28 @@ flowchart TD
 flowchart LR
     HTTP["HTTP / Server"] --> AR["AgentRuntime"]
     AR --> JM["JobManager"]
-    JM --> JES["JobExecutionSupervisor"]
+    JM --> JES["JobExecutor"]
     JM --> STORE["AgentStore"]
     JES --> STORE
-    JES --> RE["ReactExecution"]
+    JES --> RE["ReActExecution"]
     RE --> AL["AgentLoop"]
     CIS["ContextInspectionService"] --> CS["ReActContextService"]
 ```
 
-`runtime` 不依赖 `orchestration`。`ReactExecution` 只通过
-`JobExecutionStatePort` 请求查询、失败和取消 Job，具体实现由编排层注入。
+`runtime` 不依赖 `orchestration`。`ReActExecution` 只通过
+`JobStorePort` 请求持久化查询、失败和取消 Job，具体实现由编排层注入。
 
-Server 是 composition root：它创建 `JobExecutionSupervisor`，再将其交给
-`JobManager`，最后只把 `JobManager` 注入 `AgentRuntime`。Job 状态事务由
-`AgentStore` 保证，调度状态不会混入持久化层。
+Server 的 `createAgentApplication()` 是 composition root：它创建唯一的
+`JobStore`、`AuditedModelFactory`、`ReActContextService` 和
+`ReActExecution`，再把已经组装好的执行器交给 `JobExecutor`，把同一个
+状态迁移服务交给 `JobManager`。Job 状态事务由 `AgentStore` 保证，调度状态不会混入
+持久化层，Supervisor 也不再知道模型和 Context 的构造细节。
 
 ### Runtime
 
 `src/runtime` 负责一次 Job 的执行机制：
 
-- `ReactExecution` 装配模型、工具、审计、Context 和 AgentLoop。
+- `ReActExecution` 装配模型、工具、审计、Context 和 AgentLoop。
 - `executeDurableAgentLoop` 消费 LoopEvent，并保证事件先持久化再继续执行。
 - `RuntimeEventWriter` 提交消息、工具结果、HITL 和 final，再发布 SSE。
 - `AuditedChatModel` 包装 LangChain Runnable，记录每次真实模型输入和结果。

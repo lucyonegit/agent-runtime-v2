@@ -1,11 +1,11 @@
 import { RuntimeError } from '../../../runtime/errors/runtime-error.js';
 import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-writer.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
-import type { JobStateTransitions } from './job-state-transitions.js';
+import type { JobStore } from './job-store.js';
 
 export interface InterruptedJobScannerOptions {
   store: AgentStore;
-  jobState: JobStateTransitions;
+  jobStore: JobStore;
   publisher: RuntimeEventPublisher;
   scanIntervalMs: number;
   batchSize: number;
@@ -74,7 +74,7 @@ export class InterruptedJobScanner {
     for (const job of jobs) {
       if (this.#stopping) break;
       try {
-        const recoveryRequiredJob = await this.#options.jobState.markRecoveryRequired(
+        const recoveryRequiredJob = await this.#options.jobStore.markRecoveryRequired(
           job.id,
           job.version
         );

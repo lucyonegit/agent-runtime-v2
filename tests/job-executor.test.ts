@@ -1,10 +1,10 @@
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentJob } from '../src/domain/index.js';
-import { JobExecutionSupervisor } from '../src/orchestration/jobs/job-execution-supervisor.js';
+import { JobExecutor } from '../src/orchestration/jobs/job-executor.js';
+import { JobStore } from '../src/orchestration/jobs/shared/job-store.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
-describe('JobExecutionSupervisor recovery', () => {
+describe('JobExecutor recovery', () => {
   it('marks interrupted Jobs for explicit recovery without restarting them', async () => {
     const candidate = jobFixture({ leaseExpiresAtMs: 999 });
     const recoveryRequiredJob = jobFixture({
@@ -21,25 +21,26 @@ describe('JobExecutionSupervisor recovery', () => {
       startJobExecution: vi.fn(),
     } as unknown as AgentStore;
     const publisher = { publish: vi.fn(async () => undefined) };
-    const supervisor = new JobExecutionSupervisor({
+    const clock = { nowMs: () => 1_000 };
+    const jobStore = new JobStore({
       store,
       workerId: 'worker_test',
+      jobLeaseMs: 30_000,
+      clock,
+    });
+    const executor = new JobExecutor({
+      store,
+      jobStore,
+      reactExecution: { runJob: vi.fn(async () => undefined as never) },
+      workerId: 'worker_test',
       publisher,
-      model: {} as BaseChatModel,
-      provider: 'test',
-      modelName: 'test-model',
-      tools: [],
       recoveryIntervalMs: 60_000,
       recoveryBatchSize: 32,
-      jobSystemPrompt: 'test system prompt',
-      systemPromptVersion: 'test-v1',
-      promptId: 'test-prompt',
-      promptVersion: 1,
-      clock: { nowMs: () => 1_000 },
+      clock,
     });
 
-    await supervisor.start();
-    await supervisor.shutdown();
+    await executor.start();
+    await executor.shutdown();
 
     expect(store.abandonStartedModelCalls).toHaveBeenCalledWith(1_000);
     expect(store.listJobsNeedingRuntimeRecovery).toHaveBeenCalledWith({

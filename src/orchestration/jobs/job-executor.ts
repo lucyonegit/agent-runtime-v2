@@ -1,58 +1,30 @@
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import {
-  DEFAULT_CONTEXT_CONFIG,
-  DEFAULT_EXECUTION_CONFIG,
-  DEFAULT_MODEL_CONFIG,
-  DEFAULT_TOOLS_CONFIG,
-  resolveModelTokenLimits,
-  type ContextConfig,
-} from '../../config/runtime-config.js';
+import { DEFAULT_EXECUTION_CONFIG } from '../../config/runtime-config.js';
 import type { AgentJob } from '../../domain/index.js';
-import { ReactExecution } from '../../runtime/execution/react-execution.js';
-import { ReActContextService } from '../../runtime/context/react-context.service.js';
-import { AuditedModelFactory } from '../../runtime/model/audited-model.factory.js';
+import type { ReActExecution } from '../../runtime/execution/react-execution.js';
 import { RuntimeError } from '../../runtime/errors/runtime-error.js';
 import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
-import type { RuntimeTool } from '../../runtime/execution/tool-executor.js';
 import type { AgentStore } from '../../storage/agent-store.js';
-import { buildStableEnvironmentContext } from '../../runtime/prompting/job-agent-prompt.js';
 import { ExecutionOwnershipService } from './shared/execution-ownership.service.js';
 import { InterruptedJobScanner } from './shared/interrupted-job-scanner.js';
-import { JobStateTransitions } from './shared/job-state-transitions.js';
+import { JobStore } from './shared/job-store.js';
 
-export interface JobExecutionSupervisorPort {
+export interface JobExecutorPort {
   start(): Promise<void>;
   startExecution(jobId: string): Promise<void>;
   abortExecution(jobId: string): void;
   shutdown(): Promise<void>;
 }
 
-export interface JobExecutionSupervisorOptions {
+export interface JobExecutorOptions {
   store: AgentStore;
+  jobStore: JobStore;
+  reactExecution: Pick<ReActExecution, 'runJob'>;
   workerId: string;
   publisher: RuntimeEventPublisher;
-  model: BaseChatModel;
-  provider: string;
-  modelName: string;
-  tools: RuntimeTool[];
-  sandboxRoot?: string;
-  shellPath?: string;
-  maxContextTokens?: number;
-  reservedOutputTokens?: number;
-  inputTokenLimit?: number;
-  maxIterations?: number;
-  maxToolCalls?: number;
-  executionDeadlineMs?: number;
-  jobLeaseMs?: number;
-  jobHeartbeatMs?: number;
+  ownershipTimeoutMs?: number;
+  ownershipRefreshMs?: number;
   recoveryIntervalMs?: number;
   recoveryBatchSize?: number;
-  streaming?: boolean;
-  contextConfig?: ContextConfig;
-  jobSystemPrompt: string;
-  systemPromptVersion: string;
-  promptId: string;
-  promptVersion: number;
   clock?: { nowMs(): number };
 }
 
@@ -61,48 +33,31 @@ export interface JobExecutionSupervisorOptions {
  * cancellation and execution ownership heartbeats. User-facing Job commands
  * belong to JobManager; ReAct mechanics remain in Runtime.
  */
-export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
+export class JobExecutor implements JobExecutorPort {
   readonly #activeExecutions = new Map<string, {
     controller: AbortController;
     completion: Promise<void>;
   }>();
-  readonly #options: Required<Omit<JobExecutionSupervisorOptions,
-    'store' | 'publisher' | 'model' | 'tools' | 'workerId' | 'provider' | 'modelName'
-    | 'sandboxRoot' | 'shellPath' | 'contextConfig'>>
-    & JobExecutionSupervisorOptions;
-  readonly #reactExecution: ReactExecution;
-  readonly #contextService: ReActContextService;
-  readonly #jobState: JobStateTransitions;
+  readonly #options: Required<Omit<JobExecutorOptions,
+    'store' | 'jobStore' | 'reactExecution' | 'publisher' | 'workerId'>>
+    & JobExecutorOptions;
+  readonly #reactExecution: Pick<ReActExecution, 'runJob'>;
+  readonly #jobStore: JobStore;
   readonly #executionOwnership: ExecutionOwnershipService;
   readonly #interruptedJobScanner: InterruptedJobScanner;
   #stopping = false;
 
-  constructor(options: JobExecutionSupervisorOptions) {
-    const defaultModelLimits = resolveModelTokenLimits(DEFAULT_MODEL_CONFIG);
-    const maxContextTokens = options.maxContextTokens
-      ?? defaultModelLimits.contextWindowTokens;
-    const reservedOutputTokens = options.reservedOutputTokens
-      ?? defaultModelLimits.outputTokenLimit;
-    const inputTokenLimit = options.inputTokenLimit
-      ?? maxContextTokens - reservedOutputTokens;
+  constructor(options: JobExecutorOptions) {
     this.#options = {
-      maxContextTokens,
-      reservedOutputTokens,
-      inputTokenLimit,
-      maxIterations: DEFAULT_EXECUTION_CONFIG.maxIterations,
-      maxToolCalls: DEFAULT_EXECUTION_CONFIG.maxToolCalls,
-      executionDeadlineMs: DEFAULT_EXECUTION_CONFIG.deadlineMs,
-      jobLeaseMs: DEFAULT_EXECUTION_CONFIG.ownershipTimeoutMs,
-      jobHeartbeatMs: DEFAULT_EXECUTION_CONFIG.ownershipRefreshMs,
+      ownershipTimeoutMs: DEFAULT_EXECUTION_CONFIG.ownershipTimeoutMs,
+      ownershipRefreshMs: DEFAULT_EXECUTION_CONFIG.ownershipRefreshMs,
       recoveryIntervalMs: DEFAULT_EXECUTION_CONFIG.recoveryScanIntervalMs,
       recoveryBatchSize: DEFAULT_EXECUTION_CONFIG.recoveryBatchSize,
-      streaming: DEFAULT_MODEL_CONFIG.streaming,
-      shellPath: DEFAULT_TOOLS_CONFIG.shell.executable,
       clock: { nowMs: () => Date.now() },
       ...options,
     };
-    if (this.#options.jobHeartbeatMs >= this.#options.jobLeaseMs) {
-      throw new RangeError('jobHeartbeatMs must be shorter than jobLeaseMs.');
+    if (this.#options.ownershipRefreshMs >= this.#options.ownershipTimeoutMs) {
+      throw new RangeError('ownershipRefreshMs must be shorter than ownershipTimeoutMs.');
     }
     if (!Number.isSafeInteger(this.#options.recoveryIntervalMs)
       || this.#options.recoveryIntervalMs <= 0) {
@@ -112,77 +67,21 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
       || this.#options.recoveryBatchSize <= 0) {
       throw new RangeError('recoveryBatchSize must be a positive integer.');
     }
-    this.#jobState = new JobStateTransitions({
-      store: this.#options.store,
-      workerId: this.#options.workerId,
-      jobLeaseMs: this.#options.jobLeaseMs,
-      clock: this.#options.clock,
-    });
+    this.#jobStore = this.#options.jobStore;
+    this.#reactExecution = this.#options.reactExecution;
     this.#executionOwnership = new ExecutionOwnershipService({
       store: this.#options.store,
-      jobState: this.#jobState,
+      jobStore: this.#jobStore,
       workerId: this.#options.workerId,
-      refreshIntervalMs: this.#options.jobHeartbeatMs,
+      refreshIntervalMs: this.#options.ownershipRefreshMs,
     });
     this.#interruptedJobScanner = new InterruptedJobScanner({
       store: this.#options.store,
-      jobState: this.#jobState,
+      jobStore: this.#jobStore,
       publisher: this.#options.publisher,
       scanIntervalMs: this.#options.recoveryIntervalMs,
       batchSize: this.#options.recoveryBatchSize,
       clock: this.#options.clock,
-    });
-    const modelBudget = {
-      provider: this.#options.provider,
-      name: this.#options.modelName,
-      maxContextTokens: this.#options.maxContextTokens,
-      reservedOutputTokens: this.#options.reservedOutputTokens,
-      inputTokenLimit: this.#options.inputTokenLimit,
-    };
-    // 普通 ReAct 与 Context 压缩共享同一个审计模型工厂；Supervisor 不感知具体调用类型。
-    const modelFactory = new AuditedModelFactory({
-      delegate: this.#options.model,
-      store: this.#options.store,
-      workerId: this.#options.workerId,
-      provider: this.#options.provider,
-      modelName: this.#options.modelName,
-      maxContextTokens: this.#options.maxContextTokens,
-      reservedOutputTokens: this.#options.reservedOutputTokens,
-      publisher: this.#options.publisher,
-    });
-    this.#reactExecution = new ReactExecution({
-      store: this.#options.store,
-      jobState: {
-        getJob: jobId => this.#jobState.getJob(jobId),
-        failJob: (job, error) => this.#jobState.fail(job, error),
-        cancelJob: (jobId, expectedVersion) => this.#jobState.cancel(jobId, expectedVersion),
-      },
-      workerId: this.#options.workerId,
-      publisher: this.#options.publisher,
-      modelFactory,
-      tools: this.#options.tools,
-      sandboxRoot: this.#options.sandboxRoot,
-      maxIterations: this.#options.maxIterations,
-      maxToolCalls: this.#options.maxToolCalls,
-      executionDeadlineMs: this.#options.executionDeadlineMs,
-      streaming: this.#options.streaming,
-    });
-    this.#contextService = new ReActContextService({
-      store: this.#options.store,
-      systemPrompt: this.#options.jobSystemPrompt,
-      systemPromptVersion: this.#options.systemPromptVersion,
-      promptId: this.#options.promptId,
-      promptVersion: this.#options.promptVersion,
-      model: modelBudget,
-      contextConfig: this.#options.contextConfig ?? DEFAULT_CONTEXT_CONFIG,
-      toolSchemas: this.#options.tools.map(tool => tool.tool),
-      getStableContext: sessionId => buildStableEnvironmentContext({
-        sandboxRoot: this.#options.sandboxRoot ?? '.agent-sandbox',
-        sessionId,
-        shellPath: this.#options.shellPath,
-      }),
-      // ReActContextService 内部决定何时以 context.compress 类型调用模型。
-      modelFactory,
     });
   }
 
@@ -242,9 +141,6 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
     const job = await this.#loadRunnableOwnedJob(jobId);
     await this.#reactExecution.runJob({
       job,
-      // ReAct 每轮模型调用前都会执行该回调。上一轮工具结果、Plan 更新、HITL 回答
-      // 已经写入数据库，因此这里必须重新构建 Context，而不能复用 Job 启动时的快照。
-      reloadContext: () => this.#contextService.buildForJob(job),
       signal,
     });
   }
@@ -267,7 +163,7 @@ export class JobExecutionSupervisor implements JobExecutionSupervisorPort {
     if (!job || !job.currentAttemptId || job.leaseOwner !== this.#options.workerId
       || !['running', 'resuming'].includes(job.status)) return;
     try {
-      const failedJob = await this.#jobState.fail(job, {
+      const failedJob = await this.#jobStore.fail(job, {
         code: error instanceof RuntimeError ? error.code : 'runtime_error',
         message: error instanceof Error ? error.message : 'Runtime execution failed.',
       });

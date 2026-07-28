@@ -4,10 +4,11 @@ import type { AgentJob } from '../../domain/index.js';
 import { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';
 import type {
-  JobExecutionStatePort,
-  ReactJobExecutionResult,
+  JobStorePort,
+  ReActJobExecutionResult,
 } from './types/react-execution.types.js';
 import type { BuiltContext } from '../context/types/context.types.js';
+import type { ReActContextService } from '../context/react-context.service.js';
 import {
   RuntimeEventWriter,
   type RuntimeEventPublisher,
@@ -18,9 +19,10 @@ import { FinalAnswerPolicy } from './policies/final-answer-policy.js';
 import { ToolCallPolicy } from './policies/tool-call-policy.js';
 import { PendingToolCallLoader } from './recovery/pending-tool-call-loader.js';
 
-export interface ReactExecutionOptions {
+export interface ReActExecutionOptions {
   store: AgentStore;
-  jobState: JobExecutionStatePort;
+  jobStore: JobStorePort;
+  context: Pick<ReActContextService, 'buildForJob'>;
   workerId: string;
   publisher: RuntimeEventPublisher;
   modelFactory: AuditedModelFactory;
@@ -37,12 +39,12 @@ export interface ReactExecutionOptions {
  * the canonical database context, so tool calls, plan updates and HITL answers
  * become visible without a nested executor or an in-memory context fork.
  */
-export class ReactExecution {
+export class ReActExecution {
   readonly #toolCallPolicy: ToolCallPolicy;
   readonly #finalAnswerPolicy: FinalAnswerPolicy;
   readonly #pendingToolCallLoader: PendingToolCallLoader;
 
-  constructor(private readonly options: ReactExecutionOptions) {
+  constructor(private readonly options: ReActExecutionOptions) {
     this.#toolCallPolicy = new ToolCallPolicy(options.tools);
     this.#finalAnswerPolicy = new FinalAnswerPolicy(options.store);
     this.#pendingToolCallLoader = new PendingToolCallLoader(options.store);
@@ -50,9 +52,8 @@ export class ReactExecution {
 
   async runJob(input: {
     job: AgentJob;
-    reloadContext(): Promise<BuiltContext>;
     signal?: AbortSignal;
-  }): Promise<ReactJobExecutionResult> {
+  }): Promise<ReActJobExecutionResult> {
     const checkpoint = await this.options.store.getLatestLoopCheckpoint(input.job.id);
     const pendingToolCalls = await this.#pendingToolCallLoader.load(
       input.job,
@@ -82,13 +83,13 @@ export class ReactExecution {
         streaming: this.options.streaming,
       }),
       writer: this.#writer(),
-      jobState: this.options.jobState,
+      jobStore: this.options.jobStore,
       input: {
         job: input.job,
         loopInput: {
           context: {
             loadMessages: async () => {
-              current = await input.reloadContext();
+              current = await this.options.context.buildForJob(input.job);
               return current.messages;
             },
           },

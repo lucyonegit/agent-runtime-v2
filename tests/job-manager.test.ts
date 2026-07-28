@@ -6,8 +6,9 @@ import type {
   AgentToolInvocation,
   AgentUserInputRequest,
 } from '../src/domain/index.js';
-import type { JobExecutionSupervisorPort } from '../src/orchestration/jobs/job-execution-supervisor.js';
+import type { JobExecutorPort } from '../src/orchestration/jobs/job-executor.js';
 import { JobManager } from '../src/orchestration/jobs/job-manager.js';
+import { JobStore } from '../src/orchestration/jobs/shared/job-store.js';
 import { resolveExecutionLimits } from '../src/runtime/settings/execution-limits.js';
 import {
   AgentStoreError,
@@ -373,27 +374,31 @@ function createManager(
   store: AgentStore,
   nowMs: number,
   execution = executionSupervisor()
-): { manager: JobManager; execution: JobExecutionSupervisorPort } {
+): { manager: JobManager; execution: JobExecutorPort } {
+  const jobStore = new JobStore({
+    store,
+    workerId: 'worker_1',
+    jobLeaseMs: 30_000,
+    clock: { nowMs: () => nowMs },
+    ids: {
+      jobId: () => 'job_2',
+      messageId: () => 'message_2',
+      attemptId: () => 'attempt_1',
+    },
+  });
   return {
     manager: new JobManager({
-      store,
+      jobStore,
       publisher: { publish: vi.fn(async () => undefined) },
       execution,
-      workerId: 'worker_1',
-      clock: { nowMs: () => nowMs },
-      ids: {
-        jobId: () => 'job_2',
-        messageId: () => 'message_2',
-        attemptId: () => 'attempt_1',
-      },
     }),
     execution,
   };
 }
 
 function executionSupervisor(
-  overrides: Partial<JobExecutionSupervisorPort> = {}
-): JobExecutionSupervisorPort {
+  overrides: Partial<JobExecutorPort> = {}
+): JobExecutorPort {
   return {
     start: vi.fn(async () => undefined),
     startExecution: vi.fn(async () => undefined),

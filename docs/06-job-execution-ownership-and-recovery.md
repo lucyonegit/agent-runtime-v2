@@ -62,7 +62,7 @@ Node.js 进程已经不存在
 | 执行权刷新 | `renewJobExecutionLease` | 把截止时间更新为 `now + ownershipTimeoutMs` |
 | 写入围栏 | `assertJobLease` 及条件 SQL | 拒绝旧 Worker、旧 Attempt 或过期执行者写入 |
 | Loop Checkpoint | `agent_loop_checkpoints` | ReAct 能够继续的持久化逻辑位置 |
-| Recovery Scanner | `JobExecutionSupervisor` | 发现过期 Job 并标记 `recovery_required` |
+| Recovery Scanner | `JobExecutor` | 发现过期 Job 并标记 `recovery_required` |
 
 Job、Attempt 和 Checkpoint 的关系是：
 
@@ -134,9 +134,9 @@ where id = :jobId
 
 它决定“是否应该启动一次执行”，但不负责维护执行权定时器。
 
-### 5.2 JobExecutionSupervisor
+### 5.2 JobExecutor
 
-`src/orchestration/job-execution-supervisor.ts`
+`src/orchestration/jobs/job-executor.ts`
 
 负责进程内执行监督：
 
@@ -147,7 +147,7 @@ where id = :jobId
 - 周期扫描遗留 Job；
 - 将过期 Job 标记为 `recovery_required`。
 
-### 5.3 ReactExecution
+### 5.3 ReActExecution
 
 `src/runtime/execution/react-execution.ts`
 
@@ -181,8 +181,8 @@ sequenceDiagram
     participant API as HTTP API
     participant JM as JobManager
     participant DB as PostgreSQL
-    participant SUP as JobExecutionSupervisor
-    participant RE as ReactExecution
+    participant SUP as JobExecutor
+    participant RE as ReActExecution
 
     API->>JM: createJob
     JM->>DB: 插入 Job + HumanMessage
@@ -508,8 +508,8 @@ resumeJobExecutionCommand
 ## 17. 阅读代码的推荐顺序
 
 1. `src/orchestration/job-manager.ts`：用户命令如何触发启动、取消、Retry 和 Resume。
-2. `src/orchestration/job-execution-supervisor.ts`：执行监督、执行权刷新与恢复扫描。
-3. `src/orchestration/helpers/job-persistence.helper.ts`：Orchestration 到 Store 的持久化语义。
+2. `src/orchestration/jobs/job-executor.ts`：Job 执行、执行权刷新与恢复扫描。
+3. `src/orchestration/jobs/shared/job-store.ts`：Job 持久化命令、前置校验与错误映射。
 4. `src/storage/postgres/transaction-commands.ts`：真正的状态转换和写入围栏。
 5. `src/runtime/execution/react-execution.ts`：获得执行权后如何恢复并运行 ReAct。
 6. `src/runtime/loop/agent-loop.ts`：单次模型/工具迭代。

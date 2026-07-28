@@ -83,7 +83,7 @@ flowchart TD
     N --> A
 ```
 
-关键点：`ReactExecution.runJob()` 的每次循环都会重新调用
+关键点：`ReActExecution.runJob()` 的每次循环都会重新调用
 `ReActContextService.buildForJob()`。压缩判断天然发生在每次 ReAct
 迭代，不需要额外的“长 Job 分支”。
 

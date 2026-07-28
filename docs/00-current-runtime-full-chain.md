@@ -21,10 +21,10 @@ flowchart LR
     UI["Web UI"] -->|"HTTP command"| HTTP["NestJS HTTP"]
     HTTP --> AR["AgentRuntime"]
     AR --> JM["JobManager"]
-    JM --> JES["JobExecutionSupervisor"]
+    JM --> JES["JobExecutor"]
     JM --> STORE["PostgresAgentStore"]
     JES --> STORE
-    JES --> RER["ReactExecution"]
+    JES --> RER["ReActExecution"]
     RER --> AL["AgentLoop"]
     AL --> LC["LangChain ChatModel"]
     AL --> TE["ToolExecutor"]
@@ -53,7 +53,7 @@ flowchart LR
 3. **先落库，后广播**：稳定状态先在事务内提交，再通过 SSE 通知前端。
 4. **恢复稳定边界，不恢复 JS 调用栈**：Checkpoint 保存循环所处阶段、计数器和工具批次，而不是序列化进程内对象。
 
-Server 作为 composition root 创建 `JobExecutionSupervisor` 和 `JobManager`，
+Server 作为 composition root 创建 `JobExecutor` 和 `JobManager`，
 并只把 `JobManager` 注入 `AgentRuntime`。Job 用户用例、进程内执行调度和
 数据库原子事务形成单向依赖，不再存在两个同级 Job 管理对象。
 
@@ -124,9 +124,9 @@ src/
   orchestration/
     agent-runtime.ts              HTTP 应用入口与 Session 用例
     job-manager.ts                Job 用户命令、状态编排与 SSE
-    job-execution-supervisor.ts   恢复扫描、进程内执行、心跳和 Runtime 组合
+    job-executor.ts               恢复扫描、进程内执行和执行权刷新
     helpers/
-      job-persistence.helper.ts   AgentStore 原子命令参数与错误映射
+      job-store.ts                Job 持久化命令、前置校验与错误映射
     context-inspection.service.ts 调试查询编排
 
   runtime/
@@ -212,7 +212,7 @@ sequenceDiagram
     participant PS as Local process supervisor
     participant RT as AgentRuntime
     participant JM as JobManager
-    participant JES as JobExecutionSupervisor
+    participant JES as JobExecutor
     participant HTTP as NestJS/Fastify
 
     P->>ENV: 加载 .env
@@ -293,7 +293,7 @@ JOB_HEARTBEAT_MS 必须短于 JOB_LEASE_MS，否则启动直接失败。
 SIGINT 或 SIGTERM 时：
 
 1. AgentRuntime.stop 委托 JobManager.shutdown；
-2. JobManager 委托 JobExecutionSupervisor 关闭恢复扫描并 abort 所有本进程执行；
+2. JobManager 委托 JobExecutor 关闭恢复扫描并 abort 所有本进程执行；
 3. ManagedProcessManager 关闭本地发现轮询，但不终止独立开发服务；
 4. 等待活动 Promise 收敛；
 5. 关闭 HTTP；
@@ -344,7 +344,7 @@ sequenceDiagram
     participant AR as AgentRuntime
     participant JM as JobManager
     participant DB as PostgreSQL
-    participant BG as JobExecutionSupervisor
+    participant BG as JobExecutor
 
     UI->>HTTP: POST /sessions/:id/jobs
     HTTP->>AR: createJob
@@ -418,7 +418,7 @@ stateDiagram-v2
 
 ---
 
-## 8. JobExecutionSupervisor：进程内执行调度
+## 8. JobExecutor：进程内 Job 执行
 
 该类不实现 ReAct 细节，负责：
 
@@ -426,11 +426,13 @@ stateDiagram-v2
 2. 创建 AbortController；
 3. 定时续租；
 4. 验证 Job 状态、worker、attempt 和租约；
-5. 读取稳定 goal；
-6. 组合 ReactExecution；
-7. 将未被底层处理的异常转成 Job failed；
-8. 扫描因进程退出而中断的 Job，并标记为 recovery_required；
-9. 服务关闭时停止扫描、等待当前扫描结束并中止活动执行。
+5. 调用已注入的 ReActExecution；
+6. 将未被底层处理的异常转成 Job failed；
+7. 扫描因进程退出而中断的 Job，并标记为 recovery_required；
+8. 服务关闭时停止扫描、等待当前扫描结束并中止活动执行。
+
+它不创建模型、Context 服务或 ReActExecution。这些具体实现统一由
+`src/server/runtime/agent-application.factory.ts` 组装。
 
 默认执行限制：
 
@@ -448,7 +450,7 @@ stateDiagram-v2
 
 ---
 
-## 9. ReactExecution：持久化事实接入 ReAct
+## 9. ReActExecution：持久化事实接入 ReAct
 
 每次 execute 前先读取最新 LoopCheckpoint。
 
@@ -833,7 +835,7 @@ sequenceDiagram
 
 ### 16.3 recovery_required
 
-`JobExecutionSupervisor` 启动后立即扫描一次，之后定时扫描：
+`JobExecutor` 启动后立即扫描一次，之后定时扫描：
 
 1. abandon 已失去有效 lease 的 started ModelCall；
 2. 找 created 且长时间未启动的 Job；
@@ -1580,7 +1582,7 @@ ToolInvocation failed 会有 errorCode、errorMessage、errorDetails 和正式 T
 | --- | --- |
 | agent-loop.test.ts | 流式、工具批次、限制、取消、组装 |
 | agent-runtime.test.ts | HTTP 应用入口到 JobManager 的命令委托 |
-| job-execution-supervisor.test.ts | 中断 Job 扫描与 recovery_required 迁移 |
+| job-executor.test.ts | 中断 Job 扫描与 recovery_required 迁移 |
 | job-manager.test.ts | 创建、取消、Retry、幂等与执行调度 |
 | runtime-event-writer.test.ts | LoopEvent 到事务/SSE |
 | unified-react-plan.test.ts | update_plan 与统一 ReAct |
@@ -1720,8 +1722,8 @@ sequenceDiagram
 1. src/domain/job.ts：Job 状态。
 2. src/orchestration/agent-runtime.ts：HTTP 应用入口与 Session 用例。
 3. src/orchestration/job-manager.ts：Job 用户命令与状态编排。
-4. src/orchestration/job-execution-supervisor.ts：执行所有权、心跳与后台调度。
-5. src/orchestration/helpers/job-persistence.helper.ts：AgentStore 原子命令适配。
+4. src/orchestration/jobs/job-executor.ts：执行所有权、刷新与后台调度。
+5. src/orchestration/jobs/shared/job-store.ts：Job 持久化命令、前置校验与错误映射。
 6. src/runtime/execution/react-execution.ts：Checkpoint 恢复。
 7. src/runtime/loop/agent-loop.ts：ReAct 算法。
 8. src/runtime/execution/helpers/durable-loop-execution.helper.ts 与

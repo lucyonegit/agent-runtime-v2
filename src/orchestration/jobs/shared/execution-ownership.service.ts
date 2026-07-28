@@ -1,9 +1,9 @@
 import type { AgentStore } from '../../../storage/agent-store.js';
-import type { JobStateTransitions } from './job-state-transitions.js';
+import type { JobStore } from './job-store.js';
 
 export interface ExecutionOwnershipServiceOptions {
   store: AgentStore;
-  jobState: JobStateTransitions;
+  jobStore: JobStore;
   workerId: string;
   refreshIntervalMs: number;
 }
@@ -34,7 +34,7 @@ export class ExecutionOwnershipService {
     if (!job || !['running', 'resuming'].includes(job.status)
       || job.leaseOwner !== this.#options.workerId || !job.currentAttemptId) return;
     try {
-      await this.#options.jobState.renewExecutionOwnership(job);
+      await this.#options.jobStore.renewExecutionOwnership(job);
     } catch {
       // A later fenced write will observe that execution ownership was lost.
     }

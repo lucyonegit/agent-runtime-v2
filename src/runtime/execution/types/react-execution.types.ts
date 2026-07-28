@@ -8,18 +8,19 @@ import type {
   AgentUserInputRequest,
 } from '../../../domain/index.js';
 
-export interface JobExecutionStatePort {
+/** Durable Job reads and terminal writes required by the ReAct executor. */
+export interface JobStorePort {
   getJob(jobId: string): Promise<AgentJob | undefined>;
-  failJob(job: AgentJob, error: AgentJobError): Promise<AgentJob>;
-  cancelJob(jobId: string, expectedVersion: number): Promise<AgentJob>;
+  fail(job: AgentJob, error: AgentJobError): Promise<AgentJob>;
+  cancel(jobId: string, expectedVersion: number): Promise<AgentJob>;
 }
 
-export interface ReactLoopExecutionInput {
+export interface ReActLoopExecutionInput {
   job: AgentJob;
   loopInput: Omit<AgentLoopInput, 'target'>;
 }
 
-export type ReactJobExecutionResult =
+export type ReActJobExecutionResult =
   | { type: 'completed'; job: AgentJob; message: AgentMessage }
   | { type: 'waiting_user_input'; job: AgentJob; requests: AgentUserInputRequest[] }
   | { type: 'failed'; job: AgentJob }
