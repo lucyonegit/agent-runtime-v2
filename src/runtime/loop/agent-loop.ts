@@ -202,7 +202,9 @@ export class AgentLoop {
         }
         return {
           type: 'failed',
-          code: 'context_build_error',
+          code: isModelInputTooLargeError(error)
+            ? 'model_input_too_large'
+            : 'context_build_error',
           message: error instanceof Error ? error.message : 'Failed to build model context.',
         };
       }

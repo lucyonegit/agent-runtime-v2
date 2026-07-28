@@ -30,6 +30,7 @@ describe('MessageCompactor lifecycle', () => {
         summaryMaxTokens: 100,
       },
       systemPromptVersion: 'test-v1',
+      inputTokenLimit: 1_000,
       clock: { nowMs: () => 10 },
     });
     const controller = new AbortController();
@@ -45,9 +46,53 @@ describe('MessageCompactor lifecycle', () => {
     expect(invoke.mock.calls[0]![1]).toMatchObject({ signal: controller.signal });
     expect(replaceCompaction).toHaveBeenCalledOnce();
   });
+
+  it('compacts only the oldest prefix that fits the model input budget', async () => {
+    const invoke = vi.fn(async (
+      _messages: unknown,
+      _options?: { signal?: AbortSignal }
+    ) => new AIMessageChunk('summary'));
+    const replaceCompaction = vi.fn(async (input: { throughMessageRowId: number }) => ({
+      sessionId: 'session_1',
+      throughMessageRowId: input.throughMessageRowId,
+      summary: 'summary',
+      version: 0,
+      updatedAtMs: 10,
+    }));
+    const inputTokenLimit = 178;
+    const compactor = new MessageCompactor({
+      store: { context: { replaceCompaction } } as unknown as AgentStore,
+      modelFactory: {
+        create: vi.fn(() => ({ invoke })),
+      } as unknown as AuditedModelFactory,
+      config: {
+        keepRecentInputTokens: 1,
+        maxToolResultTokens: 100,
+        summaryMaxTokens: 100,
+      },
+      systemPromptVersion: 'test-v1',
+      inputTokenLimit,
+      clock: { nowMs: () => 10 },
+    });
+
+    await compactor.compact({
+      task: task(),
+      taskRun: taskRun(),
+      groups: [
+        group('old_1', 1, 'a'.repeat(120)),
+        group('old_2', 2, 'b'.repeat(120)),
+        group('old_3', 3, 'c'.repeat(120)),
+        group('goal', 4),
+      ],
+    });
+
+    expect(replaceCompaction).toHaveBeenCalledWith(expect.objectContaining({
+      throughMessageRowId: 1,
+    }));
+  });
 });
 
-function group(id: string, rowId: number): ModelMessageGroup {
+function group(id: string, rowId: number, content = id): ModelMessageGroup {
   const item: AgentMessage = {
     rowId,
     id,
@@ -58,7 +103,7 @@ function group(id: string, rowId: number): ModelMessageGroup {
     contextScope: 'conversation',
     visibility: 'ui',
     channel: 'normal',
-    content: id,
+    content,
     createdAtMs: rowId,
   };
   return {

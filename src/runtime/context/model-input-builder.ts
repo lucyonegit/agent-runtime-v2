@@ -50,6 +50,7 @@ export class ModelInputBuilder {
         modelFactory: options.modelFactory,
         config: options.contextConfig,
         systemPromptVersion: options.systemPromptVersion,
+        inputTokenLimit: options.inputTokenLimit,
       });
     }
   }
@@ -60,32 +61,38 @@ export class ModelInputBuilder {
     options: { signal?: AbortSignal } = {}
   ): Promise<ModelInput> {
     let built = await this.#build(task);
-    if (built.input.estimatedTokens <= built.input.inputTokenLimit) return built.input;
-    if (!this.#compactor) {
-      throw new RuntimeError('model_input_too_large', 'Model input exceeds the configured input token limit.');
-    }
-
-    const eligible = filterContextMessages(built.snapshot.messages, task);
-    const updated = await this.#compactor.compact({
-      task,
-      taskRun,
-      groups: buildCompleteMessageGroups(eligible),
-      current: built.snapshot.compaction,
-      signal: options.signal,
-    });
-    if (!updated) {
-      throw new RuntimeError('model_input_too_large', 'Model input is too large and has no older complete messages to compact.');
-    }
-
-    built = await this.#build(task);
-    if (built.input.estimatedTokens > built.input.inputTokenLimit) {
-      throw new RuntimeError('model_input_too_large', 'Model input remains too large after one compaction pass.', {
-        details: {
-          estimatedTokens: built.input.estimatedTokens,
-          inputTokenLimit: built.input.inputTokenLimit,
-          compactedThroughRowId: built.input.compactedThroughRowId,
-        },
+    let compactionPasses = 0;
+    while (built.input.estimatedTokens > built.input.inputTokenLimit) {
+      if (!this.#compactor) {
+        throw new RuntimeError('model_input_too_large', 'Model input exceeds the configured input token limit.');
+      }
+      if (compactionPasses >= MAX_COMPACTION_PASSES_PER_BUILD) {
+        throw new RuntimeError('model_input_too_large', 'Model input requires too many compaction passes.', {
+          details: {
+            estimatedTokens: built.input.estimatedTokens,
+            inputTokenLimit: built.input.inputTokenLimit,
+            compactedThroughRowId: built.input.compactedThroughRowId,
+            compactionPasses,
+          },
+        });
+      }
+      const eligible = filterContextMessages(built.snapshot.messages, task);
+      const previousCutoff = built.snapshot.compaction?.throughMessageRowId ?? 0;
+      const updated = await this.#compactor.compact({
+        task,
+        taskRun,
+        groups: buildCompleteMessageGroups(eligible),
+        current: built.snapshot.compaction,
+        signal: options.signal,
       });
+      if (!updated || updated.throughMessageRowId <= previousCutoff) {
+        throw new RuntimeError(
+          'model_input_too_large',
+          'Model input is too large and has no older complete messages to compact.'
+        );
+      }
+      compactionPasses += 1;
+      built = await this.#build(task);
     }
     return built.input;
   }
@@ -222,6 +229,8 @@ export class ModelInputBuilder {
     };
   }
 }
+
+const MAX_COMPACTION_PASSES_PER_BUILD = 8;
 
 function filterContextMessages(messages: AgentMessage[], task: AgentTask): AgentMessage[] {
   return messages.filter(message => (

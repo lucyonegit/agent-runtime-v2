@@ -8,6 +8,7 @@ import type {
 import type { ContextConfig } from '../../config/runtime-config.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import type { AuditedModelFactory } from '../model/audited-model.factory.js';
+import { RuntimeError } from '../errors/runtime-error.js';
 import { estimateTextTokens } from './helpers/token-budget.helper.js';
 import type { ModelMessageGroup } from './types/model-input.types.js';
 
@@ -16,6 +17,7 @@ interface MessageCompactorOptions {
   modelFactory: AuditedModelFactory;
   config: ContextConfig;
   systemPromptVersion: string;
+  inputTokenLimit: number;
   clock?: { nowMs(): number };
 }
 
@@ -34,22 +36,41 @@ export class MessageCompactor {
     current?: AgentContextCompaction;
     signal?: AbortSignal;
   }): Promise<AgentContextCompaction | undefined> {
-    const candidates = selectOldConversationGroups(
+    const eligible = selectOldConversationGroups(
       input.groups,
       input.task.goalMessageId,
       input.current?.throughMessageRowId ?? 0,
       this.options.config.keepRecentInputTokens
     );
-    if (candidates.length === 0) return undefined;
+    if (eligible.length === 0) return undefined;
 
-    const throughMessageRowId = Math.max(...candidates.map(group => group.maxRowId));
-    const transcript = candidates.map(formatGroup).join('\n\n');
     const prompt = [
       'Update the durable conversation summary using the previous summary and new transcript.',
       'Preserve user goals, decisions, verified outcomes, errors, artifact paths and unresolved work.',
       'Do not include temporary plan bookkeeping or invent facts.',
       `Return no more than ${this.options.config.summaryMaxTokens} estimated tokens.`,
     ].join('\n');
+    const candidates = selectCompactionBatch({
+      groups: eligible,
+      prompt,
+      previousSummary: input.current?.summary,
+      inputTokenLimit: this.options.inputTokenLimit,
+    });
+    if (candidates.length === 0) {
+      throw new RuntimeError(
+        'model_input_too_large',
+        'The oldest complete message group cannot fit in one context-compaction request.',
+        {
+          details: {
+            groupId: eligible[0]!.id,
+            estimatedGroupTokens: eligible[0]!.estimatedTokens,
+            inputTokenLimit: this.options.inputTokenLimit,
+          },
+        }
+      );
+    }
+    const throughMessageRowId = Math.max(...candidates.map(group => group.maxRowId));
+    const transcript = candidates.map(formatGroup).join('\n\n');
     const messages = [
       new SystemMessage(prompt),
       new HumanMessage([
@@ -85,6 +106,31 @@ export class MessageCompactor {
       nowMs: this.#clock.nowMs(),
     });
   }
+}
+
+function selectCompactionBatch(input: {
+  groups: ModelMessageGroup[];
+  prompt: string;
+  previousSummary?: string;
+  inputTokenLimit: number;
+}): ModelMessageGroup[] {
+  const previous = input.previousSummary
+    ? `Previous summary:\n${input.previousSummary}`
+    : 'Previous summary: (none)';
+  let transcript = '';
+  const selected: ModelMessageGroup[] = [];
+  for (const group of input.groups) {
+    const formatted = formatGroup(group);
+    const nextTranscript = transcript ? `${transcript}\n\n${formatted}` : formatted;
+    const serialized = [
+      input.prompt,
+      [previous, `New transcript:\n${nextTranscript}`].join('\n\n'),
+    ].join('\n');
+    if (estimateTextTokens(serialized) > input.inputTokenLimit) break;
+    transcript = nextTranscript;
+    selected.push(group);
+  }
+  return selected;
 }
 
 function selectOldConversationGroups(

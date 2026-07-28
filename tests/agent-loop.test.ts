@@ -582,6 +582,18 @@ describe('AgentLoop with LangChain messages', () => {
     expect((await consume(overflow.run(loopInput()))).result).toMatchObject({
       type: 'failed', code: 'model_input_too_large',
     });
+
+    expect((await consume(failure.run(loopInput({
+      context: {
+        loadMessages: async () => {
+          throw Object.assign(new Error('context is too large'), {
+            code: 'model_input_too_large',
+          });
+        },
+      },
+    })))).result).toMatchObject({
+      type: 'failed', code: 'model_input_too_large', message: 'context is too large',
+    });
   });
 });
 
