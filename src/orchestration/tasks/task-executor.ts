@@ -91,7 +91,7 @@ export class TaskExecutor implements TaskExecutorPort {
     execution.completion = this.#runOwnedTask(
       taskId,
       selected.taskRun.id,
-      execution.controller.signal
+      execution.controller
     ).finally(() => {
       if (this.#activeExecutions.get(taskId) === execution) this.#activeExecutions.delete(taskId);
     });
@@ -113,14 +113,19 @@ export class TaskExecutor implements TaskExecutorPort {
   async #runOwnedTask(
     taskId: string,
     expectedTaskRunId: string,
-    signal: AbortSignal
+    controller: AbortController
   ): Promise<void> {
     let runnable: { task: AgentTask; taskRun: AgentTaskRun } | undefined;
     let stopRefreshing: () => void = () => undefined;
     try {
       runnable = await this.#loadRunnableTask(taskId, expectedTaskRunId);
-      stopRefreshing = this.#executionOwnership.startRefreshing(taskId, runnable.taskRun.id);
-      await this.#options.reactExecution.runTask({ ...runnable, signal });
+      stopRefreshing = this.#executionOwnership.startRefreshing({
+        taskId,
+        taskRunId: runnable.taskRun.id,
+        ownershipExpiresAtMs: runnable.taskRun.ownershipExpiresAtMs!,
+        onOwnershipLost: () => controller.abort('ownership_lost'),
+      });
+      await this.#options.reactExecution.runTask({ ...runnable, signal: controller.signal });
     } catch (error) {
       if (!(error instanceof RuntimeError && ['ownership_lost', 'aborted'].includes(error.code))) {
         await this.#failTaskIfStillOwned(runnable, error);

@@ -108,10 +108,16 @@ async function handleLoopError(
 
 async function completeCancellation(
   input: ReActLoopExecutionInput,
-  reason: 'runtime_shutdown' | 'task_run_superseded' | undefined,
+  reason: 'runtime_shutdown' | 'task_run_superseded' | 'ownership_lost' | undefined,
   options: DurableLoopExecutionOptions
 ): Promise<Extract<ReActTaskExecutionResult, { type: 'cancelled' }>> {
   if (reason) {
+    if (reason === 'ownership_lost') {
+      throw new RuntimeError(
+        'ownership_lost',
+        `TaskRun ${JSON.stringify(input.taskRun.id)} lost its execution lease.`
+      );
+    }
     throw new RuntimeError(
       'aborted',
       reason === 'runtime_shutdown'

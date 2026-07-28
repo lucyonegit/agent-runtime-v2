@@ -495,6 +495,12 @@ describe('AgentLoop with LangChain messages', () => {
     expect((await consume(deadline.run(loopInput({
       limits: { maxIterations: 2, maxToolCalls: 2, signal: superseded.signal },
     })))).result).toEqual({ type: 'cancelled', reason: 'task_run_superseded' });
+
+    const ownershipLost = new AbortController();
+    ownershipLost.abort('ownership_lost');
+    expect((await consume(deadline.run(loopInput({
+      limits: { maxIterations: 2, maxToolCalls: 2, signal: ownershipLost.signal },
+    })))).result).toEqual({ type: 'cancelled', reason: 'ownership_lost' });
   });
 
   it('cancels an in-flight tool without recording an ordinary tool failure', async () => {

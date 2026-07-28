@@ -24,6 +24,8 @@ TaskExecutor 只接收 taskId。它重新读取数据库中的 Task、活动 Tas
 
 进程内执行按 `(taskId, taskRunId)` 判定身份：同一 TaskRun 的重复 dispatch 复用已有 completion；恢复创建了更新的 TaskRun 时，新运行立即替换旧 Map 项并用 `task_run_superseded` 中止旧 loop。旧 finally 只有在 Map 仍指向自身时才能清理，不能删除新运行。
 
+租约刷新不是无条件 best-effort。明确的 `TASK_OWNERSHIP_LOST` 会立即以 `ownership_lost` abort 当前 loop；暂时性存储错误只在最后一次确认的 lease 尚未到期时容忍，到期后仍无法续期也必须自我 fencing。该 abort 只提供协作式停止，外部工具仍须依赖 ToolRun/operation id 判断真实结果。
+
 ## 2. Checkpoint
 
 Checkpoint 记录 `sequenceNo/phase/callMessageId/iterationNo/executedToolCalls`。主要 phase：

@@ -533,7 +533,9 @@ function modelRunnableConfig(outputId: string, signal: AbortSignal | undefined) 
 
 function cancelledResult(signal: AbortSignal | undefined): LoopResult {
   const reason = signal?.reason;
-  return reason === 'runtime_shutdown' || reason === 'task_run_superseded'
+  return reason === 'runtime_shutdown'
+    || reason === 'task_run_superseded'
+    || reason === 'ownership_lost'
     ? { type: 'cancelled', reason }
     : { type: 'cancelled' };
 }

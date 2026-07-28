@@ -29,4 +29,7 @@ export type LoopResult =
       message: string;
       details?: unknown;
     }
-  | { type: 'cancelled'; reason?: 'runtime_shutdown' | 'task_run_superseded' };
+  | {
+      type: 'cancelled';
+      reason?: 'runtime_shutdown' | 'task_run_superseded' | 'ownership_lost';
+    };
