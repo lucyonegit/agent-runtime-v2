@@ -12,8 +12,11 @@
 5. [后续 TODO 路线图](./05-runtime-roadmap-todo.md)：恢复闭环、调度背压、安全隔离、Durable SSE、历史精确回查、模型治理和故障评测的优先级与验收标准。
 6. [Job 执行所有权、写入围栏与故障恢复](./06-job-execution-ownership-and-recovery.md)：执行权有效期、定期刷新、Attempt fence、服务崩溃、人工 Resume 和工具副作用恢复的专项说明。
 7. [Context 压缩服务实现级设计](./07-context-compression-service-deep-dive.md)：逐步说明压缩触发、Group 选择、压缩前后 LangChain Messages、ContextMemory 数据结构、PostgreSQL 版本链、多轮滚动压缩、失败降级和当前实现风险。
+8. [Runtime 状态机总览](./08-runtime-state-machines.md)：完整定义 Session、Job、LoopCheckpoint、ToolInvocation/Attempt、HITL、Plan、ModelCall、ContextSummary 和本地 ManagedProcess 的状态、迁移条件与跨实体不变量。
+9. [PostgreSQL 数据库表字典与事务关系](./09-database-table-reference.md)：逐表说明当前 schema v5 的 14 张有效表、字段职责、约束、索引、级联关系、AgentStore scope、跨表原子事务和诊断 SQL。
+10. [HITL、故障恢复、Retry 与 Continue-as-new 操作手册](./10-hitl-recovery-retry-playbook.md)：对比同 Job Resume、HITL 恢复、新 Job Retry、新消息 Continue-as-new 和 Cancel，提供时序图、故障注入案例、前端规则及当前缺口。
 
-其余文档是专题说明；当它们与“当前实现全链路”冲突时，以全链路文档和代码为准。
+其余文档是专题说明。状态、表结构和恢复语义分别以 08、09、10 号文档为最新解释；其他链路仍以“当前实现全链路”和代码为准。
 
 ## 已删除的旧概念
 
