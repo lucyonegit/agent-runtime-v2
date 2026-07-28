@@ -1,6 +1,7 @@
 import {
   ArgumentsHost,
   Catch,
+  HttpException,
   HttpStatus,
   type ExceptionFilter,
 } from '@nestjs/common';
@@ -21,13 +22,18 @@ export class RuntimeExceptionFilter implements ExceptionFilter {
       || exception instanceof RuntimeToolExecutionError
       || exception instanceof AgentStoreError
       ? exception.code
-      : status === HttpStatus.BAD_REQUEST ? 'bad_request' : 'internal_error';
+      : status === HttpStatus.BAD_REQUEST
+        ? 'bad_request'
+        : status === HttpStatus.UNAUTHORIZED
+          ? 'unauthorized'
+          : 'internal_error';
     const message = exception instanceof Error ? exception.message : 'Internal server error.';
     void reply.status(status).send({ statusCode: status, error, message });
   }
 }
 
 function httpStatus(exception: unknown): number {
+  if (exception instanceof HttpException) return exception.getStatus();
   if (exception instanceof TypeError || exception instanceof RangeError) return HttpStatus.BAD_REQUEST;
   if (exception instanceof AgentStoreError) {
     if (exception.code.endsWith('NOT_FOUND')) return HttpStatus.NOT_FOUND;

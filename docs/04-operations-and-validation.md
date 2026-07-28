@@ -4,6 +4,8 @@
 
 默认配置位于 `src/config/runtime.json`，环境变量用于数据库 URL、模型密钥等部署覆盖。Context 只有 `keepRecentInputTokens/maxToolResultTokens/summaryMaxTokens` 三个策略参数；模型窗口与输入/输出限制由 model profile 解析。
 
+standalone HTTP 默认 fail closed：启动前必须设置至少 32 字符的 `AGENT_SERVER_AUTH_TOKEN`，Web 使用相同的 `VITE_AGENT_API_TOKEN`。所有普通请求和 SSE 都发送 `Authorization: Bearer <token>`。CORS 只允许 `runtime.json` 中列出的显式 Origin，默认是本机 5174 开发端口；不要把带有构建期 token 的 Web 静态包公开部署。
+
 ## 2. 破坏式重建数据库
 
 开发环境执行：
@@ -55,4 +57,3 @@ PostgreSQL 集成测试覆盖：
 - Retry 创建新 Task 且不污染旧执行历史。
 - HITL 回答和过期分别创建正确 trigger 的 TaskRun。
 - 崩溃恢复时安全工具可重跑，有副作用工具进入 `outcome_unknown`。
-

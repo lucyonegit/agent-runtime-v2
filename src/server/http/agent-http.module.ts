@@ -1,9 +1,14 @@
 import { Module, type DynamicModule } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
 import { ContextPreviewService } from '../debug/context-preview.service.js';
 import { RuntimeEventBus } from '../runtime/runtime-event-bus.js';
 import { AgentController } from './agent.controller.js';
 import { ManagedProcessManager } from '../../tools/index.js';
+import {
+  RUNTIME_HTTP_AUTH_TOKEN,
+  RuntimeHttpAuthGuard,
+} from './runtime-http-auth.guard.js';
 
 @Module({})
 export class AgentHttpModule {
@@ -11,7 +16,8 @@ export class AgentHttpModule {
     runtime: AgentRuntime,
     events: RuntimeEventBus,
     contextPreview: ContextPreviewService,
-    managedProcesses: ManagedProcessManager
+    managedProcesses: ManagedProcessManager,
+    authToken: string
   ): DynamicModule {
     return {
       module: AgentHttpModule,
@@ -21,6 +27,8 @@ export class AgentHttpModule {
         { provide: RuntimeEventBus, useValue: events },
         { provide: ContextPreviewService, useValue: contextPreview },
         { provide: ManagedProcessManager, useValue: managedProcesses },
+        { provide: RUNTIME_HTTP_AUTH_TOKEN, useValue: authToken },
+        { provide: APP_GUARD, useClass: RuntimeHttpAuthGuard },
       ],
     };
   }

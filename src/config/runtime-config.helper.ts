@@ -61,6 +61,7 @@ function applyEnvironmentOverrides(
   assignString(env, 'AGENT_SANDBOX_ROOT', value => { config.runtime.sandboxRoot = value; });
   assignString(env, 'AGENT_SERVER_HOST', value => { config.server.host = value; });
   assignPositiveInteger(env, 'AGENT_SERVER_PORT', value => { config.server.port = value; });
+  assignString(env, 'AGENT_SERVER_AUTH_TOKEN', value => { config.server.authToken = value; });
   assignString(env, 'DATABASE_URL', value => { config.postgres.url = value; });
 
   if (env.DASHSCOPE_API_KEY?.trim()) {
@@ -108,10 +109,17 @@ function validateConfig(config: RuntimeConfigFile): void {
   nonEmptyString(config.server.host, 'server.host');
   positiveInteger(config.server.port, 'server.port');
   if (config.server.port > 65_535) throw new RangeError('server.port must be at most 65535.');
-  if (config.server.logger.length === 0) throw new RangeError('server.logger cannot be empty.');
-  if (config.server.cors.origin !== true && !Array.isArray(config.server.cors.origin)) {
-    throw new TypeError('server.cors.origin must be true or an array of origins.');
+  if (typeof config.server.authToken !== 'string') {
+    throw new TypeError('server.authToken must be a string.');
   }
+  if (config.server.authToken.length > 0 && config.server.authToken.length < 32) {
+    throw new RangeError('server.authToken must contain at least 32 characters when configured.');
+  }
+  if (config.server.logger.length === 0) throw new RangeError('server.logger cannot be empty.');
+  if (!Array.isArray(config.server.cors.origin) || config.server.cors.origin.length === 0) {
+    throw new TypeError('server.cors.origin must be a non-empty array of explicit origins.');
+  }
+  for (const origin of config.server.cors.origin) validateHttpOrigin(origin);
   booleanValue(config.server.cors.credentials, 'server.cors.credentials');
   nonEmptyString(config.postgres.url, 'postgres.url');
   positiveInteger(config.postgres.maxConnections, 'postgres.maxConnections');
@@ -145,6 +153,15 @@ function validateConfig(config: RuntimeConfigFile): void {
   }
 
   validateTools(config.tools);
+}
+
+function validateHttpOrigin(value: unknown): void {
+  nonEmptyString(value, 'server.cors.origin[]');
+  let url: URL;
+  try { url = new URL(value); } catch { throw new TypeError(`Invalid CORS origin: ${value}`); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.origin !== value) {
+    throw new TypeError(`CORS origin must be an explicit HTTP(S) origin: ${value}`);
+  }
 }
 
 function validateTools(config: ToolsConfig): void {

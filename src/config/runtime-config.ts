@@ -28,9 +28,10 @@ export type ServerLogLevel = 'error' | 'warn' | 'log' | 'debug' | 'verbose';
 export interface ServerConfig {
   host: string;
   port: number;
+  authToken: string;
   logger: ServerLogLevel[];
   cors: {
-    origin: true | string[];
+    origin: string[];
     credentials: boolean;
     methods: string[];
     allowedHeaders: string[];

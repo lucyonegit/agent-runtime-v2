@@ -8,6 +8,7 @@ describe('runtime configuration', () => {
       DASHSCOPE_API_KEY: 'test-secret',
       AGENT_RUNTIME_WORKER_ID: 'worker_test',
       AGENT_SERVER_PORT: '3100',
+      AGENT_SERVER_AUTH_TOKEN: 'test-runtime-auth-token-32-characters',
       TASK_OWNERSHIP_TIMEOUT_MS: '45000',
       TASK_OWNERSHIP_REFRESH_MS: '15000',
       AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS: 'true',
@@ -16,7 +17,7 @@ describe('runtime configuration', () => {
 
     expect(config).toMatchObject({
       workerId: 'worker_test',
-      server: { port: 3_100 },
+      server: { port: 3_100, authToken: 'test-runtime-auth-token-32-characters' },
       postgres: { url: 'postgres://runtime' },
       model: { provider: 'dashscope', apiKey: 'test-secret', modelName: 'qwen3.7-max' },
       modelTokenLimits: {
@@ -54,5 +55,12 @@ describe('runtime configuration', () => {
       TASK_OWNERSHIP_TIMEOUT_MS: '10000',
       TASK_OWNERSHIP_REFRESH_MS: '10000',
     } })).toThrow('ownershipRefreshMs must be shorter');
+  });
+
+  it('rejects configured HTTP bearer tokens shorter than 32 characters', () => {
+    expect(() => loadRuntimeConfig({ env: {
+      DATABASE_URL: 'postgres://runtime',
+      AGENT_SERVER_AUTH_TOKEN: 'too-short',
+    } })).toThrow('at least 32 characters');
   });
 });
