@@ -196,15 +196,31 @@ export async function replaceContextCompactionCommand(
 ) {
   return withPostgresTransaction(client, async () => {
     await lockAgentSession(client, input.sessionId);
+    const task = await selectTask(client, input.taskId);
+    if (!task || task.session_id !== input.sessionId) throw taskNotFound(input.taskId);
+    const taskRun = await selectTaskRun(client, input.taskRunId);
+    assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
     const existing = await client.query<AgentContextCompactionRow>(
       `select * from agent_context_compactions where session_id = $1 for update`,
       [input.sessionId]
     );
     const current = existing.rows[0];
-    if (current && Number(current.through_message_row_id) > input.throughMessageRowId) {
+    const currentVersion = current?.version ?? null;
+    if (currentVersion !== input.expectedVersion) {
       throw new AgentStoreError(
         'CONCURRENCY_CONFLICT',
-        'Context compaction cannot move backwards.',
+        'Context compaction changed after its input snapshot was read.',
+        {
+          sessionId: input.sessionId,
+          expectedVersion: input.expectedVersion,
+          actualVersion: currentVersion,
+        }
+      );
+    }
+    if (current && Number(current.through_message_row_id) >= input.throughMessageRowId) {
+      throw new AgentStoreError(
+        'CONCURRENCY_CONFLICT',
+        'Context compaction must advance to a newer message.',
         {
           sessionId: input.sessionId,
           currentThroughMessageRowId: Number(current.through_message_row_id),

@@ -9,7 +9,7 @@ import type {
 import type { ContextConfig } from '../../config/runtime-config.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import type { AuditedModelFactory } from '../model/audited-model.factory.js';
-import { RuntimeError } from '../errors/runtime-error.js';
+import { mapStoreError, RuntimeError } from '../errors/runtime-error.js';
 import { projectModelInput } from '../model/model-input-accounting.js';
 import { estimateTextTokens } from './helpers/token-budget.helper.js';
 import type { ModelMessageGroup } from './types/model-input.types.js';
@@ -95,12 +95,23 @@ export class MessageCompactor {
       this.options.config.summaryMaxTokens
     );
     if (!summary) throw new Error('Context compaction model returned an empty summary.');
-    return this.options.store.context.replaceCompaction({
-      sessionId: input.task.sessionId,
-      throughMessageRowId,
-      summary,
-      nowMs: this.#clock.nowMs(),
-    });
+    if (!input.taskRun.ownerId) {
+      throw new RuntimeError('ownership_lost', 'Context compaction requires an owned TaskRun.');
+    }
+    try {
+      return await this.options.store.context.replaceCompaction({
+        sessionId: input.task.sessionId,
+        taskId: input.task.id,
+        taskRunId: input.taskRun.id,
+        ownerId: input.taskRun.ownerId,
+        expectedVersion: input.current?.version ?? null,
+        throughMessageRowId,
+        summary,
+        nowMs: this.#clock.nowMs(),
+      });
+    } catch (error) {
+      throw mapStoreError(error);
+    }
   }
 }
 

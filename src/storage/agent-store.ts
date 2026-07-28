@@ -420,6 +420,10 @@ export interface CompleteModelCallResult {
 
 export interface ReplaceContextCompactionInput {
   sessionId: string;
+  taskId: string;
+  taskRunId: string;
+  ownerId: string;
+  expectedVersion: number | null;
   throughMessageRowId: number;
   summary: string;
   nowMs: number;

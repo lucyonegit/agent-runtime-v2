@@ -98,12 +98,36 @@ describe('PostgresAgentStore converged model', () => {
       steps: [{ step: 'Inspect', status: 'in_progress' }],
       nowMs: 24,
     });
-    await store.context.replaceCompaction({
+    const compaction = await store.context.replaceCompaction({
       sessionId: retry.task.sessionId,
+      taskId: retry.task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      expectedVersion: null,
       throughMessageRowId: 2,
       summary: 'Earlier work',
       nowMs: 25,
     });
+    await expect(store.context.replaceCompaction({
+      sessionId: retry.task.sessionId,
+      taskId: retry.task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      expectedVersion: null,
+      throughMessageRowId: 3,
+      summary: 'Stale overwrite',
+      nowMs: 26,
+    })).rejects.toMatchObject({ code: 'CONCURRENCY_CONFLICT' });
+    await expect(store.context.replaceCompaction({
+      sessionId: retry.task.sessionId,
+      taskId: retry.task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_2',
+      expectedVersion: compaction.version,
+      throughMessageRowId: 3,
+      summary: 'Foreign owner overwrite',
+      nowMs: 26,
+    })).rejects.toMatchObject({ code: 'TASK_OWNERSHIP_LOST' });
 
     const snapshot = await store.context.loadInputSnapshot({
       sessionId: retry.task.sessionId,
