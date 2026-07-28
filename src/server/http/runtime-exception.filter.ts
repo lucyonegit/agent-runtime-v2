@@ -27,8 +27,18 @@ export class RuntimeExceptionFilter implements ExceptionFilter {
         : status === HttpStatus.UNAUTHORIZED
           ? 'unauthorized'
           : 'internal_error';
-    const message = exception instanceof Error ? exception.message : 'Internal server error.';
-    void reply.status(status).send({ statusCode: status, error, message });
+    const message = status < HttpStatus.INTERNAL_SERVER_ERROR && exception instanceof Error
+      ? exception.message
+      : 'Internal server error.';
+    const details = status < HttpStatus.INTERNAL_SERVER_ERROR
+      ? publicErrorDetails(exception)
+      : undefined;
+    void reply.status(status).send({
+      statusCode: status,
+      error,
+      message,
+      ...(details !== undefined ? { details } : {}),
+    });
   }
 }
 
@@ -46,7 +56,10 @@ function httpStatus(exception: unknown): number {
     if (exception.code === 'concurrency_conflict' || exception.code === 'idempotency_conflict') {
       return HttpStatus.CONFLICT;
     }
-    if (exception.code === 'invalid_task_state' || exception.code === 'invalid_user_input') {
+    if (exception.code === 'invalid_session_state'
+      || exception.code === 'invalid_task_state'
+      || exception.code === 'invalid_user_input'
+      || exception.code === 'invalid_plan_state') {
       return HttpStatus.UNPROCESSABLE_ENTITY;
     }
   }
@@ -58,4 +71,13 @@ function httpStatus(exception: unknown): number {
     if (exception.code.startsWith('invalid_')) return HttpStatus.UNPROCESSABLE_ENTITY;
   }
   return HttpStatus.INTERNAL_SERVER_ERROR;
+}
+
+function publicErrorDetails(exception: unknown): unknown {
+  if (exception instanceof RuntimeError
+    || exception instanceof RuntimeToolExecutionError
+    || exception instanceof AgentStoreError) {
+    return exception.details;
+  }
+  return undefined;
 }
