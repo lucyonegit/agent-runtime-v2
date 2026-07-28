@@ -3,17 +3,9 @@ import type {
 } from '../../loop/agent-loop.js';
 import type {
   AgentJob,
-  AgentJobError,
   AgentMessage,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
-
-/** Durable Job reads and terminal writes required by the ReAct executor. */
-export interface JobActionsPort {
-  getJob(jobId: string): Promise<AgentJob | undefined>;
-  fail(job: AgentJob, error: AgentJobError): Promise<AgentJob>;
-  cancel(jobId: string, expectedVersion: number): Promise<AgentJob>;
-}
 
 export interface ReActLoopExecutionInput {
   job: AgentJob;

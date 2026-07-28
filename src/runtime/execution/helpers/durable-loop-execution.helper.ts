@@ -6,10 +6,10 @@ import {
   LOOP_EVENT_TYPES,
   type LoopEvent,
 } from '../../loop/loop-events.js';
-import { RuntimeError } from '../../errors/runtime-error.js';
+import { mapStoreError, RuntimeError } from '../../errors/runtime-error.js';
 import { RuntimeEventWriter } from '../../events/runtime-event-writer.js';
+import type { AgentStore } from '../../../storage/agent-store.js';
 import type {
-  JobActionsPort,
   ReActJobExecutionResult,
   ReActLoopExecutionInput,
 } from '../types/react-execution.types.js';
@@ -17,14 +17,16 @@ import type {
 interface DurableLoopExecutionOptions {
   loop: AgentLoop;
   writer: RuntimeEventWriter;
-  jobActions: JobActionsPort;
+  store: AgentStore;
+  workerId: string;
+  clock: { nowMs(): number };
   input: ReActLoopExecutionInput;
 }
 
 export async function executeDurableAgentLoop(
   options: DurableLoopExecutionOptions
 ): Promise<ReActJobExecutionResult> {
-  const { input, loop, writer, jobActions } = options;
+  const { input, loop, writer } = options;
   if (!input.job.currentAttemptId || !input.job.leaseOwner) {
     throw new RuntimeError(
       'lease_lost',
@@ -52,7 +54,7 @@ export async function executeDurableAgentLoop(
     try {
       next = await iterator.next();
     } catch (error) {
-      const failed = await handleLoopError(error, input, jobActions);
+      const failed = await handleLoopError(error, input, options);
       if (failed) return failed;
       throw error;
     }
@@ -71,7 +73,7 @@ export async function executeDurableAgentLoop(
     if (result.type === 'completed') {
       const finalEvent = finalCandidates.get(result.outputId);
       if (!finalEvent || finalEvent.content !== result.content) {
-        return failJob(jobActions, input, {
+        return failJob(options, input, {
           code: 'model_protocol_error',
           message: 'AgentLoop completed without a matching final model event.',
         });
@@ -83,7 +85,7 @@ export async function executeDurableAgentLoop(
       const receivedIds = inputEvents.map(event => event.toolCallId).sort();
       const resultIds = [...result.toolCallIds].sort();
       if (JSON.stringify(receivedIds) !== JSON.stringify(resultIds)) {
-        return failJob(jobActions, input, {
+        return failJob(options, input, {
           code: 'model_protocol_error',
           message: 'AgentLoop input events do not match its waiting result.',
         });
@@ -96,9 +98,9 @@ export async function executeDurableAgentLoop(
       };
     }
     if (result.type === 'cancelled') {
-      return completeCancellation(input, result.reason, jobActions);
+      return completeCancellation(input, result.reason, options);
     }
-    return failJob(jobActions, input, {
+    return failJob(options, input, {
       code: result.code,
       message: result.message,
       details: result.details,
@@ -109,20 +111,20 @@ export async function executeDurableAgentLoop(
 async function handleLoopError(
   error: unknown,
   input: ReActLoopExecutionInput,
-  jobActions: JobActionsPort
+  persistence: Pick<DurableLoopExecutionOptions, 'store' | 'workerId' | 'clock'>
 ): Promise<Extract<ReActJobExecutionResult, { type: 'failed' }> | undefined> {
   if (error instanceof FatalToolExecutionError) {
     if (error.code === 'lease_lost' || error.code === 'concurrency_conflict') {
       throw new RuntimeError(error.code, error.message, { cause: error });
     }
-    return failJob(jobActions, input, {
+    return failJob(persistence, input, {
       code: error.code,
       message: error.message,
     });
   }
   if (error instanceof RuntimeError) {
     if (error.code === 'lease_lost' || error.code === 'concurrency_conflict') throw error;
-    return failJob(jobActions, input, {
+    return failJob(persistence, input, {
       code: error.code,
       message: error.message,
       details: error.details,
@@ -134,15 +136,21 @@ async function handleLoopError(
 async function completeCancellation(
   input: ReActLoopExecutionInput,
   reason: 'runtime_shutdown' | undefined,
-  jobActions: JobActionsPort
+  persistence: Pick<DurableLoopExecutionOptions, 'store' | 'workerId' | 'clock'>
 ): Promise<Extract<ReActJobExecutionResult, { type: 'cancelled' }>> {
+  const { store, clock } = persistence;
   if (reason === 'runtime_shutdown') {
     throw new RuntimeError(
       'aborted',
       `Job ${JSON.stringify(input.job.id)} execution was interrupted by Runtime shutdown.`
     );
   }
-  const current = await jobActions.getJob(input.job.id);
+  let current;
+  try {
+    current = await store.jobs.get(input.job.id);
+  } catch (error) {
+    throw mapStoreError(error);
+  }
   if (!current) {
     throw new RuntimeError(
       'storage_error',
@@ -156,12 +164,21 @@ async function completeCancellation(
       `Job ${JSON.stringify(input.job.id)} became ${current.status} during cancellation.`
     );
   }
-  const cancelled = await jobActions.cancel(current.id, current.version);
+  let cancelled;
+  try {
+    cancelled = await store.jobs.cancel({
+      jobId: current.id,
+      expectedVersion: current.version,
+      nowMs: clock.nowMs(),
+    });
+  } catch (error) {
+    throw mapStoreError(error);
+  }
   return { type: 'cancelled', job: cancelled };
 }
 
 async function failJob(
-  jobActions: JobActionsPort,
+  persistence: Pick<DurableLoopExecutionOptions, 'store' | 'workerId' | 'clock'>,
   input: ReActLoopExecutionInput,
   failure: {
     code: string;
@@ -169,6 +186,25 @@ async function failJob(
     details?: unknown;
   }
 ): Promise<Extract<ReActJobExecutionResult, { type: 'failed' }>> {
-  const failed = await jobActions.fail(input.job, failure);
+  const { store, workerId, clock } = persistence;
+  if (!input.job.currentAttemptId) {
+    throw new RuntimeError(
+      'lease_lost',
+      `Job ${JSON.stringify(input.job.id)} has no active execution attempt.`
+    );
+  }
+  let failed;
+  try {
+    failed = await store.jobs.fail({
+      jobId: input.job.id,
+      expectedVersion: input.job.version,
+      workerId,
+      attemptId: input.job.currentAttemptId,
+      error: failure,
+      nowMs: clock.nowMs(),
+    });
+  } catch (error) {
+    throw mapStoreError(error);
+  }
   return { type: 'failed', job: failed };
 }

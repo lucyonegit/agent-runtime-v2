@@ -1,11 +1,9 @@
-import { RuntimeError } from '../../../runtime/errors/runtime-error.js';
+import { mapStoreError, RuntimeError } from '../../../runtime/errors/runtime-error.js';
 import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-writer.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
-import type { JobActions } from './job-actions.js';
 
 export interface InterruptedJobScannerOptions {
   store: AgentStore;
-  jobActions: JobActions;
   publisher: RuntimeEventPublisher;
   scanIntervalMs: number;
   batchSize: number;
@@ -74,19 +72,21 @@ export class InterruptedJobScanner {
     for (const job of jobs) {
       if (this.#stopping) break;
       try {
-        const recoveryRequiredJob = await this.#options.jobActions.markRecoveryRequired(
-          job.id,
-          job.version
-        );
+        const recoveryRequiredJob = await this.#options.store.jobs.markRecoveryRequired({
+          jobId: job.id,
+          expectedVersion: job.version,
+          nowMs: this.#options.clock.nowMs(),
+        });
         await this.#publishWithoutFailingScan({
           type: 'job.upserted',
           sessionId: recoveryRequiredJob.sessionId,
           job: recoveryRequiredJob,
         });
       } catch (error) {
-        if (!(error instanceof RuntimeError
-          && ['concurrency_conflict', 'invalid_job_state', 'lease_lost'].includes(error.code))) {
-          throw error;
+        const mappedError = mapStoreError(error);
+        if (!(mappedError instanceof RuntimeError
+          && ['concurrency_conflict', 'invalid_job_state', 'lease_lost'].includes(mappedError.code))) {
+          throw mappedError;
         }
       }
     }

@@ -1,25 +1,50 @@
-import type { SaveUserInputAnswerResult } from '../../../storage/agent-store.js';
+import type {
+  AgentStore,
+  SaveUserInputAnswerResult,
+} from '../../../storage/agent-store.js';
+import { mapStoreError } from '../../../runtime/errors/runtime-error.js';
 import { projectSensitiveAnswers } from '../../../view/session-view.js';
 import { JobEventPublisher } from '../shared/job-event-publisher.js';
 import { JobExecutionDispatcher } from '../shared/job-execution-dispatcher.js';
-import {
-  JobActions,
-  type SaveUserInputAnswerInput,
-} from '../shared/job-actions.js';
+import type { JobFlowClock } from '../shared/job-flow.helper.js';
 
-export type AnswerUserInputRequestInput = SaveUserInputAnswerInput;
+export interface AnswerUserInputRequestInput {
+  requestId: string;
+  expectedVersion: number;
+  clientAnswerId: string;
+  answer: unknown;
+  answerMessageId?: string;
+}
 
 export class AnswerUserInputFlow {
   constructor(
-    private readonly jobActions: JobActions,
+    private readonly store: AgentStore,
+    private readonly workerId: string,
+    private readonly jobLeaseMs: number,
+    private readonly clock: JobFlowClock,
+    private readonly nextMessageId: () => string,
+    private readonly nextAttemptId: () => string,
     private readonly events: JobEventPublisher,
     private readonly execution: JobExecutionDispatcher
   ) {}
 
   async execute(
-    input: Omit<AnswerUserInputRequestInput, 'answerMessageId'>
+    input: AnswerUserInputRequestInput
   ): Promise<SaveUserInputAnswerResult> {
-    const result = await this.jobActions.answerUserInput(input);
+    const nowMs = this.clock.nowMs();
+    let result: SaveUserInputAnswerResult;
+    try {
+      result = await this.store.execution.answerUserInput({
+        ...input,
+        answerMessageId: input.answerMessageId ?? this.nextMessageId(),
+        workerId: this.workerId,
+        attemptId: this.nextAttemptId(),
+        nowMs,
+        leaseUntilMs: nowMs + this.jobLeaseMs,
+      });
+    } catch (error) {
+      throw mapStoreError(error);
+    }
     const projection = projectSensitiveAnswers(
       [result.answerMessage],
       result.invocation ? [result.invocation] : [],

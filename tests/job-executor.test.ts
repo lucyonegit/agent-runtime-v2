@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentJob } from '../src/domain/index.js';
 import { JobExecutor } from '../src/orchestration/jobs/job-executor.js';
-import { JobActions } from '../src/orchestration/jobs/shared/job-actions.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
 describe('JobExecutor recovery', () => {
@@ -26,15 +25,8 @@ describe('JobExecutor recovery', () => {
     } as unknown as AgentStore;
     const publisher = { publish: vi.fn(async () => undefined) };
     const clock = { nowMs: () => 1_000 };
-    const jobActions = new JobActions({
-      store,
-      workerId: 'worker_test',
-      jobLeaseMs: 30_000,
-      clock,
-    });
     const executor = new JobExecutor({
       store,
-      jobActions,
       reactExecution: { runJob: vi.fn(async () => undefined as never) },
       workerId: 'worker_test',
       publisher,

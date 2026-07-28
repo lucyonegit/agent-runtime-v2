@@ -1,8 +1,10 @@
-import type { CreateJobAndAppendUserMessageResult } from '../../../storage/agent-store.js';
+import { withGoalMessageId } from '../../../domain/index.js';
+import type { AgentStore, CreateJobAndAppendUserMessageResult } from '../../../storage/agent-store.js';
+import { mapStoreError } from '../../../runtime/errors/runtime-error.js';
 import { JobAttemptStarter } from '../shared/job-attempt-starter.js';
 import { JobEventPublisher } from '../shared/job-event-publisher.js';
 import { JobExecutionDispatcher } from '../shared/job-execution-dispatcher.js';
-import { JobActions } from '../shared/job-actions.js';
+import { loadRetrySource, type JobFlowClock } from '../shared/job-flow.helper.js';
 
 export interface ContinueAsNewJobInput {
   failedJobId: string;
@@ -12,18 +14,33 @@ export interface ContinueAsNewJobInput {
 
 export class ContinueAsNewJobFlow {
   constructor(
-    private readonly jobActions: JobActions,
+    private readonly store: AgentStore,
+    private readonly clock: JobFlowClock,
+    private readonly nextJobId: () => string,
+    private readonly nextMessageId: () => string,
     private readonly attempts: JobAttemptStarter,
     private readonly events: JobEventPublisher,
     private readonly execution: JobExecutionDispatcher
   ) {}
 
   async execute(input: ContinueAsNewJobInput): Promise<CreateJobAndAppendUserMessageResult> {
-    const created = await this.jobActions.createContinuationWithMessage({
-      failedJobId: input.failedJobId,
-      content: input.message,
-      clientRequestId: input.clientRequestId,
-    });
+    let created: CreateJobAndAppendUserMessageResult;
+    try {
+      const { source } = await loadRetrySource(this.store, input.failedJobId);
+      const userMessageId = this.nextMessageId();
+      created = await this.store.jobs.createWithUserMessage({
+        sessionId: source.sessionId,
+        jobId: this.nextJobId(),
+        userMessageId,
+        content: input.message,
+        retryOfJobId: source.id,
+        clientRequestId: input.clientRequestId,
+        jobMetadata: withGoalMessageId(source.metadata, userMessageId),
+        nowMs: this.clock.nowMs(),
+      });
+    } catch (error) {
+      throw mapStoreError(error);
+    }
     await this.events.publishAll([
       { type: 'job.upserted', sessionId: created.job.sessionId, job: created.job },
       { type: 'message.upserted', sessionId: created.job.sessionId, message: created.message },

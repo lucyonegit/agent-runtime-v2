@@ -8,7 +8,6 @@ import type {
 } from '../src/domain/index.js';
 import type { JobExecutorPort } from '../src/orchestration/jobs/job-executor.js';
 import { JobManager } from '../src/orchestration/jobs/job-manager.js';
-import { JobActions } from '../src/orchestration/jobs/shared/job-actions.js';
 import { resolveExecutionLimits } from '../src/runtime/settings/execution-limits.js';
 import {
   AgentStoreError,
@@ -375,22 +374,19 @@ function createManager(
   nowMs: number,
   execution = executionSupervisor()
 ): { manager: JobManager; execution: JobExecutorPort } {
-  const jobActions = new JobActions({
-    store,
-    workerId: 'worker_1',
-    jobLeaseMs: 30_000,
-    clock: { nowMs: () => nowMs },
-    ids: {
-      jobId: () => 'job_2',
-      messageId: () => 'message_2',
-      attemptId: () => 'attempt_1',
-    },
-  });
   return {
     manager: new JobManager({
-      jobActions,
+      store,
+      workerId: 'worker_1',
+      jobLeaseMs: 30_000,
       publisher: { publish: vi.fn(async () => undefined) },
       execution,
+      clock: { nowMs: () => nowMs },
+      ids: {
+        jobId: () => 'job_2',
+        messageId: () => 'message_2',
+        attemptId: () => 'attempt_1',
+      },
     }),
     execution,
   };

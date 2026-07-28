@@ -1,5 +1,6 @@
 import type { AgentJob } from '../../domain/index.js';
 import type {
+  AgentStore,
   CreateJobAndAppendUserMessageResult,
   CreateRetryJobResult,
   SaveUserInputAnswerResult,
@@ -21,12 +22,20 @@ import type { JobExecutorPort } from './job-executor.js';
 import { JobAttemptStarter } from './shared/job-attempt-starter.js';
 import { JobEventPublisher } from './shared/job-event-publisher.js';
 import { JobExecutionDispatcher } from './shared/job-execution-dispatcher.js';
-import { JobActions } from './shared/job-actions.js';
+import {
+  randomJobFlowIds,
+  type JobFlowClock,
+  type JobFlowIds,
+} from './shared/job-flow.helper.js';
 
 export interface JobManagerOptions {
-  jobActions: JobActions;
+  store: AgentStore;
+  workerId: string;
+  jobLeaseMs: number;
   publisher: RuntimeEventPublisher;
   execution: JobExecutorPort;
+  clock?: JobFlowClock;
+  ids?: JobFlowIds;
 }
 
 export interface JobManagerPort {
@@ -52,25 +61,63 @@ export class JobManager implements JobManagerPort {
   readonly #answerUserInput: AnswerUserInputFlow;
 
   constructor(private readonly options: JobManagerOptions) {
+    const clock = options.clock ?? { nowMs: () => Date.now() };
+    const ids = options.ids ?? randomJobFlowIds;
     const events = new JobEventPublisher(options.publisher);
-    const attempts = new JobAttemptStarter(options.jobActions, events);
+    const attempts = new JobAttemptStarter(
+      options.store,
+      options.workerId,
+      options.jobLeaseMs,
+      clock,
+      ids.attemptId,
+      events
+    );
     const dispatcher = new JobExecutionDispatcher(options.execution);
-    this.#create = new CreateJobFlow(options.jobActions, attempts, events, dispatcher);
-    this.#retry = new RetryJobFlow(options.jobActions, attempts, events, dispatcher);
+    this.#create = new CreateJobFlow(
+      options.store,
+      clock,
+      ids.jobId,
+      ids.messageId,
+      attempts,
+      events,
+      dispatcher
+    );
+    this.#retry = new RetryJobFlow(
+      options.store,
+      clock,
+      ids.jobId,
+      attempts,
+      events,
+      dispatcher
+    );
     this.#continueAsNew = new ContinueAsNewJobFlow(
-      options.jobActions,
+      options.store,
+      clock,
+      ids.jobId,
+      ids.messageId,
       attempts,
       events,
       dispatcher
     );
     this.#resume = new ResumeJobFlow(
-      options.jobActions,
+      options.store,
+      options.workerId,
+      clock,
       attempts,
       events,
       dispatcher
     );
-    this.#cancel = new CancelJobFlow(options.jobActions, events, options.execution);
-    this.#answerUserInput = new AnswerUserInputFlow(options.jobActions, events, dispatcher);
+    this.#cancel = new CancelJobFlow(options.store, clock, events, options.execution);
+    this.#answerUserInput = new AnswerUserInputFlow(
+      options.store,
+      options.workerId,
+      options.jobLeaseMs,
+      clock,
+      ids.messageId,
+      ids.attemptId,
+      events,
+      dispatcher
+    );
   }
 
   start(): Promise<void> {

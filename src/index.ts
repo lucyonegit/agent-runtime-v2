@@ -10,12 +10,6 @@ export * from './orchestration/agent-runtime.js';
 export * from './orchestration/context-inspection.service.js';
 export * from './orchestration/jobs/job-executor.js';
 export * from './orchestration/jobs/job-manager.js';
-export { JobActions } from './orchestration/jobs/shared/job-actions.js';
-export type {
-  JobActionsClock,
-  JobActionsIds,
-  JobActionsOptions,
-} from './orchestration/jobs/shared/job-actions.js';
 
 // Extension ports
 export * from './runtime/settings/execution-limits.js';

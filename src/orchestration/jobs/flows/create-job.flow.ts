@@ -1,8 +1,17 @@
-import type { CreateJobAndAppendUserMessageResult } from '../../../storage/agent-store.js';
+import { withGoalMessageId } from '../../../domain/index.js';
+import {
+  AgentStoreError,
+  type AgentStore,
+  type CreateJobAndAppendUserMessageResult,
+} from '../../../storage/agent-store.js';
+import { mapStoreError } from '../../../runtime/errors/runtime-error.js';
 import { JobAttemptStarter } from '../shared/job-attempt-starter.js';
 import { JobEventPublisher } from '../shared/job-event-publisher.js';
 import { JobExecutionDispatcher } from '../shared/job-execution-dispatcher.js';
-import { JobActions } from '../shared/job-actions.js';
+import {
+  resolveIdempotentJobCreate,
+  type JobFlowClock,
+} from '../shared/job-flow.helper.js';
 
 export interface CreateManagedJobInput {
   sessionId: string;
@@ -12,18 +21,43 @@ export interface CreateManagedJobInput {
 
 export class CreateJobFlow {
   constructor(
-    private readonly jobActions: JobActions,
+    private readonly store: AgentStore,
+    private readonly clock: JobFlowClock,
+    private readonly nextJobId: () => string,
+    private readonly nextMessageId: () => string,
     private readonly attempts: JobAttemptStarter,
     private readonly events: JobEventPublisher,
     private readonly execution: JobExecutionDispatcher
   ) {}
 
   async execute(input: CreateManagedJobInput): Promise<CreateJobAndAppendUserMessageResult> {
-    const created = await this.jobActions.createJobWithMessage({
-      sessionId: input.sessionId,
-      content: input.message,
-      clientRequestId: input.clientRequestId,
-    });
+    const userMessageId = this.nextMessageId();
+    let created: CreateJobAndAppendUserMessageResult;
+    try {
+      created = await this.store.jobs.createWithUserMessage({
+        sessionId: input.sessionId,
+        jobId: this.nextJobId(),
+        userMessageId,
+        content: input.message,
+        clientRequestId: input.clientRequestId,
+        jobMetadata: withGoalMessageId(undefined, userMessageId),
+        nowMs: this.clock.nowMs(),
+      });
+    } catch (error) {
+      if (error instanceof AgentStoreError && error.code === 'CLIENT_REQUEST_CONFLICT') {
+        try {
+          created = await resolveIdempotentJobCreate(this.store, {
+            sessionId: input.sessionId,
+            clientRequestId: input.clientRequestId,
+            content: input.message,
+          });
+        } catch (replayError) {
+          throw mapStoreError(replayError);
+        }
+      } else {
+        throw mapStoreError(error);
+      }
+    }
     await this.events.publishAll([
       { type: 'job.upserted', sessionId: input.sessionId, job: created.job },
       { type: 'message.upserted', sessionId: input.sessionId, message: created.message },

@@ -3,10 +3,7 @@ import { AgentLoop } from '../loop/agent-loop.js';
 import type { AgentJob } from '../../domain/index.js';
 import { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';
-import type {
-  JobActionsPort,
-  ReActJobExecutionResult,
-} from './types/react-execution.types.js';
+import type { ReActJobExecutionResult } from './types/react-execution.types.js';
 import type { BuiltContext } from '../context/types/context.types.js';
 import type { ReActContextService } from '../context/react-context.service.js';
 import {
@@ -21,7 +18,6 @@ import { PendingToolCallLoader } from './recovery/pending-tool-call-loader.js';
 
 export interface ReActExecutionOptions {
   store: AgentStore;
-  jobActions: JobActionsPort;
   context: Pick<ReActContextService, 'buildForJob'>;
   workerId: string;
   publisher: RuntimeEventPublisher;
@@ -32,6 +28,7 @@ export interface ReActExecutionOptions {
   maxToolCalls: number;
   executionDeadlineMs: number;
   streaming: boolean;
+  clock?: { nowMs(): number };
 }
 
 /**
@@ -83,7 +80,9 @@ export class ReActExecution {
         streaming: this.options.streaming,
       }),
       writer: this.#writer(),
-      jobActions: this.options.jobActions,
+      store: this.options.store,
+      workerId: this.options.workerId,
+      clock: this.options.clock ?? { nowMs: () => Date.now() },
       input: {
         job: input.job,
         loopInput: {

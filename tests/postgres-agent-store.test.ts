@@ -10,11 +10,9 @@ import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { JobExecutorPort } from '../src/orchestration/jobs/job-executor.js';
 import { JobManager } from '../src/orchestration/jobs/job-manager.js';
-import { JobActions } from '../src/orchestration/jobs/shared/job-actions.js';
 import { AuditedChatModel } from '../src/runtime/model/audited-chat-model.js';
 import { executeDurableAgentLoop } from '../src/runtime/execution/helpers/durable-loop-execution.helper.js';
 import { ToolExecutor } from '../src/runtime/execution/tool-executor.js';
-import type { JobActionsPort } from '../src/runtime/execution/types/react-execution.types.js';
 import { AgentLoop } from '../src/runtime/loop/agent-loop.js';
 import { RuntimeEventWriter } from '../src/runtime/events/runtime-event-writer.js';
 import { ContextFormatter } from '../src/runtime/context/helpers/context-formatter.helper.js';
@@ -115,21 +113,18 @@ describe('PostgresAgentStore Job transactions', () => {
     await store.sessions.create({ id: 'session_idempotent', nowMs: 10 });
     const jobIds = ['job_idempotent', 'job_unused', 'job_changed'];
     const messageIds = ['message_idempotent', 'message_unused', 'message_changed'];
-    const jobActions = new JobActions({
+    const manager = new JobManager({
       store,
       workerId: 'worker_idempotent',
       jobLeaseMs: 30_000,
+      publisher: { publish: () => undefined },
+      execution: noOpJobExecutor(),
       clock: { nowMs: () => 20 },
       ids: {
         jobId: () => jobIds.shift()!,
         messageId: () => messageIds.shift()!,
         attemptId: () => 'attempt_idempotent',
       },
-    });
-    const manager = new JobManager({
-      jobActions,
-      publisher: { publish: () => undefined },
-      execution: noOpJobExecutor(),
     });
     const first = await manager.createJob({
       sessionId: 'session_idempotent',
@@ -587,7 +582,9 @@ describe('PostgresAgentStore Job transactions', () => {
     const result = await executeDurableAgentLoop({
       loop,
       writer,
-      jobActions: jobActionsPort(store, 'worker_direct', 36),
+      store,
+      workerId: 'worker_direct',
+      clock: { nowMs: () => 36 },
       input: {
         job: startedJob,
         loopInput: {
@@ -749,7 +746,9 @@ describe('PostgresAgentStore Job transactions', () => {
     const execution = {
       loop,
       writer,
-      jobActions: jobActionsPort(store, 'worker_invalid_tool_args', 36),
+      store,
+      workerId: 'worker_invalid_tool_args',
+      clock: { nowMs: () => 36 },
     };
 
     const result = await executeDurableAgentLoop({
@@ -845,7 +844,9 @@ describe('PostgresAgentStore Job transactions', () => {
         store, workerId: 'worker_disposition', tools: [], requireModelCallAudit: true,
         clock: { nowMs: () => 36 },
       }),
-      jobActions: jobActionsPort(store, 'worker_disposition', 36),
+      store,
+      workerId: 'worker_disposition',
+      clock: { nowMs: () => 36 },
     };
     const result = await executeDurableAgentLoop({
       ...execution,
@@ -915,21 +916,18 @@ describe('PostgresAgentStore Job transactions', () => {
       },
       clock: { nowMs: () => writerNowMs },
     });
-    const jobActions = new JobActions({
+    const jobManager = new JobManager({
       store,
       workerId: 'worker_hitl',
       jobLeaseMs: 30_000,
+      publisher: { publish: () => undefined },
+      execution: noOpJobExecutor(),
       clock: { nowMs: () => 40 },
       ids: {
         jobId: () => 'unused_job',
         messageId: () => 'hitl_answer_message',
         attemptId: () => 'attempt_hitl_2',
       },
-    });
-    const jobManager = new JobManager({
-      jobActions,
-      publisher: { publish: () => undefined },
-      execution: noOpJobExecutor(),
     });
     const waitingExecution = {
       loop: new AgentLoop({
@@ -947,7 +945,9 @@ describe('PostgresAgentStore Job transactions', () => {
         clock: { nowMs: () => 35 },
       }),
       writer,
-      jobActions: jobActionsPort(store, 'worker_hitl', 40),
+      store,
+      workerId: 'worker_hitl',
+      clock: { nowMs: () => 40 },
     };
     const waiting = await executeDurableAgentLoop({
       ...waitingExecution,
@@ -1000,7 +1000,9 @@ describe('PostgresAgentStore Job transactions', () => {
         clock: { nowMs: () => 41 },
       }),
       writer,
-      jobActions: jobActionsPort(store, 'worker_hitl', 42),
+      store,
+      workerId: 'worker_hitl',
+      clock: { nowMs: () => 42 },
     };
     const resumed = await executeDurableAgentLoop({
       ...resumeExecution,
@@ -1737,32 +1739,6 @@ function noOpJobExecutor(): JobExecutorPort {
     startExecution: async () => undefined,
     abortExecution: () => undefined,
     shutdown: async () => undefined,
-  };
-}
-
-function jobActionsPort(
-  store: PostgresAgentStore,
-  workerId: string,
-  nowMs: number
-): JobActionsPort {
-  return {
-    getJob: jobId => store.jobs.get(jobId),
-    fail: (job, error) => {
-      if (!job.currentAttemptId) throw new Error(`Job ${job.id} has no active attempt.`);
-      return store.jobs.fail({
-        jobId: job.id,
-        expectedVersion: job.version,
-        workerId,
-        attemptId: job.currentAttemptId,
-        error,
-        nowMs,
-      });
-    },
-    cancel: (jobId, expectedVersion) => store.jobs.cancel({
-      jobId,
-      expectedVersion,
-      nowMs,
-    }),
   };
 }
 

@@ -1,12 +1,14 @@
 import type { AgentJob } from '../../../domain/index.js';
-import { RuntimeError } from '../../../runtime/errors/runtime-error.js';
+import { mapStoreError, RuntimeError } from '../../../runtime/errors/runtime-error.js';
+import type { AgentStore } from '../../../storage/agent-store.js';
 import type { JobExecutorPort } from '../job-executor.js';
 import { JobEventPublisher } from '../shared/job-event-publisher.js';
-import { JobActions } from '../shared/job-actions.js';
+import type { JobFlowClock } from '../shared/job-flow.helper.js';
 
 export class CancelJobFlow {
   constructor(
-    private readonly jobActions: JobActions,
+    private readonly store: AgentStore,
+    private readonly clock: JobFlowClock,
     private readonly events: JobEventPublisher,
     private readonly execution: JobExecutorPort
   ) {}
@@ -21,11 +23,22 @@ export class CancelJobFlow {
 
   async #cancelLatest(jobId: string, expectedVersion: number): Promise<AgentJob> {
     try {
-      return await this.jobActions.cancel(jobId, expectedVersion);
+      return await this.store.jobs.cancel({
+        jobId,
+        expectedVersion,
+        nowMs: this.clock.nowMs(),
+      });
     } catch (error) {
-      if (!(error instanceof RuntimeError && error.code === 'concurrency_conflict')) throw error;
-      const latest = await this.jobActions.getJob(jobId);
-      if (!latest) throw error;
+      const mappedError = mapStoreError(error);
+      if (!(mappedError instanceof RuntimeError
+        && mappedError.code === 'concurrency_conflict')) throw mappedError;
+      let latest: AgentJob | undefined;
+      try {
+        latest = await this.store.jobs.get(jobId);
+      } catch (readError) {
+        throw mapStoreError(readError);
+      }
+      if (!latest) throw mappedError;
       if (latest.status === 'cancelled') return latest;
       if (![
         'created',
@@ -33,8 +46,16 @@ export class CancelJobFlow {
         'waiting_user_input',
         'resuming',
         'recovery_required',
-      ].includes(latest.status)) throw error;
-      return this.jobActions.cancel(jobId, latest.version);
+      ].includes(latest.status)) throw mappedError;
+      try {
+        return await this.store.jobs.cancel({
+          jobId,
+          expectedVersion: latest.version,
+          nowMs: this.clock.nowMs(),
+        });
+      } catch (retryError) {
+        throw mapStoreError(retryError);
+      }
     }
   }
 }

@@ -3,7 +3,6 @@ import type { RuntimeConfig } from '../../config/runtime-config.js';
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
 import { JobExecutor } from '../../orchestration/jobs/job-executor.js';
 import { JobManager } from '../../orchestration/jobs/job-manager.js';
-import { JobActions } from '../../orchestration/jobs/shared/job-actions.js';
 import { ReActContextService } from '../../runtime/context/react-context.service.js';
 import { ReActExecution } from '../../runtime/execution/react-execution.js';
 import { AuditedModelFactory } from '../../runtime/model/audited-model.factory.js';
@@ -79,13 +78,6 @@ export async function createAgentApplication(
       toolsConfig: config.tools,
     });
 
-    // JobManager、后台执行监督器和 ReAct 使用同一套状态迁移规则。
-    const jobActions = new JobActions({
-      store,
-      workerId: config.workerId,
-      jobLeaseMs: config.execution.ownershipTimeoutMs,
-      clock,
-    });
     const modelFactory = new AuditedModelFactory({
       delegate: model,
       store,
@@ -120,7 +112,6 @@ export async function createAgentApplication(
     });
     const reactExecution = new ReActExecution({
       store,
-      jobActions,
       context,
       workerId: config.workerId,
       publisher: events,
@@ -131,10 +122,10 @@ export async function createAgentApplication(
       maxToolCalls: config.execution.maxToolCalls,
       executionDeadlineMs: config.execution.deadlineMs,
       streaming: config.model.streaming,
+      clock,
     });
     const jobExecutor = new JobExecutor({
       store,
-      jobActions,
       reactExecution,
       workerId: config.workerId,
       publisher: events,
@@ -145,9 +136,12 @@ export async function createAgentApplication(
       clock,
     });
     const jobs = new JobManager({
-      jobActions,
+      store,
+      workerId: config.workerId,
+      jobLeaseMs: config.execution.ownershipTimeoutMs,
       publisher: events,
       execution: jobExecutor,
+      clock,
     });
     const contextPreview = new ContextPreviewService({
       store,
