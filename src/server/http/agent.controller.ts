@@ -21,7 +21,7 @@ export class AgentController {
   ) {}
 
   @Post('sessions')
-  async createSession(@Body() body: { title?: string }) {
+  async createSession(@Body() body: { title?: string; clientRequestId?: string }) {
     const session = await this.runtime.createSession(body ?? {});
     this.events.openSession(session.id);
     return session;

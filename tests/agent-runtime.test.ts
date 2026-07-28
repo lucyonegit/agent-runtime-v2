@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AGENT_REQUEST_LIMITS, type AgentTask } from '../src/domain/index.js';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.js';
 import type { TaskManagerPort } from '../src/orchestration/tasks/task-manager.js';
-import type { AgentStore } from '../src/storage/agent-store.js';
+import { AgentStoreError, type AgentStore } from '../src/storage/agent-store.js';
 
 describe('AgentRuntime application facade', () => {
   it('delegates process startup and shutdown to TaskManager', async () => {
@@ -35,6 +35,9 @@ describe('AgentRuntime application facade', () => {
     await expect(runtime.createSession({
       title: 'x'.repeat(AGENT_REQUEST_LIMITS.sessionTitleCharacters + 1),
     })).rejects.toThrow('title must not exceed');
+    await expect(runtime.createSession({
+      clientRequestId: 'x'.repeat(AGENT_REQUEST_LIMITS.idempotencyKeyCharacters + 1),
+    })).rejects.toThrow('clientRequestId must not exceed');
     await expect(runtime.createTask({
       sessionId: 'session_1',
       message: 'x'.repeat(AGENT_REQUEST_LIMITS.taskMessageCharacters + 1),
@@ -48,6 +51,44 @@ describe('AgentRuntime application facade', () => {
     expect(create).not.toHaveBeenCalled();
     expect(tasks.createTask).not.toHaveBeenCalled();
     expect(tasks.retryTask).not.toHaveBeenCalled();
+  });
+
+  it('replays client-owned Session creation and rejects changed payloads', async () => {
+    let stored: ReturnType<typeof sessionFixture> | undefined;
+    const create = vi.fn(async (input: { id: string; title?: string; nowMs: number }) => {
+      if (stored) {
+        throw new AgentStoreError('SESSION_ALREADY_EXISTS', 'session already committed');
+      }
+      stored = sessionFixture({
+        id: input.id,
+        title: input.title,
+        createdAtMs: input.nowMs,
+        updatedAtMs: input.nowMs,
+      });
+      return stored;
+    });
+    const get = vi.fn(async (sessionId: string) => (
+      stored?.id === sessionId ? stored : undefined
+    ));
+    const runtime = createRuntime({
+      sessions: { create, get },
+    } as unknown as AgentStore, taskManager());
+
+    const first = await runtime.createSession({
+      title: 'Durable intent',
+      clientRequestId: 'session_request_1',
+    });
+    const replay = await runtime.createSession({
+      title: 'Durable intent',
+      clientRequestId: 'session_request_1',
+    });
+
+    expect(replay).toEqual(first);
+    expect(create.mock.calls[0]?.[0].id).toBe(create.mock.calls[1]?.[0].id);
+    await expect(runtime.createSession({
+      title: 'Changed title',
+      clientRequestId: 'session_request_1',
+    })).rejects.toMatchObject({ code: 'idempotency_conflict' });
   });
 
   it('fences execution and finishes external cleanup before deleting durable state', async () => {
@@ -144,6 +185,24 @@ function taskFixture(overrides: Partial<AgentTask> = {}): AgentTask {
     createdAtMs: 100,
     updatedAtMs: 200,
     startedAtMs: 150,
+    ...overrides,
+  };
+}
+
+function sessionFixture(overrides: Partial<{
+  id: string;
+  title?: string;
+  status: 'active' | 'archived';
+  version: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+}> = {}) {
+  return {
+    id: 'session_1',
+    status: 'active' as const,
+    version: 0,
+    createdAtMs: 100,
+    updatedAtMs: 100,
     ...overrides,
   };
 }
