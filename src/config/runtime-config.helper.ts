@@ -88,13 +88,13 @@ function applyEnvironmentOverrides(
     config.model.tokens.outputTokenLimit = value;
   });
 
-  assignPositiveInteger(env, 'JOB_LEASE_MS', value => {
+  assignPositiveInteger(env, 'TASK_OWNERSHIP_TIMEOUT_MS', value => {
     config.execution.ownershipTimeoutMs = value;
   });
-  assignPositiveInteger(env, 'JOB_HEARTBEAT_MS', value => {
+  assignPositiveInteger(env, 'TASK_OWNERSHIP_REFRESH_MS', value => {
     config.execution.ownershipRefreshMs = value;
   });
-  assignPositiveInteger(env, 'JOB_RECOVERY_SCAN_MS', value => {
+  assignPositiveInteger(env, 'TASK_RECOVERY_SCAN_MS', value => {
     config.execution.recoveryScanIntervalMs = value;
   });
   assignBoolean(env, 'AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS', value => {
@@ -140,75 +140,8 @@ function validateConfig(config: RuntimeConfigFile): void {
     );
   }
 
-  positiveInteger(config.context.compression.maximumPasses, 'context.compression.maximumPasses');
-  booleanValue(config.context.compression.enabled, 'context.compression.enabled');
-  positiveInteger(
-    config.context.compression.recentRawTokenBudget,
-    'context.compression.recentRawTokenBudget'
-  );
-  positiveInteger(
-    config.context.compression.minimumRecentGroups,
-    'context.compression.minimumRecentGroups'
-  );
-  positiveInteger(
-    config.context.compression.batchMinimumTokens,
-    'context.compression.batchMinimumTokens'
-  );
-  positiveInteger(
-    config.context.compression.batchMaximumTokens,
-    'context.compression.batchMaximumTokens'
-  );
-  ratio(config.context.compression.batchInputFraction, 'context.compression.batchInputFraction');
-  const pressure = config.context.pressure;
-  ratio(pressure.watchRatio, 'context.pressure.watchRatio');
-  ratio(pressure.compressRatio, 'context.pressure.compressRatio');
-  ratio(pressure.mustCompressRatio, 'context.pressure.mustCompressRatio');
-  ratio(pressure.criticalRatio, 'context.pressure.criticalRatio');
-  if (!(
-    pressure.watchRatio < pressure.compressRatio
-    && pressure.compressRatio < pressure.mustCompressRatio
-    && pressure.mustCompressRatio < pressure.criticalRatio
-  )) {
-    throw new RangeError('Context pressure ratios must be strictly increasing.');
-  }
-  positiveInteger(
-    config.context.estimation.historySampleSize,
-    'context.estimation.historySampleSize'
-  );
-  positiveInteger(
-    config.context.estimation.minimumCalibrationSamples,
-    'context.estimation.minimumCalibrationSamples'
-  );
-  if (
-    config.context.estimation.minimumCalibrationSamples
-    > config.context.estimation.historySampleSize
-  ) {
-    throw new RangeError(
-      'context.estimation.minimumCalibrationSamples cannot exceed historySampleSize.'
-    );
-  }
-  for (const name of [
-    'fallbackCalibrationFactor',
-    'minimumCalibrationFactor',
-    'maximumCalibrationFactor',
-  ] as const) {
-    positiveNumber(config.context.estimation[name], `context.estimation.${name}`);
-  }
-  ratio(
-    config.context.estimation.calibrationPercentile,
-    'context.estimation.calibrationPercentile'
-  );
-  positiveInteger(
-    config.context.estimation.fallbackErrorReserveTokens,
-    'context.estimation.fallbackErrorReserveTokens'
-  );
-  positiveInteger(
-    config.context.estimation.minimumErrorReserveTokens,
-    'context.estimation.minimumErrorReserveTokens'
-  );
-  for (const [name, value] of Object.entries(config.context.projection)) {
-    if (name === 'toolResultHeadRatio') ratio(value, `context.projection.${name}`);
-    else positiveInteger(value, `context.projection.${name}`);
+  for (const [name, value] of Object.entries(config.context)) {
+    positiveInteger(value, `context.${name}`);
   }
 
   validateTools(config.tools);
@@ -304,18 +237,8 @@ function finiteNumber(value: unknown, name: string): asserts value is number {
   }
 }
 
-function positiveNumber(value: unknown, name: string): asserts value is number {
-  finiteNumber(value, name);
-  if (value <= 0) throw new RangeError(`${name} must be greater than zero.`);
-}
-
 function booleanValue(value: unknown, name: string): asserts value is boolean {
   if (typeof value !== 'boolean') throw new TypeError(`${name} must be a boolean.`);
-}
-
-function ratio(value: unknown, name: string): asserts value is number {
-  finiteNumber(value, name);
-  if (value <= 0 || value >= 1) throw new RangeError(`${name} must be between 0 and 1.`);
 }
 
 function deepMerge<T extends object>(base: T, override: Partial<T>): T {

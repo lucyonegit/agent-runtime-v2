@@ -4,10 +4,12 @@ import {
   Delete,
   Get,
   HttpCode,
+  type MessageEvent,
   Param,
   Post,
   Sse,
 } from '@nestjs/common';
+import { interval, map, merge, type Observable } from 'rxjs';
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
 import { ContextPreviewService } from '../debug/context-preview.service.js';
 import { RuntimeEventBus } from '../runtime/runtime-event-bus.js';
@@ -42,9 +44,9 @@ export class AgentController {
     return this.contextPreview.preview(sessionId);
   }
 
-  @Get('jobs/:jobId/context-preview')
-  getJobContextPreview(@Param('jobId') jobId: string) {
-    return this.contextPreview.previewJob(jobId);
+  @Get('tasks/:taskId/context-preview')
+  getTaskContextPreview(@Param('taskId') taskId: string) {
+    return this.contextPreview.previewTask(taskId);
   }
 
   @Get('model-calls/:modelCallId/context')
@@ -59,49 +61,49 @@ export class AgentController {
     this.events.closeSession(sessionId);
   }
 
-  @Post('sessions/:sessionId/jobs')
-  createJob(
+  @Post('sessions/:sessionId/tasks')
+  createTask(
     @Param('sessionId') sessionId: string,
     @Body() body: { message: string; clientRequestId: string }
   ) {
     assertNonEmpty(body?.message, 'message');
     assertNonEmpty(body?.clientRequestId, 'clientRequestId');
-    return this.runtime.createJob({ sessionId, ...body });
+    return this.runtime.createTask({ sessionId, ...body });
   }
 
-  @Post('jobs/:jobId/cancel')
-  cancelJob(
-    @Param('jobId') jobId: string,
+  @Post('tasks/:taskId/cancel')
+  cancelTask(
+    @Param('taskId') taskId: string,
     @Body() body: { expectedVersion: number }
   ) {
-    return this.runtime.cancelJob(jobId, body.expectedVersion);
+    return this.runtime.cancelTask(taskId, body.expectedVersion);
   }
 
-  @Post('jobs/:jobId/retry')
-  retryJob(
-    @Param('jobId') jobId: string,
+  @Post('tasks/:taskId/retry')
+  retryTask(
+    @Param('taskId') taskId: string,
     @Body() body: { clientRequestId: string }
   ) {
     assertNonEmpty(body?.clientRequestId, 'clientRequestId');
-    return this.runtime.retryJob({ failedJobId: jobId, ...body });
+    return this.runtime.retryTask({ sourceTaskId: taskId, ...body });
   }
 
-  @Post('jobs/:jobId/continue-as-new')
-  continueAsNewJob(
-    @Param('jobId') jobId: string,
+  @Post('tasks/:taskId/continue-as-new')
+  continueAsNewTask(
+    @Param('taskId') taskId: string,
     @Body() body: { clientRequestId: string; message: string }
   ) {
     assertNonEmpty(body?.clientRequestId, 'clientRequestId');
     assertNonEmpty(body?.message, 'message');
-    return this.runtime.continueAsNewJob({ failedJobId: jobId, ...body });
+    return this.runtime.continueAsNewTask({ sourceTaskId: taskId, ...body });
   }
 
-  @Post('jobs/:jobId/resume')
-  resumeJob(
-    @Param('jobId') jobId: string,
+  @Post('tasks/:taskId/resume')
+  resumeTask(
+    @Param('taskId') taskId: string,
     @Body() body: { expectedVersion: number }
   ) {
-    return this.runtime.resumeJob(jobId, body.expectedVersion);
+    return this.runtime.resumeTask(taskId, body.expectedVersion);
   }
 
   @Post('user-input-requests/:requestId/answer')
@@ -129,10 +131,15 @@ export class AgentController {
   }
 
   @Sse('sessions/:sessionId/events')
-  sessionEvents(@Param('sessionId') sessionId: string) {
-    return this.events.events(sessionId);
+  sessionEvents(@Param('sessionId') sessionId: string): Observable<MessageEvent> {
+    return merge(
+      this.events.events(sessionId),
+      interval(SSE_HEARTBEAT_INTERVAL_MS).pipe(map(() => ({ data: '' })))
+    );
   }
 }
+
+const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
 
 function assertNonEmpty(value: unknown, field: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim()) {

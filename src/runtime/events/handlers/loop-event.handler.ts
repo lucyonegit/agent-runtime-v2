@@ -4,83 +4,64 @@ import type { AgentStore } from '../../../storage/agent-store.js';
 import type { AgentLoopTarget } from '../../loop/agent-loop.js';
 import { LOOP_EVENT_TYPES, type LoopEvent } from '../../loop/loop-events.js';
 import type { RuntimeTool } from '../../execution/tool-executor.js';
-import {
-  checksumToolArguments,
-  createToolIdempotencyKey,
-} from '../../execution/helpers/tool-call-identity.helper.js';
+import { checksumToolArguments, createToolIdempotencyKey } from '../../execution/helpers/tool-call-identity.helper.js';
 import { mapStoreError } from '../../errors/runtime-error.js';
 import { redactToolArguments } from '../helpers/event-payload.helper.js';
-import type {
-  RuntimeEventRecordResult,
-  RuntimeEventWriterIds,
-} from '../runtime-event-writer.js';
+import type { RuntimeEventRecordResult, RuntimeEventWriterIds } from '../runtime-event-writer.js';
 
 interface LoopEventHandlerOptions {
   store: AgentStore;
-  workerId: string;
+  ownerId: string;
   tools: RuntimeTool[];
   ids: RuntimeEventWriterIds;
   clock: { nowMs(): number };
   requireModelCallAudit: boolean;
-  messageId(jobId: string, outputId: string): string;
+  messageId(taskId: string, outputId: string): string;
   publish(event: AgentRealtimeEvent): Promise<void>;
 }
 
-/** Persists and publishes each concrete AgentLoop event. */
+/** Persists a stable LoopEvent before publishing its realtime projection. */
 export class LoopEventHandler {
-  readonly #options: LoopEventHandlerOptions;
   readonly #definitions: Map<string, RuntimeTool>;
 
-  constructor(options: LoopEventHandlerOptions) {
-    this.#options = options;
+  constructor(private readonly options: LoopEventHandlerOptions) {
     this.#definitions = new Map(options.tools.map(tool => [tool.tool.name, tool]));
   }
 
   async record(event: LoopEvent, target: AgentLoopTarget): Promise<RuntimeEventRecordResult> {
     if (event.type === LOOP_EVENT_TYPES.ModelOutputDelta) {
-      await this.#options.publish({
+      await this.options.publish({
         type: 'message.delta',
-        eventId: this.#options.ids.eventId(),
+        eventId: this.options.ids.eventId(),
         sessionId: target.sessionId,
-        jobId: target.jobId,
-        messageId: this.#options.messageId(target.jobId, event.outputId),
+        taskId: target.taskId,
+        messageId: this.options.messageId(target.taskId, event.outputId),
         outputId: event.outputId,
         channel: event.channel,
         delta: event.delta,
       });
       return { type: 'published_delta' };
     }
-
     if (event.type === LOOP_EVENT_TYPES.ModelOutputRejected) {
-      await this.#setModelCallOutputDisposition({
-        jobId: target.jobId,
-        outputId: event.outputId,
-        disposition: 'rejected',
-        reason: event.reason,
-      });
-      await this.#options.publish({
+      await this.#setOutputDisposition(target.taskId, event.outputId, 'rejected', event.reason);
+      await this.options.publish({
         type: 'message.discarded',
-        eventId: this.#options.ids.eventId(),
+        eventId: this.options.ids.eventId(),
         sessionId: target.sessionId,
-        jobId: target.jobId,
-        messageId: this.#options.messageId(target.jobId, event.outputId),
+        taskId: target.taskId,
+        messageId: this.options.messageId(target.taskId, event.outputId),
         outputId: event.outputId,
         reason: event.reason,
       });
       return { type: 'discarded_output' };
     }
-
     if (event.type === LOOP_EVENT_TYPES.ModelOutputCompleted) {
       return this.#recordModelOutput(event, target);
     }
-
-    if (
-      event.type === LOOP_EVENT_TYPES.ToolResultCompleted
-      || event.type === LOOP_EVENT_TYPES.ToolResultFailed
-    ) {
+    if (event.type === LOOP_EVENT_TYPES.ToolResultCompleted
+      || event.type === LOOP_EVENT_TYPES.ToolResultFailed) {
       return this.#recordToolResult(event, target);
     }
-
     return { type: 'input_required', event };
   }
 
@@ -88,48 +69,41 @@ export class LoopEventHandler {
     event: Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted }>,
     target: AgentLoopTarget
   ): Promise<RuntimeEventRecordResult> {
-    await this.#setModelCallOutputDisposition({
-      jobId: target.jobId,
-      outputId: event.outputId,
-      disposition: 'accepted',
-    });
+    await this.#setOutputDisposition(target.taskId, event.outputId, 'accepted');
     if (event.toolCalls.length === 0) return { type: 'final_candidate', event };
     try {
-      const committed = await this.#options.store.execution.commitModelToolCalls({
+      const contextScope = event.toolCalls.every(call => (
+        this.#definitions.get(call.name)?.contextScope === 'task'
+      )) ? 'task' : 'conversation';
+      const committed = await this.options.store.execution.saveToolCalls({
         sessionId: target.sessionId,
-        jobId: target.jobId,
-        attemptId: target.attemptId,
-        workerId: this.#options.workerId,
+        taskId: target.taskId,
+        taskRunId: target.taskRunId,
+        ownerId: this.options.ownerId,
         outputId: event.outputId,
-        messageId: this.#options.messageId(target.jobId, event.outputId),
+        messageId: this.options.messageId(target.taskId, event.outputId),
         content: event.content,
-        invocations: event.toolCalls.map(call => {
+        contextScope,
+        toolCalls: event.toolCalls.map(call => {
           const definition = this.#definitions.get(call.name);
-          const persistedCall = {
-            ...call,
-            args: redactToolArguments(call.args, definition?.sensitiveArgumentPaths ?? []),
-          };
           return {
-            invocationId: this.#options.ids.toolInvocationId(),
-            call: persistedCall,
+            id: this.options.ids.toolCallId(),
+            call: {
+              ...call,
+              args: redactToolArguments(call.args, definition?.sensitiveArgumentPaths ?? []),
+            },
             argumentsChecksum: checksumToolArguments(call.args),
             sideEffectLevel: definition?.sideEffectLevel ?? 'read_only',
-            idempotencyKey: createToolIdempotencyKey(target.jobId, call.id),
+            idempotencyKey: createToolIdempotencyKey(target.taskId, call.id),
           };
         }),
-        nowMs: this.#options.clock.nowMs(),
+        nowMs: this.options.clock.nowMs(),
       });
-      await this.#options.publish({
-        type: 'message.upserted',
-        sessionId: target.sessionId,
-        message: committed.message,
+      await this.options.publish({
+        type: 'message.upserted', sessionId: target.sessionId, message: committed.message,
       });
-      for (const invocation of committed.invocations) {
-        await this.#options.publish({
-          type: 'tool_invocation.upserted',
-          sessionId: target.sessionId,
-          invocation,
-        });
+      for (const toolCall of committed.toolCalls) {
+        await this.options.publish({ type: 'tool_call.upserted', sessionId: target.sessionId, toolCall });
       }
       return { type: 'committed_tool_calls', message: committed.message };
     } catch (error) {
@@ -139,8 +113,7 @@ export class LoopEventHandler {
 
   async #recordToolResult(
     event: Extract<LoopEvent, {
-      type: typeof LOOP_EVENT_TYPES.ToolResultCompleted
-        | typeof LOOP_EVENT_TYPES.ToolResultFailed;
+      type: typeof LOOP_EVENT_TYPES.ToolResultCompleted | typeof LOOP_EVENT_TYPES.ToolResultFailed;
     }>,
     target: AgentLoopTarget
   ): Promise<RuntimeEventRecordResult> {
@@ -152,7 +125,7 @@ export class LoopEventHandler {
             result: event.result,
             artifacts: event.artifacts?.map(artifact => ({
               ...artifact,
-              id: this.#options.ids.artifactId?.() ?? `artifact_${randomUUID()}`,
+              id: this.options.ids.artifactId?.() ?? `artifact_${randomUUID()}`,
             })),
             durationMs: event.durationMs,
           }
@@ -164,32 +137,27 @@ export class LoopEventHandler {
             details: event.details,
             durationMs: event.durationMs,
           };
-      const committed = await this.#options.store.execution.commitToolResult({
+      const committed = await this.options.store.execution.completeToolCall({
         sessionId: target.sessionId,
-        jobId: target.jobId,
-        attemptId: target.attemptId,
-        workerId: this.#options.workerId,
-        toolCallId: event.toolCallId,
-        messageId: this.#options.ids.messageId(),
+        taskId: target.taskId,
+        taskRunId: target.taskRunId,
+        ownerId: this.options.ownerId,
+        modelToolCallId: event.modelToolCallId,
+        messageId: this.options.ids.messageId(),
         outcome,
-        nowMs: this.#options.clock.nowMs(),
+        nowMs: this.options.clock.nowMs(),
       });
-      await this.#options.publish({
-        type: 'message.upserted',
-        sessionId: target.sessionId,
-        message: committed.message,
+      await this.options.publish({
+        type: 'message.upserted', sessionId: target.sessionId, message: committed.message,
       });
-      await this.#options.publish({
-        type: 'tool_invocation.upserted',
-        sessionId: target.sessionId,
-        invocation: committed.invocation,
+      await this.options.publish({
+        type: 'tool_call.upserted', sessionId: target.sessionId, toolCall: committed.toolCall,
+      });
+      await this.options.publish({
+        type: 'tool_run.upserted', sessionId: target.sessionId, toolRun: committed.toolRun,
       });
       for (const artifact of committed.artifacts) {
-        await this.#options.publish({
-          type: 'artifact.upserted',
-          sessionId: target.sessionId,
-          artifact,
-        });
+        await this.options.publish({ type: 'artifact.upserted', sessionId: target.sessionId, artifact });
       }
       return { type: 'committed_tool_result', message: committed.message };
     } catch (error) {
@@ -197,13 +165,18 @@ export class LoopEventHandler {
     }
   }
 
-  async #setModelCallOutputDisposition(
-    input: Parameters<AgentStore['models']['setCallOutputDisposition']>[0]
+  async #setOutputDisposition(
+    taskId: string,
+    outputId: string,
+    disposition: 'accepted' | 'rejected',
+    reason?: string
   ): Promise<void> {
     try {
-      await this.#options.store.models.setCallOutputDisposition(input);
+      await this.options.store.models.setCallOutputDisposition({
+        taskId, outputId, disposition, ...(reason ? { reason } : {}),
+      });
     } catch (error) {
-      if (this.#options.requireModelCallAudit) throw error;
+      if (this.options.requireModelCallAudit) throw error;
     }
   }
 }

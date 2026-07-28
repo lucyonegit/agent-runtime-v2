@@ -46,38 +46,9 @@
     "recoveryBatchSize": 32
   },
   "context": {
-    "compression": {
-      "enabled": true,
-      "maximumPasses": 4,
-      "recentRawTokenBudget": 24000,
-      "minimumRecentGroups": 2,
-      "batchMinimumTokens": 8000,
-      "batchMaximumTokens": 48000,
-      "batchInputFraction": 0.5
-    },
-    "pressure": {
-      "watchRatio": 0.4,
-      "compressRatio": 0.55,
-      "mustCompressRatio": 0.75,
-      "criticalRatio": 0.9
-    },
-    "estimation": {
-      "historySampleSize": 100,
-      "minimumCalibrationSamples": 10,
-      "fallbackCalibrationFactor": 1.1,
-      "minimumCalibrationFactor": 1,
-      "maximumCalibrationFactor": 1.75,
-      "calibrationPercentile": 0.95,
-      "fallbackErrorReserveTokens": 256,
-      "minimumErrorReserveTokens": 64
-    },
-    "projection": {
-      "maximumToolResultTokens": 8000,
-      "toolResultHeadRatio": 0.6,
-      "runtimeStateMaximumTokens": 8000,
-      "artifactHistoryLimit": 100,
-      "recentModelCallLimit": 100
-    }
+    "keepRecentInputTokens": 24000,
+    "maxToolResultTokens": 8000,
+    "summaryMaxTokens": 4000
   },
   "tools": {
     "enabled": {

@@ -1,19 +1,19 @@
 import { Pool } from 'pg';
 import type { RuntimeConfig } from '../../config/runtime-config.js';
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
-import { JobExecutor } from '../../orchestration/jobs/job-executor.js';
-import { JobManager } from '../../orchestration/jobs/job-manager.js';
-import { ReActContextService } from '../../runtime/context/react-context.service.js';
+import { TaskExecutor } from '../../orchestration/tasks/task-executor.js';
+import { TaskManager } from '../../orchestration/tasks/task-manager.js';
+import { ModelInputBuilder } from '../../runtime/context/model-input-builder.js';
 import { ReActExecution } from '../../runtime/execution/react-execution.js';
 import { AuditedModelFactory } from '../../runtime/model/audited-model.factory.js';
 import {
   buildStableEnvironmentContext,
-  JOB_AGENT_PROMPT_ID,
-  JOB_AGENT_PROMPT_VERSION,
-  JOB_AGENT_SYSTEM_PROMPT,
-  JOB_AGENT_SYSTEM_PROMPT_VERSION,
-} from '../../runtime/prompting/job-agent-prompt.js';
-import { assertAgentRuntimeSchemaVersion } from '../../storage/postgres/migrations.js';
+  TASK_AGENT_PROMPT_ID,
+  TASK_AGENT_PROMPT_VERSION,
+  TASK_AGENT_SYSTEM_PROMPT,
+  TASK_AGENT_SYSTEM_PROMPT_VERSION,
+} from '../../runtime/prompting/task-agent-prompt.js';
+import { assertAgentRuntimeSchema } from '../../storage/postgres/schema-management.js';
 import { PostgresAgentStore } from '../../storage/postgres/postgres-agent-store.js';
 import { ManagedProcessManager, removeSessionSandbox } from '../../tools/index.js';
 import { ContextPreviewService } from '../debug/context-preview.service.js';
@@ -52,7 +52,7 @@ export async function createAgentApplication(
   try {
     const schemaClient = await pool.connect();
     try {
-      await assertAgentRuntimeSchemaVersion(schemaClient);
+      await assertAgentRuntimeSchema(schemaClient);
     } finally {
       schemaClient.release();
     }
@@ -88,19 +88,14 @@ export async function createAgentApplication(
       reservedOutputTokens: config.modelTokenLimits.outputTokenLimit,
       publisher: events,
     });
-    const context = new ReActContextService({
+    const context = new ModelInputBuilder({
       store,
-      systemPrompt: JOB_AGENT_SYSTEM_PROMPT,
-      systemPromptVersion: JOB_AGENT_SYSTEM_PROMPT_VERSION,
-      promptId: JOB_AGENT_PROMPT_ID,
-      promptVersion: JOB_AGENT_PROMPT_VERSION,
-      model: {
-        provider: config.model.provider,
-        name: config.model.modelName,
-        maxContextTokens: config.modelTokenLimits.contextWindowTokens,
-        reservedOutputTokens: config.modelTokenLimits.outputTokenLimit,
-        inputTokenLimit: config.modelTokenLimits.inputTokenLimit,
-      },
+      systemPrompt: TASK_AGENT_SYSTEM_PROMPT,
+      systemPromptVersion: TASK_AGENT_SYSTEM_PROMPT_VERSION,
+      promptId: TASK_AGENT_PROMPT_ID,
+      promptVersion: TASK_AGENT_PROMPT_VERSION,
+      inputTokenLimit: config.modelTokenLimits.inputTokenLimit,
+      reservedOutputTokens: config.modelTokenLimits.outputTokenLimit,
       contextConfig: config.context,
       toolSchemas: tools.map(tool => tool.tool),
       getStableContext: sessionId => buildStableEnvironmentContext({
@@ -124,7 +119,7 @@ export async function createAgentApplication(
       streaming: config.model.streaming,
       clock,
     });
-    const jobExecutor = new JobExecutor({
+    const taskExecutor = new TaskExecutor({
       store,
       reactExecution,
       workerId: config.workerId,
@@ -135,21 +130,19 @@ export async function createAgentApplication(
       recoveryBatchSize: config.execution.recoveryBatchSize,
       clock,
     });
-    const jobs = new JobManager({
+    const tasks = new TaskManager({
       store,
       workerId: config.workerId,
-      jobLeaseMs: config.execution.ownershipTimeoutMs,
+      ownershipTimeoutMs: config.execution.ownershipTimeoutMs,
       publisher: events,
-      execution: jobExecutor,
+      execution: taskExecutor,
       clock,
     });
     const contextPreview = new ContextPreviewService({
       store,
       tools,
-      provider: config.model.provider,
-      modelName: config.model.modelName,
-      maxContextTokens: config.modelTokenLimits.contextWindowTokens,
-      reservedOutputTokens: config.modelTokenLimits.outputTokenLimit,
+      contextWindowTokens: config.modelTokenLimits.contextWindowTokens,
+      outputTokenLimit: config.modelTokenLimits.outputTokenLimit,
       inputTokenLimit: config.modelTokenLimits.inputTokenLimit,
       sandboxRoot: config.sandboxRoot,
       shellPath: config.tools.shell.executable,
@@ -158,7 +151,7 @@ export async function createAgentApplication(
     });
     const runtime = new AgentRuntime({
       store,
-      jobs,
+      tasks,
       processReader: managedProcesses,
       beforeDeleteSession: sessionId => managedProcesses.stopSessionProcesses(sessionId),
       removeSessionWorkspace: sessionId => removeSessionSandbox({

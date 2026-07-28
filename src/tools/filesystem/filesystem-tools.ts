@@ -96,7 +96,7 @@ interface CompletedFileWriteManifest {
   targetExisted: boolean;
   nextChunkIndex: number;
   chunks: FileWriteChunk[];
-  finalizationToolInvocationId: string;
+  finalizationToolCallId: string;
   result: CompletedFileWriteResult;
   artifact: ReturnType<typeof createFileArtifactDraft> | undefined;
 }
@@ -233,7 +233,7 @@ export function createFilesystemTools(
       if (artifacts.length > 0) {
         const revisionPath = await resolveWorkspacePath(
           context,
-          `.revisions/${context.toolInvocationId}/${path}`
+          `.revisions/${context.toolCallId}/${path}`
         );
         await mkdir(dirname(revisionPath), { recursive: true });
         await writeFile(revisionPath, content, 'utf8');
@@ -544,7 +544,7 @@ async function startChunkedFileWrite(input: {
     nextChunkIndex: 1,
     chunks: [chunk],
   };
-  await writeFileWriteManifest(manifestPath, manifest, input.context.toolInvocationId);
+  await writeFileWriteManifest(manifestPath, manifest, input.context.toolCallId);
   return openFileWriteResult(manifest, 0);
 }
 
@@ -587,7 +587,7 @@ async function appendChunkedFileWrite(input: {
     return {
       ...manifest.result,
       replayed: true,
-      ...(manifest.finalizationToolInvocationId === input.context.toolInvocationId
+      ...(manifest.finalizationToolCallId === input.context.toolCallId
         && manifest.artifact
         ? { artifacts: [manifest.artifact] }
         : {}),
@@ -626,7 +626,7 @@ async function appendChunkedFileWrite(input: {
       nextChunkIndex: input.chunkIndex + 1,
       chunks,
     };
-    await writeFileWriteManifest(manifestPath, updated, input.context.toolInvocationId);
+    await writeFileWriteManifest(manifestPath, updated, input.context.toolCallId);
     return openFileWriteResult(updated, input.chunkIndex);
   }
 
@@ -636,7 +636,7 @@ async function appendChunkedFileWrite(input: {
     directory,
     acceptedChunkIndex: input.chunkIndex,
   });
-  await writeFileWriteManifest(manifestPath, completed, input.context.toolInvocationId);
+  await writeFileWriteManifest(manifestPath, completed, input.context.toolCallId);
   return {
     ...completed.result,
     ...(completed.artifact ? { artifacts: [completed.artifact] } : {}),
@@ -691,7 +691,7 @@ async function finalizeChunkedFileWrite(input: {
     ...input.manifest,
     status: 'completed',
     nextChunkIndex: input.acceptedChunkIndex + 1,
-    finalizationToolInvocationId: input.context.toolInvocationId,
+    finalizationToolCallId: input.context.toolCallId,
     result: {
       writeId: input.manifest.writeId,
       path: input.manifest.path,
@@ -720,7 +720,7 @@ function createFileArtifactDraft(input: {
     title: basename(input.path),
     fileName: basename(input.path),
     logicalPath: input.path,
-    storagePath: `.revisions/${input.context.toolInvocationId}/${input.path}`,
+    storagePath: `.revisions/${input.context.toolCallId}/${input.path}`,
     mediaType: mediaTypeForPath(input.path),
     size: Buffer.byteLength(input.content),
     checksum: createHash('sha256').update(input.content).digest('hex'),
@@ -818,10 +818,10 @@ async function readFileWriteManifest(path: string): Promise<FileWriteManifest | 
 async function writeFileWriteManifest(
   path: string,
   manifest: FileWriteManifest,
-  toolInvocationId: string
+  toolCallId: string
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const temporaryPath = `${path}.${toolInvocationId}.tmp`;
+  const temporaryPath = `${path}.${toolCallId}.tmp`;
   try {
     await writeFile(temporaryPath, JSON.stringify(manifest), 'utf8');
     await rename(temporaryPath, path);
@@ -850,7 +850,7 @@ function isFileWriteManifest(value: unknown): value is FileWriteManifest {
   if (!commonIsValid) return false;
   if (manifest.status === 'open') return true;
   const completed = manifest as Partial<CompletedFileWriteManifest>;
-  return typeof completed.finalizationToolInvocationId === 'string'
+  return typeof completed.finalizationToolCallId === 'string'
     && isCompletedFileWriteResult(completed.result);
 }
 

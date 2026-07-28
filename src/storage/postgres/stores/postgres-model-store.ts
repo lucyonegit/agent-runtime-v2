@@ -35,11 +35,11 @@ export class PostgresModelStore implements ModelStore {
     return result.rows[0] ? mapAgentModelCallRow(result.rows[0]) : undefined;
   }
 
-  async listCalls(jobId: string): Promise<AgentModelCall[]> {
+  async listCalls(taskId: string): Promise<AgentModelCall[]> {
     const result = await this.pool.query<AgentModelCallRow>(
-      `select * from agent_model_calls where job_id = $1
-       order by created_at_ms asc, call_attempt_no asc, logical_call_key asc, id asc`,
-      [jobId]
+      `select * from agent_model_calls where task_id = $1
+       order by created_at_ms asc, logical_call_key asc, id asc`,
+      [taskId]
     );
     return result.rows.map(mapAgentModelCallRow);
   }
@@ -47,7 +47,7 @@ export class PostgresModelStore implements ModelStore {
   async listRecentSessionCalls(sessionId: string, limit: number): Promise<AgentModelCall[]> {
     const result = await this.pool.query<AgentModelCallRow>(
       `select * from agent_model_calls where session_id = $1
-       order by created_at_ms desc, call_attempt_no desc, logical_call_key desc, id desc
+       order by created_at_ms desc, logical_call_key desc, id desc
        limit $2`,
       [sessionId, limit]
     );

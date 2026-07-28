@@ -1,37 +1,37 @@
-import type { AgentJob } from '../../../domain/index.js';
+import type { AgentTask } from '../../../domain/index.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
 
 /** Rebuilds only the unfinished tool batch referenced by the durable checkpoint. */
 export class PendingToolCallLoader {
   constructor(private readonly store: AgentStore) {}
 
-  async load(job: AgentJob, callMessageId?: string) {
+  async load(task: AgentTask, callMessageId?: string) {
     if (!callMessageId) return [];
-    const [messages, invocations] = await Promise.all([
-      this.store.sessions.listMessages(job.sessionId),
-      this.store.sessions.listToolInvocations(job.sessionId),
+    const [messages, toolCalls] = await Promise.all([
+      this.store.sessions.listMessages(task.sessionId),
+      this.store.sessions.listToolCalls(task.sessionId),
     ]);
     const callMessage = messages.find(message => message.id === callMessageId);
     if (!callMessage?.toolCalls?.length) {
       throw new Error(`Checkpoint tool batch ${JSON.stringify(callMessageId)} has no call message.`);
     }
-    const byCallId = new Map(
-      invocations
-        .filter(invocation => invocation.jobId === job.id && invocation.callMessageId === callMessageId)
-        .map(invocation => [invocation.toolCallId, invocation])
+    const byModelCallId = new Map(
+      toolCalls
+        .filter(toolCall => toolCall.taskId === task.id && toolCall.callMessageId === callMessageId)
+        .map(toolCall => [toolCall.modelToolCallId, toolCall])
     );
     return callMessage.toolCalls.flatMap(call => {
-      const invocation = byCallId.get(call.id);
-      if (!invocation) {
-        throw new Error(`Checkpoint tool call ${JSON.stringify(call.id)} has no invocation.`);
+      const toolCall = byModelCallId.get(call.id);
+      if (!toolCall) {
+        throw new Error(`Checkpoint model tool call ${JSON.stringify(call.id)} has no ToolCall.`);
       }
-      if (['completed', 'failed'].includes(invocation.status)) return [];
-      if (invocation.status !== 'pending') {
+      if (['completed', 'failed'].includes(toolCall.status)) return [];
+      if (toolCall.status !== 'pending') {
         throw new Error(
-          `Checkpoint tool call ${JSON.stringify(call.id)} cannot resume from ${invocation.status}.`
+          `Checkpoint model tool call ${JSON.stringify(call.id)} cannot resume from ${toolCall.status}.`
         );
       }
-      return [{ ...call, args: invocation.arguments }];
+      return [{ ...call, args: toolCall.arguments }];
     });
   }
 }

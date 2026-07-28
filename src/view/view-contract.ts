@@ -1,13 +1,14 @@
 import type {
+  AgentActivePlan,
   AgentArtifact,
-  AgentJob,
-  AgentMessage,
   AgentManagedProcess,
+  AgentMessage,
   AgentModelUsageStats,
-  AgentPlan,
-  AgentPlanStep,
   AgentSession,
-  AgentToolInvocation,
+  AgentTask,
+  AgentTaskRun,
+  AgentToolCall,
+  AgentToolRun,
   AgentUserInputRequest,
 } from '../domain/index.js';
 
@@ -17,28 +18,29 @@ export type FlatTimelineItem =
       type: 'tool_exchange';
       rowId: number;
       callMessage: AgentMessage;
-      invocations: AgentToolInvocation[];
+      toolCalls: AgentToolCall[];
       resultMessages: AgentMessage[];
       artifacts: AgentArtifact[];
-      status: 'pending' | 'running' | 'waiting_user_input' | 'completed' | 'failed' | 'unknown' | 'cancelled';
+      status: AgentToolCall['status'];
       warning?: string;
     };
 
-export interface SessionViewV1 {
-  schemaVersion: 4;
+/** Refresh-authoritative projection. ActivePlan is intentionally outside the timeline. */
+export interface AgentSessionView {
+  schemaVersion: 5;
   generatedAtMs: number;
   session: AgentSession;
-  jobs: AgentJob[];
-  plans: AgentPlan[];
-  planSteps: AgentPlanStep[];
+  tasks: AgentTask[];
+  activeTask?: AgentTask;
+  taskRuns: AgentTaskRun[];
+  activePlan?: AgentActivePlan;
   messages: AgentMessage[];
-  toolInvocations: AgentToolInvocation[];
+  toolCalls: AgentToolCall[];
+  toolRuns: AgentToolRun[];
   artifacts: AgentArtifact[];
   managedProcesses: AgentManagedProcess[];
   userInputRequests: AgentUserInputRequest[];
   modelUsage?: AgentModelUsageStats;
-  timeline: {
-    flat: FlatTimelineItem[];
-  };
+  timeline: { flat: FlatTimelineItem[] };
   cursor: { latestMessageRowId: number | null };
 }

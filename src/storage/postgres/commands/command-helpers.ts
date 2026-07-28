@@ -1,16 +1,14 @@
 import type { PoolClient } from 'pg';
+import type { AgentTaskCheckpointPhase } from '../../../domain/index.js';
+import { AgentStoreError } from '../../agent-store.js';
 import type {
-  AgentLoopCheckpointPhase
-} from '../../../domain/index.js';
-import {
-  AgentStoreError
-} from '../../agent-store.js';
-import {
-  type AgentJobRow,
-  type AgentLoopCheckpointRow,
-  type AgentMessageRow,
-  type AgentToolInvocationRow,
-  type AgentUserInputRequestRow
+  AgentMessageRow,
+  AgentTaskCheckpointRow,
+  AgentTaskRow,
+  AgentTaskRunRow,
+  AgentToolCallRow,
+  AgentToolRunRow,
+  AgentUserInputRequestRow,
 } from '../row-mappers.js';
 
 interface PostgresErrorLike {
@@ -18,63 +16,112 @@ interface PostgresErrorLike {
   constraint?: string;
 }
 
-export function assertJobLease(
-  job: AgentJobRow,
-  workerId: string | undefined,
-  attemptId: string | undefined,
+export function assertFutureOwnership(nowMs: number, ownershipExpiresAtMs: number): void {
+  if (ownershipExpiresAtMs <= nowMs) {
+    throw new RangeError('ownershipExpiresAtMs must be greater than nowMs.');
+  }
+}
+
+export async function selectTask(
+  client: PoolClient,
+  taskId: string,
+  lock = false
+): Promise<AgentTaskRow | undefined> {
+  const result = await client.query<AgentTaskRow>(
+    `select * from agent_tasks where id = $1${lock ? ' for update' : ''}`,
+    [taskId]
+  );
+  return result.rows[0];
+}
+
+export async function selectTaskRun(
+  client: PoolClient,
+  taskRunId: string,
+  lock = false
+): Promise<AgentTaskRunRow | undefined> {
+  const result = await client.query<AgentTaskRunRow>(
+    `select * from agent_task_runs where id = $1${lock ? ' for update' : ''}`,
+    [taskRunId]
+  );
+  return result.rows[0];
+}
+
+export function assertTaskRunOwnership(
+  task: AgentTaskRow,
+  taskRun: AgentTaskRunRow | undefined,
+  ownerId: string,
   nowMs: number
-): void {
-  const leaseExpiresAtMs = job.lease_expires_at_ms === null
+): asserts taskRun is AgentTaskRunRow {
+  const expiresAt = taskRun?.ownership_expires_at_ms === null
+    || taskRun?.ownership_expires_at_ms === undefined
     ? undefined
-    : Number(job.lease_expires_at_ms);
+    : Number(taskRun.ownership_expires_at_ms);
   if (
-    !['running', 'resuming'].includes(job.status)
-    || job.lease_owner !== workerId
-    || job.current_attempt_id !== attemptId
-    || leaseExpiresAtMs === undefined
-    || leaseExpiresAtMs <= nowMs
+    task.status !== 'running'
+    || !taskRun
+    || taskRun.task_id !== task.id
+    || taskRun.status !== 'running'
+    || taskRun.owner_id !== ownerId
+    || expiresAt === undefined
+    || expiresAt <= nowMs
   ) {
     throw new AgentStoreError(
-      'JOB_LEASE_LOST',
-      `Job ${JSON.stringify(job.id)} is not owned by the supplied worker attempt.`,
-      { jobId: job.id, workerId, attemptId }
+      'TASK_OWNERSHIP_LOST',
+      `Task run ${JSON.stringify(taskRun?.id)} is no longer owned by ${JSON.stringify(ownerId)}.`,
+      { taskId: task.id, taskRunId: taskRun?.id, ownerId }
     );
   }
 }
 
-export function assertFutureLease(nowMs: number, leaseUntilMs: number): void {
-  if (leaseUntilMs <= nowMs) {
-    throw new RangeError('leaseUntilMs must be greater than nowMs.');
-  }
-}
-
-export async function selectJob(client: PoolClient, jobId: string): Promise<AgentJobRow | undefined> {
-  const result = await client.query<AgentJobRow>(
-    `select * from agent_jobs where id = $1`,
-    [jobId]
-  );
-  return result.rows[0];
-}
-
-export async function selectToolInvocation(
+export async function selectToolCall(
   client: PoolClient,
-  jobId: string,
-  toolCallId: string
-): Promise<AgentToolInvocationRow | undefined> {
-  const result = await client.query<AgentToolInvocationRow>(
+  taskId: string,
+  modelToolCallId: string,
+  lock = false
+): Promise<AgentToolCallRow | undefined> {
+  const result = await client.query<AgentToolCallRow>(
     `select *
-     from agent_tool_invocations
-     where job_id = $1 and tool_call_id = $2`,
-    [jobId, toolCallId]
+     from agent_tool_calls
+     where task_id = $1 and model_tool_call_id = $2${lock ? ' for update' : ''}`,
+    [taskId, modelToolCallId]
   );
   return result.rows[0];
 }
 
-export interface AppendLoopCheckpointInput {
+export async function selectActiveToolRun(
+  client: PoolClient,
+  toolCallId: string,
+  lock = false
+): Promise<AgentToolRunRow | undefined> {
+  const result = await client.query<AgentToolRunRow>(
+    `select *
+     from agent_tool_runs
+     where tool_call_id = $1 and status = 'running'${lock ? ' for update' : ''}`,
+    [toolCallId]
+  );
+  return result.rows[0];
+}
+
+export async function selectLatestTaskCheckpoint(
+  client: PoolClient,
+  taskId: string
+): Promise<AgentTaskCheckpointRow | undefined> {
+  const result = await client.query<AgentTaskCheckpointRow>(
+    `select *
+     from agent_task_checkpoints
+     where task_id = $1
+     order by sequence_no desc
+     limit 1`,
+    [taskId]
+  );
+  return result.rows[0];
+}
+
+export interface AppendTaskCheckpointInput {
   sessionId: string;
-  jobId: string;
-  attemptId: string;
-  phase: AgentLoopCheckpointPhase;
+  taskId: string;
+  taskRunId: string;
+  phase: AgentTaskCheckpointPhase;
   callMessageId?: string;
   iterationNo: number;
   executedToolCalls: number;
@@ -82,39 +129,28 @@ export interface AppendLoopCheckpointInput {
   nowMs: number;
 }
 
-export async function selectLatestLoopCheckpoint(
+export async function appendTaskCheckpoint(
   client: PoolClient,
-  jobId: string
-): Promise<AgentLoopCheckpointRow | undefined> {
-  const result = await client.query<AgentLoopCheckpointRow>(
-    `select *
-     from agent_loop_checkpoints
-     where job_id = $1
-     order by sequence_no desc
-     limit 1`,
-    [jobId]
+  input: AppendTaskCheckpointInput
+): Promise<AgentTaskCheckpointRow> {
+  const sequenceResult = await client.query<{ sequence_no: number }>(
+    `select coalesce(max(sequence_no), 0)::integer + 1 as sequence_no
+     from agent_task_checkpoints
+     where task_id = $1`,
+    [input.taskId]
   );
-  return result.rows[0];
-}
-
-export async function appendLoopCheckpoint(
-  client: PoolClient,
-  input: AppendLoopCheckpointInput
-): Promise<AgentLoopCheckpointRow> {
-  const latest = await selectLatestLoopCheckpoint(client, input.jobId);
-  const sequenceNo = (latest?.sequence_no ?? 0) + 1;
-  const id = `${input.jobId}:checkpoint:${sequenceNo}`;
-  const result = await client.query<AgentLoopCheckpointRow>(
-    `insert into agent_loop_checkpoints(
-       id, session_id, job_id, attempt_id, sequence_no, phase,
+  const sequenceNo = requireRow(sequenceResult.rows[0], 'select checkpoint sequence').sequence_no;
+  const result = await client.query<AgentTaskCheckpointRow>(
+    `insert into agent_task_checkpoints(
+       id, session_id, task_id, task_run_id, sequence_no, phase,
        call_message_id, iteration_no, executed_tool_calls, metadata, created_at_ms
      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      returning *`,
     [
-      id,
+      `${input.taskId}:checkpoint:${sequenceNo}`,
       input.sessionId,
-      input.jobId,
-      input.attemptId,
+      input.taskId,
+      input.taskRunId,
       sequenceNo,
       input.phase,
       input.callMessageId ?? null,
@@ -124,35 +160,16 @@ export async function appendLoopCheckpoint(
       input.nowMs,
     ]
   );
-  return requireRow(result.rows[0], 'append loop checkpoint');
-}
-
-export async function resolveActivePlanScope(
-  client: PoolClient,
-  jobId: string
-): Promise<{ planId: string; planStepId?: string } | undefined> {
-  const result = await client.query<{ plan_id: string; plan_step_id: string | null }>(
-    `select plan.id as plan_id, step.id as plan_step_id
-     from agent_plans plan
-     left join agent_plan_steps step
-       on step.plan_id = plan.id and step.status = 'in_progress'
-     where plan.job_id = $1 and plan.status = 'active'`,
-    [jobId]
-  );
-  const row = result.rows[0];
-  if (!row) return undefined;
-  return {
-    planId: row.plan_id,
-    ...(row.plan_step_id ? { planStepId: row.plan_step_id } : {}),
-  };
+  return requireRow(result.rows[0], 'append task checkpoint');
 }
 
 export async function selectUserInputRequest(
   client: PoolClient,
-  requestId: string
+  requestId: string,
+  lock = false
 ): Promise<AgentUserInputRequestRow | undefined> {
   const result = await client.query<AgentUserInputRequestRow>(
-    `select * from agent_user_input_requests where id = $1`,
+    `select * from agent_user_input_requests where id = $1${lock ? ' for update' : ''}`,
     [requestId]
   );
   return result.rows[0];
@@ -169,14 +186,6 @@ export async function selectMessageById(
   return result.rows[0];
 }
 
-export function userInputNotFound(requestId: string): AgentStoreError {
-  return new AgentStoreError(
-    'USER_INPUT_REQUEST_NOT_FOUND',
-    `User input request ${JSON.stringify(requestId)} was not found.`,
-    { requestId }
-  );
-}
-
 export async function touchSession(
   client: PoolClient,
   sessionId: string,
@@ -190,11 +199,35 @@ export async function touchSession(
   );
 }
 
-export function jobNotFound(jobId: string): AgentStoreError {
+export function taskNotFound(taskId: string): AgentStoreError {
   return new AgentStoreError(
-    'JOB_NOT_FOUND',
-    `Agent Job ${JSON.stringify(jobId)} was not found.`,
-    { jobId }
+    'TASK_NOT_FOUND',
+    `Task ${JSON.stringify(taskId)} was not found.`,
+    { taskId }
+  );
+}
+
+export function taskRunNotFound(taskRunId: string): AgentStoreError {
+  return new AgentStoreError(
+    'TASK_RUN_NOT_FOUND',
+    `TaskRun ${JSON.stringify(taskRunId)} was not found.`,
+    { taskRunId }
+  );
+}
+
+export function toolCallNotFound(taskId: string, modelToolCallId: string): AgentStoreError {
+  return new AgentStoreError(
+    'TOOL_CALL_NOT_FOUND',
+    `ToolCall ${JSON.stringify(modelToolCallId)} was not found in Task ${JSON.stringify(taskId)}.`,
+    { taskId, modelToolCallId }
+  );
+}
+
+export function userInputNotFound(requestId: string): AgentStoreError {
+  return new AgentStoreError(
+    'USER_INPUT_REQUEST_NOT_FOUND',
+    `UserInputRequest ${JSON.stringify(requestId)} was not found.`,
+    { requestId }
   );
 }
 
@@ -206,11 +239,4 @@ export function isConstraint(error: unknown, constraint: string): boolean {
 export function requireRow<T>(row: T | undefined, operation: string): T {
   if (!row) throw new Error(`PostgreSQL did not return a row for ${operation}.`);
   return row;
-}
-
-export function mergeStringLists(
-  left: string[] | undefined,
-  right: string[] | undefined
-): string[] {
-  return [...new Set([...(left ?? []), ...(right ?? [])])];
 }

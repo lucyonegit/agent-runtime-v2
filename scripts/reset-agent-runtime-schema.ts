@@ -1,10 +1,7 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
 import { loadRuntimeConfig } from '../src/config/runtime-config.js';
-import {
-  migrateAgentRuntimeSchema,
-  resetAgentRuntimeSchema,
-} from '../src/storage/postgres/migrations.js';
+import { resetAgentRuntimeSchema } from '../src/storage/postgres/schema-management.js';
 
 const CONFIRMATION_FLAG = '--confirm-agent-runtime-reset';
 const environment = process.env.NODE_ENV ?? 'unknown';
@@ -28,14 +25,12 @@ const pool = new Pool({
   connectionTimeoutMillis: config.postgres.connectionTimeoutMs,
   ssl: config.postgres.ssl,
 });
+
 try {
   const client = await pool.connect();
   try {
     const droppedTables = await resetAgentRuntimeSchema(client);
-    const version = await migrateAgentRuntimeSchema(client);
-    console.info(
-      `Agent Runtime schema reset completed: dropped=${droppedTables.length} version=${version.version}`
-    );
+    console.info(`Agent Runtime schema rebuilt: dropped=${droppedTables.length}.`);
   } finally {
     client.release();
   }

@@ -5,7 +5,8 @@ import type { Runnable } from '@langchain/core/runnables';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import type {
   AgentContextInputManifest,
-  AgentJob,
+  AgentTask,
+  AgentTaskRun,
   AgentModelCallType,
 } from '../../domain/index.js';
 import type { AgentStore } from '../../storage/agent-store.js';
@@ -29,30 +30,28 @@ export interface AuditedModelFactoryOptions {
  * Runtime 共享的审计模型工厂。
  *
  * ReAct 与 Context 压缩只声明本次调用的类型、输入清单和工具集合；
- * Provider 绑定、Attempt 定位和 ModelCall 审计参数统一在这里组装。
+ * Provider 绑定、TaskRun 定位和 ModelCall 审计参数统一在这里组装。
  */
 export class AuditedModelFactory {
   constructor(private readonly options: AuditedModelFactoryOptions) {}
 
   create(input: {
-    job: AgentJob;
+    task: AgentTask;
+    taskRun: AgentTaskRun;
     manifest: AgentContextInputManifest | (() => AgentContextInputManifest);
     callType: AgentModelCallType;
     logicalCallKey: string;
     tools?: StructuredToolInterface[];
   }): AuditedChatModel {
-    if (!input.job.currentAttemptId) {
-      throw new Error(`Job ${JSON.stringify(input.job.id)} has no current attempt.`);
-    }
     return new AuditedChatModel({
       delegate: this.#bindTools(input.tools ?? []),
       store: this.options.store,
       workerId: this.options.workerId,
       target: {
-        sessionId: input.job.sessionId,
-        jobId: input.job.id,
-        attemptId: input.job.currentAttemptId,
-        attemptNo: input.job.attemptNo,
+        sessionId: input.task.sessionId,
+        taskId: input.task.id,
+        taskRunId: input.taskRun.id,
+        runNo: input.taskRun.runNo,
       },
       callType: input.callType,
       logicalCallKey: input.logicalCallKey,

@@ -10,7 +10,7 @@ export type LoopFailureCode =
   | 'invalid_plan_state'
   | 'model_error'
   | 'model_output_truncated'
-  | 'context_overflow';
+  | 'model_input_too_large';
 
 export type LoopResult =
   | {
@@ -19,8 +19,8 @@ export type LoopResult =
       content: string;
     }
   | {
-      type: 'waiting_user_input';
-      toolCallIds: string[];
+      type: 'waiting_for_user';
+      modelToolCallIds: string[];
     }
   | {
       type: 'failed';

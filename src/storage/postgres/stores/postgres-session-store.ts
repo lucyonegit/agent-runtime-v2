@@ -1,32 +1,32 @@
 import type { Pool } from 'pg';
 import type {
   AgentArtifact,
-  AgentJob,
   AgentMessage,
-  AgentPlan,
-  AgentPlanStep,
   AgentSession,
-  AgentToolInvocation,
+  AgentTask,
+  AgentTaskRun,
+  AgentToolCall,
+  AgentToolRun,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
 import type { CreateSessionInput, SessionStore } from '../../agent-store.js';
 import { createSessionCommand } from '../transaction-commands.js';
 import {
   mapAgentArtifactRow,
-  mapAgentJobRow,
   mapAgentMessageRow,
-  mapAgentPlanRow,
-  mapAgentPlanStepRow,
   mapAgentSessionRow,
-  mapAgentToolInvocationRow,
+  mapAgentTaskRow,
+  mapAgentTaskRunRow,
+  mapAgentToolCallRow,
+  mapAgentToolRunRow,
   mapAgentUserInputRequestRow,
   type AgentArtifactRow,
-  type AgentJobRow,
   type AgentMessageRow,
-  type AgentPlanRow,
-  type AgentPlanStepRow,
   type AgentSessionRow,
-  type AgentToolInvocationRow,
+  type AgentTaskRow,
+  type AgentTaskRunRow,
+  type AgentToolCallRow,
+  type AgentToolRunRow,
   type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import { withPostgresClient } from './postgres-store.helper.js';
@@ -40,7 +40,7 @@ export class PostgresSessionStore implements SessionStore {
 
   async list(): Promise<AgentSession[]> {
     const result = await this.pool.query<AgentSessionRow>(
-      `select * from agent_sessions order by updated_at_ms desc, id asc`
+      `select * from agent_sessions order by updated_at_ms desc, id`
     );
     return result.rows.map(mapAgentSessionRow);
   }
@@ -60,55 +60,60 @@ export class PostgresSessionStore implements SessionStore {
 
   async listMessages(sessionId: string, afterRowId = 0): Promise<AgentMessage[]> {
     const result = await this.pool.query<AgentMessageRow>(
-      `select *
-       from agent_messages
+      `select * from agent_messages
        where session_id = $1 and row_id > $2
-       order by row_id asc`,
+       order by row_id`,
       [sessionId, afterRowId]
     );
     return result.rows.map(mapAgentMessageRow);
   }
 
-  async listJobs(sessionId: string): Promise<AgentJob[]> {
-    const result = await this.pool.query<AgentJobRow>(
-      `select * from agent_jobs where session_id = $1 order by created_at_ms asc, id asc`,
+  async listTasks(sessionId: string): Promise<AgentTask[]> {
+    const result = await this.pool.query<AgentTaskRow>(
+      `select * from agent_tasks
+       where session_id = $1 order by created_at_ms, id`,
       [sessionId]
     );
-    return result.rows.map(mapAgentJobRow);
+    return result.rows.map(mapAgentTaskRow);
   }
 
-  async listPlans(sessionId: string): Promise<AgentPlan[]> {
-    const result = await this.pool.query<AgentPlanRow>(
-      `select * from agent_plans where session_id = $1 order by created_at_ms asc, id asc`,
+  async listTaskRuns(sessionId: string): Promise<AgentTaskRun[]> {
+    const result = await this.pool.query<AgentTaskRunRow>(
+      `select run.*
+       from agent_task_runs run
+       join agent_tasks task on task.id = run.task_id
+       where task.session_id = $1
+       order by task.created_at_ms, run.run_no`,
       [sessionId]
     );
-    return result.rows.map(mapAgentPlanRow);
+    return result.rows.map(mapAgentTaskRunRow);
   }
 
-  async listPlanSteps(sessionId: string): Promise<AgentPlanStep[]> {
-    const result = await this.pool.query<AgentPlanStepRow>(
-      `select step.* from agent_plan_steps step
-       join agent_plans plan on plan.id = step.plan_id
-       where plan.session_id = $1
-       order by plan.created_at_ms asc, step.position asc`,
+  async listToolCalls(sessionId: string): Promise<AgentToolCall[]> {
+    const result = await this.pool.query<AgentToolCallRow>(
+      `select * from agent_tool_calls
+       where session_id = $1 order by created_at_ms, id`,
       [sessionId]
     );
-    return result.rows.map(mapAgentPlanStepRow);
+    return result.rows.map(mapAgentToolCallRow);
   }
 
-  async listToolInvocations(sessionId: string): Promise<AgentToolInvocation[]> {
-    const result = await this.pool.query<AgentToolInvocationRow>(
-      `select * from agent_tool_invocations where session_id = $1
-       order by created_at_ms asc, id asc`,
+  async listToolRuns(sessionId: string): Promise<AgentToolRun[]> {
+    const result = await this.pool.query<AgentToolRunRow>(
+      `select run.*
+       from agent_tool_runs run
+       join agent_tasks task on task.id = run.task_id
+       where task.session_id = $1
+       order by run.started_at_ms, run.id`,
       [sessionId]
     );
-    return result.rows.map(mapAgentToolInvocationRow);
+    return result.rows.map(mapAgentToolRunRow);
   }
 
   async listArtifacts(sessionId: string): Promise<AgentArtifact[]> {
     const result = await this.pool.query<AgentArtifactRow>(
-      `select * from agent_artifacts where session_id = $1
-       order by created_at_ms asc, id asc`,
+      `select * from agent_artifacts
+       where session_id = $1 order by created_at_ms, id`,
       [sessionId]
     );
     return result.rows.map(mapAgentArtifactRow);
@@ -116,8 +121,8 @@ export class PostgresSessionStore implements SessionStore {
 
   async listUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]> {
     const result = await this.pool.query<AgentUserInputRequestRow>(
-      `select * from agent_user_input_requests where session_id = $1
-       order by created_at_ms asc, id asc`,
+      `select * from agent_user_input_requests
+       where session_id = $1 order by created_at_ms, id`,
       [sessionId]
     );
     return result.rows.map(mapAgentUserInputRequestRow);

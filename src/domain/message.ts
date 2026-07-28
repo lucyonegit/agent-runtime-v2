@@ -17,13 +17,16 @@ const AGENT_MESSAGE_TYPES = [
 export type AgentMessageType = typeof AGENT_MESSAGE_TYPES[number];
 export type AgentMessageRole = 'system' | 'user' | 'assistant' | 'tool';
 export type AgentMessageVisibility = 'ui' | 'internal';
+export type AgentMessageContextScope = 'conversation' | 'task' | 'none';
 
-export type AgentToolCall = ToolCall & { id: string };
+export type AgentMessageToolCall = ToolCall & { id: string };
 
 export interface AgentToolResult {
   status: 'completed' | 'failed';
   result?: unknown;
+  code?: string;
   error?: string;
+  details?: unknown;
   durationMs?: number;
 }
 
@@ -31,18 +34,17 @@ export interface AgentMessage {
   rowId: number;
   id: string;
   sessionId: string;
-  jobId: string;
-  planId?: string;
-  planStepId?: string;
-  attemptId?: string;
+  taskId: string;
+  taskRunId?: string;
   outputId?: string;
   role: AgentMessageRole;
   messageType: AgentMessageType;
+  contextScope: AgentMessageContextScope;
   visibility: AgentMessageVisibility;
   channel?: AgentMessageChannel;
   content: string;
-  toolCalls?: AgentToolCall[];
-  toolCallId?: string;
+  toolCalls?: AgentMessageToolCall[];
+  modelToolCallId?: string;
   toolName?: string;
   toolResult?: AgentToolResult;
   metadata?: Record<string, unknown>;

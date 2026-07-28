@@ -1,42 +1,27 @@
-import {
-  FatalToolExecutionError,
-  type AgentLoop,
-} from '../../loop/agent-loop.js';
-import {
-  LOOP_EVENT_TYPES,
-  type LoopEvent,
-} from '../../loop/loop-events.js';
+import { FatalToolExecutionError, type AgentLoop } from '../../loop/agent-loop.js';
+import { LOOP_EVENT_TYPES, type LoopEvent } from '../../loop/loop-events.js';
 import { mapStoreError, RuntimeError } from '../../errors/runtime-error.js';
 import { RuntimeEventWriter } from '../../events/runtime-event-writer.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
-import type {
-  ReActJobExecutionResult,
-  ReActLoopExecutionInput,
-} from '../types/react-execution.types.js';
+import type { ReActTaskExecutionResult, ReActLoopExecutionInput } from '../types/react-execution.types.js';
 
 interface DurableLoopExecutionOptions {
   loop: AgentLoop;
   writer: RuntimeEventWriter;
   store: AgentStore;
-  workerId: string;
+  ownerId: string;
   clock: { nowMs(): number };
   input: ReActLoopExecutionInput;
 }
 
 export async function executeDurableAgentLoop(
   options: DurableLoopExecutionOptions
-): Promise<ReActJobExecutionResult> {
+): Promise<ReActTaskExecutionResult> {
   const { input, loop, writer } = options;
-  if (!input.job.currentAttemptId || !input.job.leaseOwner) {
-    throw new RuntimeError(
-      'lease_lost',
-      `Job ${JSON.stringify(input.job.id)} has no active execution attempt.`
-    );
-  }
   const target = {
-    sessionId: input.job.sessionId,
-    jobId: input.job.id,
-    attemptId: input.job.currentAttemptId,
+    sessionId: input.task.sessionId,
+    taskId: input.task.id,
+    taskRunId: input.taskRun.id,
   };
   const finalCandidates = new Map<string, Extract<LoopEvent, {
     type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted;
@@ -44,10 +29,7 @@ export async function executeDurableAgentLoop(
   const inputEvents: Array<Extract<LoopEvent, {
     type: typeof LOOP_EVENT_TYPES.ToolInputRequired;
   }>> = [];
-  const iterator = loop.run({
-    ...input.loopInput,
-    target,
-  });
+  const iterator = loop.run({ ...input.loopInput, target });
 
   while (true) {
     let next;
@@ -58,14 +40,10 @@ export async function executeDurableAgentLoop(
       if (failed) return failed;
       throw error;
     }
-
     if (!next.done) {
       const recorded = await writer.record(next.value, target);
-      if (recorded.type === 'final_candidate') {
-        finalCandidates.set(recorded.event.outputId, recorded.event);
-      } else if (recorded.type === 'input_required') {
-        inputEvents.push(recorded.event);
-      }
+      if (recorded.type === 'final_candidate') finalCandidates.set(recorded.event.outputId, recorded.event);
+      else if (recorded.type === 'input_required') inputEvents.push(recorded.event);
       continue;
     }
 
@@ -73,7 +51,7 @@ export async function executeDurableAgentLoop(
     if (result.type === 'completed') {
       const finalEvent = finalCandidates.get(result.outputId);
       if (!finalEvent || finalEvent.content !== result.content) {
-        return failJob(options, input, {
+        return failTask(options, input, {
           code: 'model_protocol_error',
           message: 'AgentLoop completed without a matching final model event.',
         });
@@ -81,26 +59,20 @@ export async function executeDurableAgentLoop(
       const committed = await writer.completeFinal(finalEvent, target);
       return { type: 'completed', ...committed };
     }
-    if (result.type === 'waiting_user_input') {
-      const receivedIds = inputEvents.map(event => event.toolCallId).sort();
-      const resultIds = [...result.toolCallIds].sort();
+    if (result.type === 'waiting_for_user') {
+      const receivedIds = inputEvents.map(event => event.modelToolCallId).sort();
+      const resultIds = [...result.modelToolCallIds].sort();
       if (JSON.stringify(receivedIds) !== JSON.stringify(resultIds)) {
-        return failJob(options, input, {
+        return failTask(options, input, {
           code: 'model_protocol_error',
           message: 'AgentLoop input events do not match its waiting result.',
         });
       }
       const waiting = await writer.markWaitingForInput(inputEvents, target);
-      return {
-        type: 'waiting_user_input',
-        job: waiting.job,
-        requests: waiting.requests,
-      };
+      return { type: 'waiting_for_user', task: waiting.task, requests: waiting.requests };
     }
-    if (result.type === 'cancelled') {
-      return completeCancellation(input, result.reason, options);
-    }
-    return failJob(options, input, {
+    if (result.type === 'cancelled') return completeCancellation(input, result.reason, options);
+    return failTask(options, input, {
       code: result.code,
       message: result.message,
       details: result.details,
@@ -111,24 +83,17 @@ export async function executeDurableAgentLoop(
 async function handleLoopError(
   error: unknown,
   input: ReActLoopExecutionInput,
-  persistence: Pick<DurableLoopExecutionOptions, 'store' | 'workerId' | 'clock'>
-): Promise<Extract<ReActJobExecutionResult, { type: 'failed' }> | undefined> {
+  options: DurableLoopExecutionOptions
+): Promise<Extract<ReActTaskExecutionResult, { type: 'failed' }> | undefined> {
   if (error instanceof FatalToolExecutionError) {
-    if (error.code === 'lease_lost' || error.code === 'concurrency_conflict') {
-      throw new RuntimeError(error.code, error.message, { cause: error });
+    if (['ownership_lost', 'concurrency_conflict'].includes(error.code)) {
+      throw new RuntimeError(error.code as 'ownership_lost' | 'concurrency_conflict', error.message, { cause: error });
     }
-    return failJob(persistence, input, {
-      code: error.code,
-      message: error.message,
-    });
+    return failTask(options, input, { code: error.code, message: error.message });
   }
   if (error instanceof RuntimeError) {
-    if (error.code === 'lease_lost' || error.code === 'concurrency_conflict') throw error;
-    return failJob(persistence, input, {
-      code: error.code,
-      message: error.message,
-      details: error.details,
-    });
+    if (['ownership_lost', 'concurrency_conflict'].includes(error.code)) throw error;
+    return failTask(options, input, { code: error.code, message: error.message, details: error.details });
   }
   return undefined;
 }
@@ -136,75 +101,36 @@ async function handleLoopError(
 async function completeCancellation(
   input: ReActLoopExecutionInput,
   reason: 'runtime_shutdown' | undefined,
-  persistence: Pick<DurableLoopExecutionOptions, 'store' | 'workerId' | 'clock'>
-): Promise<Extract<ReActJobExecutionResult, { type: 'cancelled' }>> {
-  const { store, clock } = persistence;
+  options: DurableLoopExecutionOptions
+): Promise<Extract<ReActTaskExecutionResult, { type: 'cancelled' }>> {
   if (reason === 'runtime_shutdown') {
-    throw new RuntimeError(
-      'aborted',
-      `Job ${JSON.stringify(input.job.id)} execution was interrupted by Runtime shutdown.`
-    );
+    throw new RuntimeError('aborted', `Task ${JSON.stringify(input.task.id)} was interrupted by shutdown.`);
   }
-  let current;
-  try {
-    current = await store.jobs.get(input.job.id);
-  } catch (error) {
-    throw mapStoreError(error);
-  }
-  if (!current) {
-    throw new RuntimeError(
-      'storage_error',
-      `Job ${JSON.stringify(input.job.id)} disappeared during cancellation.`
-    );
-  }
-  if (current.status === 'cancelled') return { type: 'cancelled', job: current };
-  if (!['created', 'running', 'waiting_user_input', 'resuming'].includes(current.status)) {
-    throw new RuntimeError(
-      'lease_lost',
-      `Job ${JSON.stringify(input.job.id)} became ${current.status} during cancellation.`
-    );
-  }
-  let cancelled;
-  try {
-    cancelled = await store.jobs.cancel({
-      jobId: current.id,
-      expectedVersion: current.version,
-      nowMs: clock.nowMs(),
-    });
-  } catch (error) {
-    throw mapStoreError(error);
-  }
-  return { type: 'cancelled', job: cancelled };
+  const current = await options.store.tasks.get(input.task.id);
+  if (!current) throw new RuntimeError('storage_error', `Task ${JSON.stringify(input.task.id)} disappeared.`);
+  if (current.status === 'cancelled') return { type: 'cancelled', task: current };
+  const cancelled = await options.store.tasks.cancel({
+    taskId: current.id,
+    expectedTaskVersion: current.version,
+    nowMs: options.clock.nowMs(),
+  }).catch(error => { throw mapStoreError(error); });
+  await options.writer.publishTaskFinish(cancelled);
+  return { type: 'cancelled', task: cancelled.task };
 }
 
-async function failJob(
-  persistence: Pick<DurableLoopExecutionOptions, 'store' | 'workerId' | 'clock'>,
+async function failTask(
+  options: DurableLoopExecutionOptions,
   input: ReActLoopExecutionInput,
-  failure: {
-    code: string;
-    message: string;
-    details?: unknown;
-  }
-): Promise<Extract<ReActJobExecutionResult, { type: 'failed' }>> {
-  const { store, workerId, clock } = persistence;
-  if (!input.job.currentAttemptId) {
-    throw new RuntimeError(
-      'lease_lost',
-      `Job ${JSON.stringify(input.job.id)} has no active execution attempt.`
-    );
-  }
-  let failed;
-  try {
-    failed = await store.jobs.fail({
-      jobId: input.job.id,
-      expectedVersion: input.job.version,
-      workerId,
-      attemptId: input.job.currentAttemptId,
-      error: failure,
-      nowMs: clock.nowMs(),
-    });
-  } catch (error) {
-    throw mapStoreError(error);
-  }
-  return { type: 'failed', job: failed };
+  failure: { code: string; message: string; details?: unknown }
+): Promise<Extract<ReActTaskExecutionResult, { type: 'failed' }>> {
+  const failed = await options.store.tasks.fail({
+    taskId: input.task.id,
+    expectedTaskVersion: input.task.version,
+    taskRunId: input.taskRun.id,
+    ownerId: options.ownerId,
+    error: failure,
+    nowMs: options.clock.nowMs(),
+  }).catch(error => { throw mapStoreError(error); });
+  await options.writer.publishTaskFinish(failed);
+  return { type: 'failed', task: failed.task };
 }

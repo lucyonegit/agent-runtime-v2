@@ -40,7 +40,7 @@ function httpStatus(exception: unknown): number {
     if (exception.code === 'concurrency_conflict' || exception.code === 'idempotency_conflict') {
       return HttpStatus.CONFLICT;
     }
-    if (exception.code === 'invalid_job_state') return HttpStatus.UNPROCESSABLE_ENTITY;
+    if (exception.code === 'invalid_task_state') return HttpStatus.UNPROCESSABLE_ENTITY;
   }
   if (exception instanceof RuntimeToolExecutionError) {
     if (exception.code === 'managed_process_not_found') return HttpStatus.NOT_FOUND;

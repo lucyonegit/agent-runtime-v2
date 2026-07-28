@@ -24,9 +24,9 @@ export interface AuditedChatModelOptions {
   workerId: string;
   target: {
     sessionId: string;
-    jobId: string;
-    attemptId: string;
-    attemptNo: number;
+    taskId: string;
+    taskRunId: string;
+    runNo: number;
   };
   callType: AgentModelCallType;
   logicalCallKey: string;
@@ -130,11 +130,10 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
     await this.#options.store.models.startCall({
       id,
       sessionId: this.#options.target.sessionId,
-      jobId: this.#options.target.jobId,
-      attemptId: this.#options.target.attemptId,
-      workerId: this.#options.workerId,
+      taskId: this.#options.target.taskId,
+      taskRunId: this.#options.target.taskRunId,
+      ownerId: this.#options.workerId,
       logicalCallKey: `${this.#options.logicalCallKey}:${this.#logicalCallNo}`,
-      callAttemptNo: this.#options.target.attemptNo,
       callType: this.#options.callType,
       provider: this.#options.provider,
       model: this.#options.model,
@@ -180,7 +179,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       id,
       status: 'failed',
       usageSource: 'unavailable',
-      errorCode: isContextOverflow(error) ? 'context_overflow' : 'model_error',
+      errorCode: isModelInputTooLarge(error) ? 'model_input_too_large' : 'model_error',
       errorMessage: error instanceof Error ? error.message : 'Model call failed.',
       nowMs: this.#clock.nowMs(),
     });
@@ -238,7 +237,6 @@ function modelResult(response: AIMessageChunk) {
 }
 
 function manifestInputTokens(manifest: AgentContextInputManifest): number {
-  if (manifest.tokenPrediction) return manifest.tokenPrediction.predictedInputTokens;
   const breakdown = manifest.estimatedBreakdown;
   return breakdown.system + breakdown.tools + breakdown.summaries + breakdown.messages;
 }
@@ -269,9 +267,9 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function isContextOverflow(error: unknown): boolean {
+function isModelInputTooLarge(error: unknown): boolean {
   return Boolean(error && typeof error === 'object'
-    && (error as { code?: unknown }).code === 'context_overflow');
+    && (error as { code?: unknown }).code === 'model_input_too_large');
 }
 
 function isAbortError(error: unknown): boolean {

@@ -7,7 +7,7 @@ import {
   type UsageMetadata,
 } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import type { AgentArtifactDraft, AgentToolCall } from '../../domain/index.js';
+import type { AgentArtifactDraft, AgentMessageToolCall } from '../../domain/index.js';
 import {
   LOOP_EVENT_TYPES,
   type LoopEvent,
@@ -22,8 +22,8 @@ import {
 
 export interface AgentLoopTarget {
   sessionId: string;
-  jobId: string;
-  attemptId: string;
+  taskId: string;
+  taskRunId: string;
 }
 
 export interface AgentLoopLimits {
@@ -45,13 +45,12 @@ export interface AgentLoopToolRuntime {
 
 export interface AgentLoopPolicy {
   validateToolCalls?: ToolCallsValidator;
-  validateFinalAnswer?: FinalAnswerValidator;
 }
 
 export interface AgentLoopResumeState {
   iterationNo: number;
   executedToolCalls: number;
-  pendingToolCalls: AgentToolCall[];
+  pendingToolCalls: AgentMessageToolCall[];
 }
 
 export interface AgentLoopInput {
@@ -70,18 +69,8 @@ export type ToolCallsValidation =
 export type ToolCallsValidator = (candidate: {
   outputId: string;
   content: string;
-  toolCalls: AgentToolCall[];
+  toolCalls: AgentMessageToolCall[];
 }) => Promise<ToolCallsValidation>;
-
-export type FinalAnswerValidation =
-  | { type: 'accept' }
-  | { type: 'retry'; code?: string; feedback: string }
-  | { type: 'fail'; code: 'invalid_plan_state'; message: string; details?: unknown };
-
-export type FinalAnswerValidator = (candidate: {
-  outputId: string;
-  content: string;
-}) => Promise<FinalAnswerValidation>;
 
 export type ToolExecutionResult =
   | { type: 'completed'; content: string; result?: unknown; artifacts?: AgentArtifactDraft[] }
@@ -89,7 +78,7 @@ export type ToolExecutionResult =
   | { type: 'requires_user_input'; request: ToolUserInputRequest };
 
 export interface ToolExecutionRequest {
-  call: AgentToolCall;
+  call: AgentMessageToolCall;
   definition?: StructuredToolInterface;
   target: AgentLoopTarget;
   signal?: AbortSignal;
@@ -119,7 +108,7 @@ export interface AgentLoopOptions {
 interface ModelTurn {
   outputId: string;
   content: string;
-  toolCalls: AgentToolCall[];
+  toolCalls: AgentMessageToolCall[];
   assemblyErrors: LangChainToolCallError[];
   usage?: UsageMetadata;
   finishReason?: string;
@@ -128,7 +117,7 @@ interface ModelTurn {
 type ToolOutcome =
   | {
       type: 'event';
-      call: AgentToolCall;
+      call: AgentMessageToolCall;
       event: Extract<LoopEvent, {
         type:
           | typeof LOOP_EVENT_TYPES.ToolResultCompleted
@@ -138,7 +127,7 @@ type ToolOutcome =
     }
   | {
       type: 'input';
-      call: AgentToolCall;
+      call: AgentMessageToolCall;
       event: Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ToolInputRequired }>;
     };
 
@@ -184,8 +173,8 @@ export class AgentLoop {
       for (const outcome of inputRequests) yield outcome.event;
       if (inputRequests.length > 0) {
         return {
-          type: 'waiting_user_input',
-          toolCallIds: inputRequests.map(outcome => outcome.call.id),
+          type: 'waiting_for_user',
+          modelToolCallIds: inputRequests.map(outcome => outcome.call.id),
         };
       }
     }
@@ -244,35 +233,6 @@ export class AgentLoop {
             code: 'empty_model_output',
             message: 'Model returned neither text nor tool calls.',
           };
-        }
-        const validation = input.policy?.validateFinalAnswer
-          ? await input.policy.validateFinalAnswer({
-              outputId: turn.outputId,
-              content: turn.content,
-            })
-          : { type: 'accept' as const };
-        if (validation.type !== 'accept') {
-          yield {
-            type: LOOP_EVENT_TYPES.ModelOutputRejected,
-            outputId: turn.outputId,
-            reason: validation.type === 'retry' ? validation.feedback : validation.message,
-          };
-          if (validation.type === 'fail') {
-            return {
-              type: 'failed',
-              code: validation.code,
-              message: validation.message,
-              details: validation.details,
-            };
-          }
-          correctionMessages = [
-            new AIMessage(turn.content),
-            runtimeCorrectionMessage(
-              validation.code ?? 'final_answer.rejected',
-              validation.feedback
-            ),
-          ];
-          continue;
         }
         yield {
           type: LOOP_EVENT_TYPES.ModelOutputCompleted,
@@ -403,8 +363,8 @@ export class AgentLoop {
       for (const outcome of inputRequests) yield outcome.event;
       if (inputRequests.length > 0) {
         return {
-          type: 'waiting_user_input',
-          toolCallIds: inputRequests.map(outcome => outcome.call.id),
+          type: 'waiting_for_user',
+          modelToolCallIds: inputRequests.map(outcome => outcome.call.id),
         };
       }
     }
@@ -458,7 +418,7 @@ export class AgentLoop {
 
   async #executeTool(
     input: AgentLoopInput,
-    call: AgentToolCall,
+    call: AgentMessageToolCall,
     definition: StructuredToolInterface | undefined
   ): Promise<ToolOutcome> {
     const startedAtMs = this.#clock.nowMs();
@@ -488,7 +448,7 @@ export class AgentLoop {
         call,
         event: {
           type: LOOP_EVENT_TYPES.ToolInputRequired,
-          toolCallId: call.id,
+          modelToolCallId: call.id,
           toolName: call.name,
           request: result.request,
         },
@@ -500,7 +460,7 @@ export class AgentLoop {
         call,
         event: {
           type: LOOP_EVENT_TYPES.ToolResultFailed,
-          toolCallId: call.id,
+          modelToolCallId: call.id,
           toolName: call.name,
           executionStarted: true,
           code: result.code,
@@ -516,7 +476,7 @@ export class AgentLoop {
       call,
       event: {
         type: LOOP_EVENT_TYPES.ToolResultCompleted,
-        toolCallId: call.id,
+        modelToolCallId: call.id,
         toolName: call.name,
         content: result.content,
         result: result.result,
@@ -544,7 +504,7 @@ export class AgentLoop {
     if (signal?.aborted || isAbortError(error)) return cancelledResult(signal);
     return {
       type: 'failed',
-      code: isContextOverflowError(error) ? 'context_overflow' : 'model_error',
+      code: isModelInputTooLargeError(error) ? 'model_input_too_large' : 'model_error',
       message: error instanceof Error ? error.message : 'Model call failed.',
     };
   }
@@ -597,7 +557,7 @@ function assemblyFailureEvent(
 ): Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ToolResultFailed }> {
   return {
     type: LOOP_EVENT_TYPES.ToolResultFailed,
-    toolCallId: error.call.id,
+    modelToolCallId: error.call.id,
     toolName: error.call.name,
     executionStarted: false,
     code: error.code,
@@ -610,7 +570,7 @@ function assemblyFailureEvent(
 function appendAssistantToolCalls(
   messages: BaseMessage[],
   content: string,
-  toolCalls: AgentToolCall[]
+  toolCalls: AgentMessageToolCall[]
 ): void {
   messages.push(new AIMessage({
     content,
@@ -618,8 +578,8 @@ function appendAssistantToolCalls(
   }));
 }
 
-function appendToolMessage(messages: BaseMessage[], toolCallId: string, content: string): void {
-  messages.push(new ToolMessage({ tool_call_id: toolCallId, content }));
+function appendToolMessage(messages: BaseMessage[], modelToolCallId: string, content: string): void {
+  messages.push(new ToolMessage({ tool_call_id: modelToolCallId, content }));
 }
 
 function assertLimits(limits: AgentLoopLimits): void {
@@ -637,8 +597,8 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-function isContextOverflowError(error: unknown): boolean {
+function isModelInputTooLargeError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const candidate = error as { code?: unknown; name?: unknown };
-  return candidate.code === 'context_overflow' || candidate.name === 'ContextOverflowError';
+  return candidate.code === 'model_input_too_large';
 }

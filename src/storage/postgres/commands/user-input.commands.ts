@@ -1,394 +1,517 @@
 import type { PoolClient } from 'pg';
 import {
   AgentStoreError,
-  type CreateInputRequestsAndMarkWaitingInput,
-  type CreateInputRequestsAndMarkWaitingResult,
+  type ExpireUserInputRequestInput,
+  type ExpireUserInputRequestResult,
   type SaveUserInputAnswerInput,
-  type SaveUserInputAnswerResult
+  type SaveUserInputAnswerResult,
+  type WaitForUserInputInput,
+  type WaitForUserInputResult,
 } from '../../agent-store.js';
 import {
-  mapAgentJobRow,
   mapAgentMessageRow,
-  mapAgentToolInvocationRow,
+  mapAgentTaskRow,
+  mapAgentTaskRunRow,
+  mapAgentToolCallRow,
+  mapAgentToolRunRow,
   mapAgentUserInputRequestRow,
-  type AgentJobRow,
   type AgentMessageRow,
-  type AgentToolInvocationRow,
-  type AgentUserInputRequestRow
+  type AgentTaskRow,
+  type AgentTaskRunRow,
+  type AgentToolCallRow,
+  type AgentToolRunRow,
+  type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import { lockAgentSession, withPostgresTransaction } from '../sql.js';
 import {
-  appendLoopCheckpoint,
-  assertFutureLease,
-  assertJobLease,
-  jobNotFound,
+  appendTaskCheckpoint,
+  assertFutureOwnership,
+  assertTaskRunOwnership,
   requireRow,
-  resolveActivePlanScope,
-  selectJob,
-  selectLatestLoopCheckpoint,
+  selectActiveToolRun,
+  selectLatestTaskCheckpoint,
   selectMessageById,
+  selectTask,
+  selectTaskRun,
+  selectToolCall,
   selectUserInputRequest,
+  taskNotFound,
+  toolCallNotFound,
   touchSession,
-  userInputNotFound
+  userInputNotFound,
 } from './command-helpers.js';
 
-export async function createInputRequestsAndMarkWaitingCommand(
+export async function waitForUserInputCommand(
   client: PoolClient,
-  input: CreateInputRequestsAndMarkWaitingInput
-): Promise<CreateInputRequestsAndMarkWaitingResult> {
-  if (input.requests.length === 0) {
-    throw new TypeError('At least one UserInputRequest is required.');
-  }
+  input: WaitForUserInputInput
+): Promise<WaitForUserInputResult> {
+  if (input.requests.length === 0) throw new TypeError('At least one UserInputRequest is required.');
   if (new Set(input.requests.map(request => request.requestId)).size !== input.requests.length) {
     throw new TypeError('UserInputRequest IDs must be unique.');
   }
-  for (const request of input.requests) {
-    const toolRequestIsValid = request.source !== 'tool'
-      || (request.answerMode === 'as_tool_result' && Boolean(request.toolCallId));
-    if (!toolRequestIsValid || (request.source !== 'tool' && request.toolCallId)) {
-      throw new TypeError('Tool input requests require toolCallId and as_tool_result exclusively.');
-    }
+  if (new Set(input.requests.map(request => request.modelToolCallId)).size !== input.requests.length) {
+    throw new TypeError('Only one UserInputRequest may be created for each ToolCall.');
   }
-  const initialJob = await selectJob(client, input.jobId);
-  if (!initialJob || initialJob.session_id !== input.sessionId) throw jobNotFound(input.jobId);
-
   return withPostgresTransaction(client, async () => {
     await lockAgentSession(client, input.sessionId);
-    const jobResult = await client.query<AgentJobRow>(
-      `select * from agent_jobs where id = $1 for update`,
-      [input.jobId]
-    );
-    const job = requireRow(jobResult.rows[0], 'lock job for user input');
-    assertJobLease(job, input.workerId, input.attemptId, input.nowMs);
-    const planScope = await resolveActivePlanScope(client, input.jobId);
+    const task = await selectTask(client, input.taskId, true);
+    if (!task || task.session_id !== input.sessionId) throw taskNotFound(input.taskId);
+    const taskRun = await selectTaskRun(client, input.taskRunId, true);
+    assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
 
-    const toolCallIds = input.requests
-      .map(request => request.toolCallId)
-      .filter((id): id is string => id !== undefined)
-      .sort();
-    const invocationRows = toolCallIds.length === 0
-      ? []
-      : (await client.query<AgentToolInvocationRow>(
-          `select *
-           from agent_tool_invocations
-           where job_id = $1 and tool_call_id = any($2::text[])
-           order by id
-           for update`,
-          [input.jobId, toolCallIds]
-        )).rows;
-    const invocationsByToolCall = new Map(
-      invocationRows.map(invocation => [invocation.tool_call_id, invocation])
-    );
-    for (const toolCallId of toolCallIds) {
-      const invocation = invocationsByToolCall.get(toolCallId);
-      if (
-        !invocation
-        || invocation.status !== 'running'
-        || invocation.attempt_id !== input.attemptId
-      ) {
+    const callRows: AgentToolCallRow[] = [];
+    const runRows: AgentToolRunRow[] = [];
+    const requestRows: AgentUserInputRequestRow[] = [];
+    for (const request of input.requests) {
+      const call = await selectToolCall(client, input.taskId, request.modelToolCallId, true);
+      if (!call) throw toolCallNotFound(input.taskId, request.modelToolCallId);
+      if (call.status !== 'running') {
         throw new AgentStoreError(
-          'INVALID_TOOL_INVOCATION_STATE',
-          `Tool invocation ${JSON.stringify(toolCallId)} cannot wait for input.`,
-          { jobId: input.jobId, toolCallId, status: invocation?.status }
+          'INVALID_TOOL_CALL_STATE',
+          `ToolCall ${JSON.stringify(call.model_tool_call_id)} cannot wait for input from ${call.status}.`,
+          { taskId: task.id, modelToolCallId: call.model_tool_call_id, status: call.status }
         );
       }
-    }
-
-    const requestRows: AgentUserInputRequestRow[] = [];
-    const updatedInvocationRows: AgentToolInvocationRow[] = [];
-    for (const request of input.requests) {
-      const invocation = request.toolCallId
-        ? invocationsByToolCall.get(request.toolCallId)
-        : undefined;
+      const activeRun = await selectActiveToolRun(client, call.id, true);
+      if (!activeRun || activeRun.task_run_id !== taskRun.id) {
+        throw new AgentStoreError(
+          'INVALID_TOOL_CALL_STATE',
+          `ToolCall ${JSON.stringify(call.model_tool_call_id)} has no running ToolRun.`,
+          { taskId: task.id, taskRunId: taskRun.id, modelToolCallId: call.model_tool_call_id }
+        );
+      }
+      const runResult = await client.query<AgentToolRunRow>(
+        `update agent_tool_runs
+         set status = 'completed', ended_at_ms = $2,
+             duration_ms = greatest(0, $2 - started_at_ms)
+         where id = $1 returning *`,
+        [activeRun.id, input.nowMs]
+      );
+      runRows.push(requireRow(runResult.rows[0], 'complete input-request tool run'));
+      const callResult = await client.query<AgentToolCallRow>(
+        `update agent_tool_calls
+         set status = 'waiting_for_user', version = version + 1, updated_at_ms = $2
+         where id = $1 returning *`,
+        [call.id, input.nowMs]
+      );
+      callRows.push(requireRow(callResult.rows[0], 'mark tool call waiting'));
       const requestResult = await client.query<AgentUserInputRequestRow>(
         `insert into agent_user_input_requests(
-           id, session_id, job_id, plan_id, plan_step_id, tool_invocation_id,
-           source, answer_mode, status, title, prompt, input_schema,
+           id, session_id, task_id, tool_call_id, status,
+           title, prompt, input_schema, expires_at_ms,
            version, metadata, created_at_ms, updated_at_ms
          ) values (
-           $1, $2, $3, $4, $5, $6,
-           $7, $8, 'pending', $9, $10, $11,
-           0, $12, $13, $13
-         )
-         returning *`,
+           $1, $2, $3, $4, 'pending',
+           $5, $6, $7, $8,
+           0, $9, $10, $10
+         ) returning *`,
         [
           request.requestId,
           input.sessionId,
-          input.jobId,
-          invocation?.plan_id ?? planScope?.planId ?? null,
-          invocation?.plan_step_id ?? planScope?.planStepId ?? null,
-          invocation?.id ?? null,
-          request.source,
-          request.answerMode,
+          input.taskId,
+          call.id,
           request.title ?? null,
           request.prompt,
           JSON.stringify(request.inputSchema),
+          request.expiresAtMs ?? null,
           request.metadata ?? null,
           input.nowMs,
         ]
       );
       requestRows.push(requireRow(requestResult.rows[0], 'create user input request'));
-      if (invocation) {
-        const updatedInvocation = await client.query<AgentToolInvocationRow>(
-          `update agent_tool_invocations
-           set status = 'waiting_user_input', version = version + 1, updated_at_ms = $2
-           where id = $1
-           returning *`,
-          [invocation.id, input.nowMs]
-        );
-        updatedInvocationRows.push(
-          requireRow(updatedInvocation.rows[0], 'mark tool invocation waiting')
-        );
-      }
     }
 
-    const waitingJob = await client.query<AgentJobRow>(
-      `update agent_jobs
-       set status = 'waiting_user_input',
-           lease_owner = null,
-           lease_expires_at_ms = null,
-           version = version + 1,
-           updated_at_ms = $2
-       where id = $1
-       returning *`,
-      [input.jobId, input.nowMs]
+    const pausedRunResult = await client.query<AgentTaskRunRow>(
+      `update agent_task_runs
+       set status = 'paused', owner_id = null, ownership_expires_at_ms = null,
+           updated_at_ms = $2, ended_at_ms = $2
+       where id = $1 returning *`,
+      [taskRun.id, input.nowMs]
     );
-    const previousCheckpoint = await selectLatestLoopCheckpoint(client, input.jobId);
-    const callMessageId = invocationRows[0]?.call_message_id
-      ?? previousCheckpoint?.call_message_id;
-    if (!callMessageId) {
+    const waitingTaskResult = await client.query<AgentTaskRow>(
+      `update agent_tasks
+       set status = 'waiting_for_user', version = version + 1, updated_at_ms = $2
+       where id = $1 returning *`,
+      [task.id, input.nowMs]
+    );
+    const callMessageIds = [...new Set(callRows.map(call => call.call_message_id))];
+    if (callMessageIds.length !== 1) {
       throw new AgentStoreError(
-        'INVALID_TOOL_INVOCATION_STATE',
-        'Waiting for tool input requires a durable tool batch checkpoint.'
+        'TOOL_CALL_CONFLICT',
+        'One wait transition must come from a single model-produced tool batch.',
+        { taskId: task.id, callMessageIds }
       );
     }
-    await appendLoopCheckpoint(client, {
+    const previous = await selectLatestTaskCheckpoint(client, task.id);
+    await appendTaskCheckpoint(client, {
       sessionId: input.sessionId,
-      jobId: input.jobId,
-      attemptId: input.attemptId,
-      phase: 'waiting_user_input',
-      callMessageId,
-      iterationNo: previousCheckpoint?.iteration_no ?? 0,
-      executedToolCalls: previousCheckpoint?.executed_tool_calls ?? 0,
+      taskId: task.id,
+      taskRunId: taskRun.id,
+      phase: 'waiting_for_user',
+      callMessageId: callMessageIds[0],
+      iterationNo: previous?.iteration_no ?? 0,
+      executedToolCalls: previous?.executed_tool_calls ?? 0,
       metadata: { requestIds: requestRows.map(row => row.id) },
       nowMs: input.nowMs,
     });
     await touchSession(client, input.sessionId, input.nowMs);
     return {
-      job: mapAgentJobRow(requireRow(waitingJob.rows[0], 'mark job waiting')),
+      task: mapAgentTaskRow(requireRow(waitingTaskResult.rows[0], 'mark task waiting')),
+      taskRun: mapAgentTaskRunRow(requireRow(pausedRunResult.rows[0], 'pause task run')),
       requests: requestRows.map(mapAgentUserInputRequestRow),
-      invocations: updatedInvocationRows.map(mapAgentToolInvocationRow),
+      toolCalls: callRows.map(mapAgentToolCallRow),
+      toolRuns: runRows.map(mapAgentToolRunRow),
     };
   });
 }
 
-export async function saveUserInputAnswerAndResumeIfReadyCommand(
+export async function answerUserInputCommand(
   client: PoolClient,
   input: SaveUserInputAnswerInput
 ): Promise<SaveUserInputAnswerResult> {
-  assertFutureLease(input.nowMs, input.leaseUntilMs);
+  assertFutureOwnership(input.nowMs, input.ownershipExpiresAtMs);
   if (!input.clientAnswerId.trim()) throw new TypeError('clientAnswerId must not be empty.');
   if (input.answer === undefined) throw new TypeError('answer must be defined.');
-  const initialRequest = await selectUserInputRequest(client, input.requestId);
-  if (!initialRequest) throw userInputNotFound(input.requestId);
-
+  const initial = await selectUserInputRequest(client, input.requestId);
+  if (!initial) throw userInputNotFound(input.requestId);
   return withPostgresTransaction(client, async () => {
-    await lockAgentSession(client, initialRequest.session_id);
-    const jobResult = await client.query<AgentJobRow>(
-      `select * from agent_jobs where id = $1 for update`,
-      [initialRequest.job_id]
+    await lockAgentSession(client, initial.session_id);
+    const request = await selectUserInputRequest(client, input.requestId, true);
+    if (!request) throw userInputNotFound(input.requestId);
+    const task = await selectTask(client, request.task_id, true);
+    if (!task) throw taskNotFound(request.task_id);
+    const callResult = await client.query<AgentToolCallRow>(
+      `select * from agent_tool_calls where id = $1 for update`,
+      [request.tool_call_id]
     );
-    let job = requireRow(jobResult.rows[0], 'lock job for input answer');
-    const invocationResult = initialRequest.tool_invocation_id
-      ? await client.query<AgentToolInvocationRow>(
-          `select * from agent_tool_invocations where id = $1 for update`,
-          [initialRequest.tool_invocation_id]
-        )
-      : undefined;
-    let invocation = invocationResult?.rows[0];
-    const requestResult = await client.query<AgentUserInputRequestRow>(
-      `select * from agent_user_input_requests where id = $1 for update`,
-      [input.requestId]
-    );
-    let request = requireRow(requestResult.rows[0], 'lock user input request');
+    const call = requireRow(callResult.rows[0], 'lock waiting tool call');
 
     if (request.status === 'answered') {
       if (request.client_answer_id !== input.clientAnswerId || !request.answer_message_id) {
         throw new AgentStoreError(
           'USER_INPUT_ANSWER_CONFLICT',
-          `User input request ${JSON.stringify(input.requestId)} was already answered.`,
-          { requestId: input.requestId }
+          `UserInputRequest ${JSON.stringify(request.id)} was already answered differently.`,
+          { requestId: request.id }
         );
       }
       const answerMessage = await selectMessageById(client, request.answer_message_id);
       return {
         request: mapAgentUserInputRequestRow(request),
-        answerMessage: mapAgentMessageRow(requireRow(answerMessage, 'load idempotent answer message')),
-        job: mapAgentJobRow(job),
-        ...(invocation ? { invocation: mapAgentToolInvocationRow(invocation) } : {}),
+        answerMessage: mapAgentMessageRow(requireRow(answerMessage, 'load answer message')),
+        task: mapAgentTaskRow(task),
+        toolCall: mapAgentToolCallRow(call),
         shouldResume: false,
       };
     }
     if (request.status !== 'pending') {
       throw new AgentStoreError(
         'INVALID_USER_INPUT_STATE',
-        `User input request ${JSON.stringify(input.requestId)} is ${request.status}.`,
-        { requestId: input.requestId, status: request.status }
+        `UserInputRequest ${JSON.stringify(request.id)} is ${request.status}.`,
+        { requestId: request.id, status: request.status }
       );
     }
     if (request.version !== input.expectedVersion) {
       throw new AgentStoreError(
         'CONCURRENCY_CONFLICT',
-        `User input request ${JSON.stringify(input.requestId)} version is stale.`,
-        { requestId: input.requestId, expectedVersion: input.expectedVersion, actualVersion: request.version }
+        `UserInputRequest ${JSON.stringify(request.id)} version is stale.`,
+        { requestId: request.id, expectedVersion: input.expectedVersion, actualVersion: request.version }
       );
     }
-    const reusedClientAnswer = await client.query<{ id: string }>(
-      `select id
-       from agent_user_input_requests
-       where job_id = $1 and client_answer_id = $2 and id <> $3`,
-      [request.job_id, input.clientAnswerId, request.id]
+    if (task.status !== 'waiting_for_user' || call.status !== 'waiting_for_user') {
+      throw new AgentStoreError(
+        'INVALID_USER_INPUT_STATE',
+        'The Task or ToolCall is no longer waiting for this answer.',
+        { taskId: task.id, taskStatus: task.status, toolCallStatus: call.status }
+      );
+    }
+    const duplicateAnswer = await client.query<{ id: string }>(
+      `select id from agent_user_input_requests
+       where task_id = $1 and client_answer_id = $2 and id <> $3`,
+      [task.id, input.clientAnswerId, request.id]
     );
-    if (reusedClientAnswer.rows[0]) {
+    if (duplicateAnswer.rows[0]) {
       throw new AgentStoreError(
         'USER_INPUT_ANSWER_CONFLICT',
-        `clientAnswerId ${JSON.stringify(input.clientAnswerId)} was used for another request.`,
-        { requestId: input.requestId, conflictingRequestId: reusedClientAnswer.rows[0].id }
+        `clientAnswerId ${JSON.stringify(input.clientAnswerId)} already belongs to another request.`,
+        { requestId: request.id, conflictingRequestId: duplicateAnswer.rows[0].id }
       );
     }
-    if (job.status !== 'waiting_user_input') {
-      throw new AgentStoreError(
-        'INVALID_JOB_STATE',
-        `Job ${JSON.stringify(job.id)} is not waiting for user input.`,
-        { jobId: job.id, status: job.status }
-      );
-    }
-
-    const isToolAnswer = request.source === 'tool';
-    if (isToolAnswer && (!invocation || invocation.status !== 'waiting_user_input')) {
-      throw new AgentStoreError(
-        'INVALID_TOOL_INVOCATION_STATE',
-        'Tool input request is not paired with a waiting ToolInvocation.'
-      );
-    }
-    const answerJson = JSON.stringify(input.answer);
-    const answerContent = typeof input.answer === 'string' ? input.answer : answerJson;
+    const content = typeof input.answer === 'string' ? input.answer : JSON.stringify(input.answer);
     const messageResult = await client.query<AgentMessageRow>(
       `insert into agent_messages(
-         id, session_id, job_id, plan_id, plan_step_id, attempt_id,
-         role, message_type, visibility, channel, content,
-         tool_call_id, tool_name, tool_result, created_at_ms
+         id, session_id, task_id, role, message_type, context_scope,
+         visibility, channel, content, model_tool_call_id, tool_name,
+         tool_result, created_at_ms
        ) values (
-         $1, $2, $3, $4, $5, $6,
-         $7, $8, 'ui', 'normal', $9,
-         $10, $11, $12, $13
-       )
-       returning *`,
+         $1, $2, $3, 'tool', 'tool_result', $4,
+         'ui', 'normal', $5, $6, $7,
+         $8, $9
+       ) returning *`,
       [
         input.answerMessageId,
         request.session_id,
-        request.job_id,
-        request.plan_id,
-        request.plan_step_id,
-        job.current_attempt_id,
-        isToolAnswer ? 'tool' : 'user',
-        isToolAnswer ? 'tool_result' : 'user_message',
-        answerContent,
-        invocation?.tool_call_id ?? null,
-        invocation?.tool_name ?? null,
-        isToolAnswer
-          ? JSON.stringify({ status: 'completed', result: input.answer, durationMs: 0 })
-          : null,
+        task.id,
+        await toolCallContextScope(client, call.call_message_id),
+        content,
+        call.model_tool_call_id,
+        call.tool_name,
+        JSON.stringify({ status: 'completed', result: input.answer, durationMs: 0 }),
         input.nowMs,
       ]
     );
-    const answerMessage = requireRow(messageResult.rows[0], 'create input answer message');
-    if (invocation) {
-      const invocationUpdate = await client.query<AgentToolInvocationRow>(
-        `update agent_tool_invocations
-         set status = 'completed',
-             result_message_id = $2,
-             result_payload = $3,
-             version = version + 1,
-             completed_at_ms = $4,
-             updated_at_ms = $4
-         where id = $1
-         returning *`,
-        [invocation.id, input.answerMessageId, answerJson, input.nowMs]
-      );
-      invocation = requireRow(invocationUpdate.rows[0], 'complete input tool invocation');
-    }
+    const callUpdate = await client.query<AgentToolCallRow>(
+      `update agent_tool_calls
+       set status = 'completed', result_message_id = $2,
+           error_code = null, error_message = null, error_details = null,
+           version = version + 1, completed_at_ms = $3, updated_at_ms = $3
+       where id = $1 returning *`,
+      [call.id, input.answerMessageId, input.nowMs]
+    );
     const requestUpdate = await client.query<AgentUserInputRequestRow>(
       `update agent_user_input_requests
-       set status = 'answered',
-           answer = $2,
-           answer_message_id = $3,
-           client_answer_id = $4,
-           version = version + 1,
-           updated_at_ms = $5,
-           answered_at_ms = $5
-       where id = $1
-       returning *`,
-      [input.requestId, answerJson, input.answerMessageId, input.clientAnswerId, input.nowMs]
+       set status = 'answered', answer_message_id = $2, client_answer_id = $3,
+           version = version + 1, updated_at_ms = $4, answered_at_ms = $4
+       where id = $1 returning *`,
+      [request.id, input.answerMessageId, input.clientAnswerId, input.nowMs]
     );
-    request = requireRow(requestUpdate.rows[0], 'answer user input request');
-
-    const pending = await client.query<{ count: string }>(
-      `select count(*)::text as count
+    const remainingResult = await client.query<{ count: number }>(
+      `select count(*)::integer as count
        from agent_user_input_requests
-       where job_id = $1 and status = 'pending'`,
-      [job.id]
+       where task_id = $1 and status = 'pending'`,
+      [task.id]
     );
-    const shouldResume = pending.rows[0]?.count === '0';
+    const shouldResume = requireRow(remainingResult.rows[0], 'count pending input requests').count === 0;
+    let resumedTask = task;
+    let newTaskRun: AgentTaskRunRow | undefined;
     if (shouldResume) {
-      const resumedJob = await client.query<AgentJobRow>(
-        `update agent_jobs
-         set status = 'resuming',
-             lease_owner = $2,
-             lease_expires_at_ms = $3,
-             current_attempt_id = $4,
-             attempt_no = attempt_no + 1,
-             version = version + 1,
-             updated_at_ms = $5
-         where id = $1 and status = 'waiting_user_input'
-         returning *`,
-        [job.id, input.workerId, input.leaseUntilMs, input.attemptId, input.nowMs]
+      const runNoResult = await client.query<{ run_no: number }>(
+        `select coalesce(max(run_no), 0)::integer + 1 as run_no
+         from agent_task_runs where task_id = $1`,
+        [task.id]
       );
-      job = requireRow(resumedJob.rows[0], 'resume job');
-      const previousCheckpoint = await selectLatestLoopCheckpoint(client, job.id);
-      const callMessageId = invocation?.call_message_id ?? previousCheckpoint?.call_message_id;
-      const unfinished = callMessageId
-        ? await client.query<{ count: string }>(
-            `select count(*)::text as count
-             from agent_tool_invocations
-             where call_message_id = $1
-               and status not in ('completed', 'failed')`,
-            [callMessageId]
-          )
-        : undefined;
-      const phase = unfinished?.rows[0]?.count === '0' || !callMessageId
-        ? 'ready_for_model' as const
-        : 'tool_batch' as const;
-      await appendLoopCheckpoint(client, {
-        sessionId: request.session_id,
-        jobId: job.id,
-        attemptId: input.attemptId,
-        phase,
-        ...(phase === 'tool_batch' && callMessageId ? { callMessageId } : {}),
-        iterationNo: previousCheckpoint?.iteration_no ?? 0,
-        executedToolCalls: previousCheckpoint?.executed_tool_calls ?? 0,
-        metadata: { resumedFromUserInputRequestId: request.id },
+      const runNo = requireRow(runNoResult.rows[0], 'select resumed task run number').run_no;
+      const runResult = await client.query<AgentTaskRunRow>(
+        `insert into agent_task_runs(
+           id, task_id, run_no, trigger, status, owner_id, ownership_expires_at_ms,
+           started_at_ms, updated_at_ms
+         ) values ($1, $2, $3, 'user_input_answered', 'running', $4, $5, $6, $6)
+         returning *`,
+        [
+          input.taskRunId,
+          task.id,
+          runNo,
+          input.ownerId,
+          input.ownershipExpiresAtMs,
+          input.nowMs,
+        ]
+      );
+      newTaskRun = requireRow(runResult.rows[0], 'create resumed task run');
+      const taskResult = await client.query<AgentTaskRow>(
+        `update agent_tasks
+         set status = 'running', version = version + 1, updated_at_ms = $2
+         where id = $1 returning *`,
+        [task.id, input.nowMs]
+      );
+      resumedTask = requireRow(taskResult.rows[0], 'resume task after input');
+      await client.query(
+        `update agent_messages message
+         set task_run_id = $2
+         from agent_user_input_requests request
+         where request.task_id = $1
+           and request.answer_message_id = message.id
+           and message.task_run_id is null`,
+        [task.id, newTaskRun.id]
+      );
+      const previous = await selectLatestTaskCheckpoint(client, task.id);
+      await appendTaskCheckpoint(client, {
+        sessionId: task.session_id,
+        taskId: task.id,
+        taskRunId: newTaskRun.id,
+        phase: 'ready_for_model',
+        iterationNo: (previous?.iteration_no ?? -1) + 1,
+        executedToolCalls: previous?.executed_tool_calls ?? 0,
+        metadata: { resumedAfterUserInput: true },
         nowMs: input.nowMs,
       });
     }
-    await touchSession(client, request.session_id, input.nowMs);
+    await touchSession(client, task.session_id, input.nowMs);
+    const returnedMessage = shouldResume
+      ? await selectMessageById(client, input.answerMessageId)
+      : messageResult.rows[0];
     return {
-      request: mapAgentUserInputRequestRow(request),
-      answerMessage: mapAgentMessageRow(answerMessage),
-      job: mapAgentJobRow(job),
-      ...(invocation ? { invocation: mapAgentToolInvocationRow(invocation) } : {}),
+      request: mapAgentUserInputRequestRow(requireRow(requestUpdate.rows[0], 'answer request')),
+      answerMessage: mapAgentMessageRow(requireRow(returnedMessage, 'save answer message')),
+      task: mapAgentTaskRow(resumedTask),
+      ...(newTaskRun ? { taskRun: mapAgentTaskRunRow(newTaskRun) } : {}),
+      toolCall: mapAgentToolCallRow(requireRow(callUpdate.rows[0], 'complete input tool call')),
       shouldResume,
-      ...(shouldResume ? { attemptId: input.attemptId } : {}),
     };
   });
+}
+
+export async function expireUserInputCommand(
+  client: PoolClient,
+  input: ExpireUserInputRequestInput
+): Promise<ExpireUserInputRequestResult> {
+  assertFutureOwnership(input.nowMs, input.ownershipExpiresAtMs);
+  const initial = await selectUserInputRequest(client, input.requestId);
+  if (!initial) throw userInputNotFound(input.requestId);
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, initial.session_id);
+    const request = await selectUserInputRequest(client, input.requestId, true);
+    if (!request) throw userInputNotFound(input.requestId);
+    const task = await selectTask(client, request.task_id, true);
+    if (!task) throw taskNotFound(request.task_id);
+    const callResult = await client.query<AgentToolCallRow>(
+      `select * from agent_tool_calls where id = $1 for update`,
+      [request.tool_call_id]
+    );
+    const call = requireRow(callResult.rows[0], 'lock expired input tool call');
+    if (
+      request.status !== 'pending'
+      || request.version !== input.expectedVersion
+      || request.expires_at_ms === null
+      || Number(request.expires_at_ms) > input.nowMs
+      || task.status !== 'waiting_for_user'
+      || call.status !== 'waiting_for_user'
+    ) {
+      throw new AgentStoreError(
+        'INVALID_USER_INPUT_STATE',
+        `UserInputRequest ${JSON.stringify(request.id)} is no longer eligible for expiration.`,
+        {
+          requestId: request.id,
+          status: request.status,
+          taskStatus: task.status,
+          toolCallStatus: call.status,
+        }
+      );
+    }
+
+    const failureMessage = 'User input request expired before an answer was provided.';
+    const messageResult = await client.query<AgentMessageRow>(
+      `insert into agent_messages(
+         id, session_id, task_id, role, message_type, context_scope,
+         visibility, channel, content, model_tool_call_id, tool_name,
+         tool_result, created_at_ms
+       ) values (
+         $1, $2, $3, 'tool', 'tool_result', $4,
+         'ui', 'normal', $5, $6, $7, $8, $9
+       ) returning *`,
+      [
+        input.resultMessageId,
+        request.session_id,
+        task.id,
+        await toolCallContextScope(client, call.call_message_id),
+        failureMessage,
+        call.model_tool_call_id,
+        call.tool_name,
+        JSON.stringify({
+          status: 'failed',
+          code: 'user_input_expired',
+          message: failureMessage,
+          durationMs: 0,
+        }),
+        input.nowMs,
+      ]
+    );
+    const callUpdate = await client.query<AgentToolCallRow>(
+      `update agent_tool_calls
+       set status = 'failed', result_message_id = $2,
+           error_code = 'user_input_expired', error_message = $3, error_details = null,
+           version = version + 1, completed_at_ms = $4, updated_at_ms = $4
+       where id = $1 returning *`,
+      [call.id, input.resultMessageId, failureMessage, input.nowMs]
+    );
+    const requestUpdate = await client.query<AgentUserInputRequestRow>(
+      `update agent_user_input_requests
+       set status = 'expired', version = version + 1, updated_at_ms = $2
+       where id = $1 returning *`,
+      [request.id, input.nowMs]
+    );
+    const remainingResult = await client.query<{ count: number }>(
+      `select count(*)::integer as count
+       from agent_user_input_requests
+       where task_id = $1 and status = 'pending'`,
+      [task.id]
+    );
+    const shouldResume = requireRow(
+      remainingResult.rows[0],
+      'count pending input requests after expiration'
+    ).count === 0;
+    let resumedTask = task;
+    let newTaskRun: AgentTaskRunRow | undefined;
+    if (shouldResume) {
+      const runNoResult = await client.query<{ run_no: number }>(
+        `select coalesce(max(run_no), 0)::integer + 1 as run_no
+         from agent_task_runs where task_id = $1`,
+        [task.id]
+      );
+      const runNo = requireRow(runNoResult.rows[0], 'select expiration task run number').run_no;
+      const runResult = await client.query<AgentTaskRunRow>(
+        `insert into agent_task_runs(
+           id, task_id, run_no, trigger, status, owner_id, ownership_expires_at_ms,
+           started_at_ms, updated_at_ms
+         ) values ($1, $2, $3, 'input_expired', 'running', $4, $5, $6, $6)
+         returning *`,
+        [
+          input.taskRunId,
+          task.id,
+          runNo,
+          input.ownerId,
+          input.ownershipExpiresAtMs,
+          input.nowMs,
+        ]
+      );
+      newTaskRun = requireRow(runResult.rows[0], 'create expiration task run');
+      const taskResult = await client.query<AgentTaskRow>(
+        `update agent_tasks
+         set status = 'running', version = version + 1, updated_at_ms = $2
+         where id = $1 returning *`,
+        [task.id, input.nowMs]
+      );
+      resumedTask = requireRow(taskResult.rows[0], 'resume task after input expiration');
+      await client.query(
+        `update agent_messages message
+         set task_run_id = $2
+         from agent_tool_calls tool_call
+         where tool_call.task_id = $1
+           and tool_call.result_message_id = message.id
+           and message.task_run_id is null`,
+        [task.id, newTaskRun.id]
+      );
+      const previous = await selectLatestTaskCheckpoint(client, task.id);
+      await appendTaskCheckpoint(client, {
+        sessionId: task.session_id,
+        taskId: task.id,
+        taskRunId: newTaskRun.id,
+        phase: 'ready_for_model',
+        iterationNo: (previous?.iteration_no ?? -1) + 1,
+        executedToolCalls: previous?.executed_tool_calls ?? 0,
+        metadata: { resumedAfterInputExpiration: true },
+        nowMs: input.nowMs,
+      });
+    }
+    await touchSession(client, task.session_id, input.nowMs);
+    const returnedMessage = shouldResume
+      ? await selectMessageById(client, input.resultMessageId)
+      : messageResult.rows[0];
+    return {
+      request: mapAgentUserInputRequestRow(requireRow(requestUpdate.rows[0], 'expire request')),
+      resultMessage: mapAgentMessageRow(requireRow(returnedMessage, 'save expiration message')),
+      task: mapAgentTaskRow(resumedTask),
+      ...(newTaskRun ? { taskRun: mapAgentTaskRunRow(newTaskRun) } : {}),
+      toolCall: mapAgentToolCallRow(
+        requireRow(callUpdate.rows[0], 'fail expired input tool call')
+      ),
+      shouldResume,
+    };
+  });
+}
+
+async function toolCallContextScope(client: PoolClient, messageId: string): Promise<string> {
+  const result = await client.query<{ context_scope: string }>(
+    `select context_scope from agent_messages where id = $1`,
+    [messageId]
+  );
+  return requireRow(result.rows[0], 'load tool call context scope').context_scope;
 }

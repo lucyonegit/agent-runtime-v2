@@ -1,116 +1,126 @@
 import type { Pool } from 'pg';
 import type {
-  AgentLoopCheckpoint,
-  AgentToolInvocation,
+  AgentTaskCheckpoint,
+  AgentToolCall,
+  AgentUserInputRequest,
 } from '../../../domain/index.js';
 import type {
-  CommitModelToolCallsInput,
-  CommitModelToolCallsResult,
-  CommitToolResultInput,
-  CommitToolResultResult,
-  CompleteJobWithFinalMessageInput,
-  CompleteJobWithFinalMessageResult,
-  CreateInputRequestsAndMarkWaitingInput,
-  CreateInputRequestsAndMarkWaitingResult,
+  CompleteTaskWithFinalMessageInput,
+  CompleteTaskWithFinalMessageResult,
+  CompleteToolCallInput,
+  CompleteToolCallResult,
   ExecutionStore,
-  PrepareToolInvocationsForRecoveryInput,
-  PrepareToolInvocationsForRecoveryResult,
+  ExpireUserInputRequestInput,
+  ExpireUserInputRequestResult,
+  PrepareToolCallsForResumeInput,
+  PrepareToolCallsForResumeResult,
+  SaveToolCallsInput,
+  SaveToolCallsResult,
   SaveUserInputAnswerInput,
   SaveUserInputAnswerResult,
-  TryStartToolExecutionInput,
-  TryStartToolExecutionResult,
+  StartToolRunInput,
+  StartToolRunResult,
+  WaitForUserInputInput,
+  WaitForUserInputResult,
 } from '../../agent-store.js';
 import {
-  commitModelToolCallsCommand,
-  commitToolResultCommand,
-  completeJobWithFinalMessageCommand,
-  createInputRequestsAndMarkWaitingCommand,
-  prepareToolInvocationsForRecoveryCommand,
-  saveUserInputAnswerAndResumeIfReadyCommand,
-  tryStartToolExecutionCommand,
+  answerUserInputCommand,
+  expireUserInputCommand,
+  completeTaskCommand,
+  completeToolCallCommand,
+  prepareToolCallsForResumeCommand,
+  saveToolCallsCommand,
+  startToolRunCommand,
+  waitForUserInputCommand,
 } from '../transaction-commands.js';
 import {
-  mapAgentLoopCheckpointRow,
-  mapAgentToolInvocationRow,
-  type AgentLoopCheckpointRow,
-  type AgentToolInvocationRow,
+  mapAgentTaskCheckpointRow,
+  mapAgentToolCallRow,
+  mapAgentUserInputRequestRow,
+  type AgentTaskCheckpointRow,
+  type AgentToolCallRow,
+  type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import { withPostgresClient } from './postgres-store.helper.js';
 
 export class PostgresExecutionStore implements ExecutionStore {
   constructor(private readonly pool: Pool) {}
 
-  async getToolInvocation(
-    jobId: string,
-    toolCallId: string
-  ): Promise<AgentToolInvocation | undefined> {
-    const result = await this.pool.query<AgentToolInvocationRow>(
-      `select *
-       from agent_tool_invocations
-       where job_id = $1 and tool_call_id = $2`,
-      [jobId, toolCallId]
+  async getToolCall(taskId: string, modelToolCallId: string): Promise<AgentToolCall | undefined> {
+    const result = await this.pool.query<AgentToolCallRow>(
+      `select * from agent_tool_calls
+       where task_id = $1 and model_tool_call_id = $2`,
+      [taskId, modelToolCallId]
     );
-    return result.rows[0] ? mapAgentToolInvocationRow(result.rows[0]) : undefined;
+    return result.rows[0] ? mapAgentToolCallRow(result.rows[0]) : undefined;
   }
 
-  async getLatestLoopCheckpoint(jobId: string): Promise<AgentLoopCheckpoint | undefined> {
-    const result = await this.pool.query<AgentLoopCheckpointRow>(
-      `select * from agent_loop_checkpoints
-       where job_id = $1
-       order by sequence_no desc
-       limit 1`,
-      [jobId]
+  async getLatestCheckpoint(taskId: string): Promise<AgentTaskCheckpoint | undefined> {
+    const result = await this.pool.query<AgentTaskCheckpointRow>(
+      `select * from agent_task_checkpoints
+       where task_id = $1 order by sequence_no desc limit 1`,
+      [taskId]
     );
-    return result.rows[0] ? mapAgentLoopCheckpointRow(result.rows[0]) : undefined;
+    return result.rows[0] ? mapAgentTaskCheckpointRow(result.rows[0]) : undefined;
   }
 
-  async commitModelToolCalls(
-    input: CommitModelToolCallsInput
-  ): Promise<CommitModelToolCallsResult> {
-    return withPostgresClient(this.pool, client => commitModelToolCallsCommand(client, input));
+  async saveToolCalls(input: SaveToolCallsInput): Promise<SaveToolCallsResult> {
+    return withPostgresClient(this.pool, client => saveToolCallsCommand(client, input));
   }
 
-  async tryStartTool(
-    input: TryStartToolExecutionInput
-  ): Promise<TryStartToolExecutionResult> {
-    return withPostgresClient(this.pool, client => tryStartToolExecutionCommand(client, input));
+  async startToolRun(input: StartToolRunInput): Promise<StartToolRunResult> {
+    return withPostgresClient(this.pool, client => startToolRunCommand(client, input));
   }
 
-  async prepareToolsForRecovery(
-    input: PrepareToolInvocationsForRecoveryInput
-  ): Promise<PrepareToolInvocationsForRecoveryResult> {
+  async prepareToolCallsForResume(
+    input: PrepareToolCallsForResumeInput
+  ): Promise<PrepareToolCallsForResumeResult> {
     return withPostgresClient(
       this.pool,
-      client => prepareToolInvocationsForRecoveryCommand(client, input)
+      client => prepareToolCallsForResumeCommand(client, input)
     );
   }
 
-  async commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult> {
-    return withPostgresClient(this.pool, client => commitToolResultCommand(client, input));
+  async completeToolCall(input: CompleteToolCallInput): Promise<CompleteToolCallResult> {
+    return withPostgresClient(this.pool, client => completeToolCallCommand(client, input));
   }
 
-  async completeWithFinalMessage(
-    input: CompleteJobWithFinalMessageInput
-  ): Promise<CompleteJobWithFinalMessageResult> {
-    return withPostgresClient(
-      this.pool,
-      client => completeJobWithFinalMessageCommand(client, input)
-    );
+  async completeTask(
+    input: CompleteTaskWithFinalMessageInput
+  ): Promise<CompleteTaskWithFinalMessageResult> {
+    return withPostgresClient(this.pool, client => completeTaskCommand(client, input));
   }
 
-  async waitForUserInput(
-    input: CreateInputRequestsAndMarkWaitingInput
-  ): Promise<CreateInputRequestsAndMarkWaitingResult> {
-    return withPostgresClient(
-      this.pool,
-      client => createInputRequestsAndMarkWaitingCommand(client, input)
-    );
+  async waitForUserInput(input: WaitForUserInputInput): Promise<WaitForUserInputResult> {
+    return withPostgresClient(this.pool, client => waitForUserInputCommand(client, input));
   }
 
   async answerUserInput(input: SaveUserInputAnswerInput): Promise<SaveUserInputAnswerResult> {
-    return withPostgresClient(
-      this.pool,
-      client => saveUserInputAnswerAndResumeIfReadyCommand(client, input)
+    return withPostgresClient(this.pool, client => answerUserInputCommand(client, input));
+  }
+
+  async listExpiredUserInputRequests(
+    nowMs: number,
+    limit: number
+  ): Promise<AgentUserInputRequest[]> {
+    const result = await this.pool.query<AgentUserInputRequestRow>(
+      `select request.*
+       from agent_user_input_requests request
+       join agent_tasks task on task.id = request.task_id
+       where request.status = 'pending'
+         and request.expires_at_ms is not null
+         and request.expires_at_ms <= $1
+         and task.status = 'waiting_for_user'
+       order by request.expires_at_ms asc, request.id asc
+       limit $2`,
+      [nowMs, limit]
     );
+    return result.rows.map(mapAgentUserInputRequestRow);
+  }
+
+  async expireUserInput(
+    input: ExpireUserInputRequestInput
+  ): Promise<ExpireUserInputRequestResult> {
+    return withPostgresClient(this.pool, client => expireUserInputCommand(client, input));
   }
 }

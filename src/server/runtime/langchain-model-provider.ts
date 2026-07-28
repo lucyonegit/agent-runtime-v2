@@ -40,8 +40,8 @@ class MissingCredentialsChatModel extends SimpleChatModel<BaseChatModelCallOptio
   ): Promise<string> {
     throw new Error(
       this.providerName === 'dashscope'
-        ? 'DASHSCOPE_API_KEY is required to execute Agent Jobs.'
-        : 'DASHSCOPE_API_KEY or OPENAI_API_KEY is required to execute Agent Jobs.'
+        ? 'DASHSCOPE_API_KEY is required to execute Agent Tasks.'
+        : 'DASHSCOPE_API_KEY or OPENAI_API_KEY is required to execute Agent Tasks.'
     );
   }
 }

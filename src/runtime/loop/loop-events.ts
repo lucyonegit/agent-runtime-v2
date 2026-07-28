@@ -1,9 +1,7 @@
 import type {
-  AgentToolCall,
+  AgentMessageToolCall,
   AgentArtifactDraft,
-  AgentUserInputAnswerMode,
   AgentUserInputSchema,
-  AgentUserInputSource,
 } from '../../domain/index.js';
 import type { UsageMetadata } from '@langchain/core/messages';
 
@@ -19,12 +17,11 @@ export const LOOP_EVENT_TYPES = {
 export type LoopMessageChannel = 'normal' | 'progress' | 'final';
 
 export interface ToolUserInputRequest {
-  source: AgentUserInputSource;
-  answerMode: AgentUserInputAnswerMode;
   prompt: string;
   inputSchema: AgentUserInputSchema;
   title?: string;
   sensitiveAnswer?: boolean;
+  expiresInMs?: number;
 }
 
 export type LoopEvent =
@@ -38,7 +35,7 @@ export type LoopEvent =
       type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted;
       outputId: string;
       content: string;
-      toolCalls: AgentToolCall[];
+      toolCalls: AgentMessageToolCall[];
       usage?: UsageMetadata;
     }
   | {
@@ -48,7 +45,7 @@ export type LoopEvent =
     }
   | {
       type: typeof LOOP_EVENT_TYPES.ToolResultCompleted;
-      toolCallId: string;
+      modelToolCallId: string;
       toolName: string;
       content: string;
       result?: unknown;
@@ -57,7 +54,7 @@ export type LoopEvent =
     }
   | {
       type: typeof LOOP_EVENT_TYPES.ToolResultFailed;
-      toolCallId: string;
+      modelToolCallId: string;
       toolName: string;
       executionStarted: boolean;
       code: string;
@@ -67,7 +64,7 @@ export type LoopEvent =
     }
   | {
       type: typeof LOOP_EVENT_TYPES.ToolInputRequired;
-      toolCallId: string;
+      modelToolCallId: string;
       toolName: string;
       request: ToolUserInputRequest;
     };

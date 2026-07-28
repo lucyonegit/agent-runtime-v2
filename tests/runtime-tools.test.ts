@@ -26,10 +26,10 @@ describe('LangChain runtime tools', () => {
     sandboxRoot = await mkdtemp(join(tmpdir(), 'agent-runtime-v2-tools-'));
     context = {
       sessionId: 'session_1',
-      jobId: 'job_1',
-      attemptId: 'attempt_1',
-      toolInvocationId: 'invocation_1',
-      toolCallId: 'call_1',
+      taskId: 'task_1',
+      taskRunId: 'task_run_1',
+      toolCallId: 'tool_call_1',
+      modelToolCallId: 'model_call_1',
       idempotencyKey: 'idempotency_1',
       sandboxRoot,
     };
@@ -82,7 +82,7 @@ describe('LangChain runtime tools', () => {
       .rejects.toThrow('Only simple numeric expressions');
   });
 
-  it('restores text, choice, multi-choice and approval HITL schemas', async () => {
+  it('restores text, choice and multi-choice HITL schemas', async () => {
     const artifact = await invoke('request_user_input', {
       title: 'Choose',
       prompt: 'Select one',
@@ -95,8 +95,6 @@ describe('LangChain runtime tools', () => {
     expect(artifact).toEqual({
       type: 'requires_user_input',
       request: {
-        source: 'tool',
-        answerMode: 'as_tool_result',
         title: 'Choose',
         prompt: 'Select one',
         sensitiveAnswer: true,
@@ -209,8 +207,8 @@ describe('LangChain runtime tools', () => {
 
     context = {
       ...context,
-      toolInvocationId: 'invocation_2',
-      toolCallId: 'call_2',
+      toolCallId: 'tool_call_2',
+      modelToolCallId: 'model_call_2',
       idempotencyKey: 'idempotency_2',
     };
     const appended = await invoke('append_file_chunk', {
@@ -236,8 +234,8 @@ describe('LangChain runtime tools', () => {
     tools = createRuntimeTools();
     context = {
       ...context,
-      toolInvocationId: 'invocation_3',
-      toolCallId: 'call_3',
+      toolCallId: 'tool_call_3',
+      modelToolCallId: 'model_call_3',
       idempotencyKey: 'idempotency_3',
     };
     const completed = await invoke('append_file_chunk', {
@@ -258,7 +256,7 @@ describe('LangChain runtime tools', () => {
       size: expect.any(Number),
       checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
       artifacts: [expect.objectContaining({
-        storagePath: '.revisions/invocation_3/code/large.ts',
+        storagePath: '.revisions/tool_call_3/code/large.ts',
         metadata: expect.objectContaining({
           chunked: true,
           chunkCount: 3,
@@ -292,8 +290,8 @@ describe('LangChain runtime tools', () => {
     }) as { writeId: string };
     context = {
       ...context,
-      toolInvocationId: 'invocation_2',
-      toolCallId: 'call_2',
+      toolCallId: 'tool_call_2',
+      modelToolCallId: 'model_call_2',
       idempotencyKey: 'idempotency_2',
     };
     await expect(invoke('append_file_chunk', {
@@ -346,9 +344,14 @@ describe('LangChain runtime tools', () => {
       .resolves.toMatchObject({ symbols: [{ name: 'hello', kind: 'function', path: 'code/src/example.ts' }] });
   });
 
-  it('shares the same categorized workspace across jobs in one session', async () => {
+  it('shares the same categorized workspace across tasks in one session', async () => {
     await invoke('write_file', { path: 'code/app.ts', content: 'export const app = true;' });
-    context = { ...context, jobId: 'job_2', toolCallId: 'call_2' };
+    context = {
+      ...context,
+      taskId: 'task_2',
+      toolCallId: 'tool_call_2',
+      modelToolCallId: 'model_call_2',
+    };
     await expect(invoke('read_file', { path: 'code/app.ts' }))
       .resolves.toMatchObject({ content: expect.stringContaining('app') });
     await expect(readFile(
@@ -396,7 +399,7 @@ describe('LangChain runtime tools', () => {
     });
   });
 
-  it('terminates an in-flight shell process when the Job is cancelled', async () => {
+  it('terminates an in-flight shell process when the Task is cancelled', async () => {
     const controller = new AbortController();
     context = { ...context, signal: controller.signal };
     const running = invoke('run_shell', { command: 'sleep 20', timeoutMs: 120_000 });

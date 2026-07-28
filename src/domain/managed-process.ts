@@ -13,8 +13,8 @@ export type AgentManagedProcessStatus = typeof AGENT_MANAGED_PROCESS_STATUSES[nu
 export interface AgentManagedProcess {
   id: string;
   sessionId: string;
-  jobId: string;
-  toolInvocationId: string;
+  taskId: string;
+  toolCallId: string;
   name: string;
   command: string;
   cwd: string;
@@ -35,4 +35,3 @@ export interface AgentManagedProcess {
   updatedAtMs: number;
   completedAtMs?: number;
 }
-

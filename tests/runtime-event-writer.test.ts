@@ -11,13 +11,13 @@ describe('RuntimeEventWriter rejected model output', () => {
       store: {
         models: { setCallOutputDisposition: setModelCallOutputDisposition },
       } as unknown as AgentStore,
-      workerId: 'worker_1',
+      ownerId: 'worker_1',
       tools: [],
       publisher: { publish },
       ids: {
         eventId: () => 'event_1',
         messageId: () => 'message_1',
-        toolInvocationId: () => 'invocation_1',
+        toolCallId: () => 'tool_call_1',
         userInputRequestId: () => 'request_1',
       },
     });
@@ -27,12 +27,12 @@ describe('RuntimeEventWriter rejected model output', () => {
       outputId: 'output_1',
       reason: 'The durable plan is still active.',
     }, {
-      sessionId: 'session_1', jobId: 'job_1', attemptId: 'attempt_1',
+      sessionId: 'session_1', taskId: 'task_1', taskRunId: 'task_run_1',
     });
 
     expect(result).toEqual({ type: 'discarded_output' });
     expect(setModelCallOutputDisposition).toHaveBeenCalledWith({
-      jobId: 'job_1',
+      taskId: 'task_1',
       outputId: 'output_1',
       disposition: 'rejected',
       reason: 'The durable plan is still active.',
@@ -41,7 +41,7 @@ describe('RuntimeEventWriter rejected model output', () => {
       type: 'message.discarded',
       eventId: 'event_1',
       sessionId: 'session_1',
-      jobId: 'job_1',
+      taskId: 'task_1',
       messageId: 'message_1',
       outputId: 'output_1',
       reason: 'The durable plan is still active.',

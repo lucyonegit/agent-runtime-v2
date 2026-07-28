@@ -1,10 +1,4 @@
-import type {
-  AgentContextInputManifest,
-  AgentPromptManifest,
-} from '../../domain/index.js';
-import type {
-  CompiledContextAnnotation,
-} from '../../runtime/context/types/context.types.js';
+import type { AgentContextInputManifest } from '../../domain/index.js';
 
 export interface ContextPreviewMessage {
   index: number;
@@ -12,57 +6,32 @@ export interface ContextPreviewMessage {
   content: unknown;
   name?: string;
   toolCallId?: string;
-  toolCalls?: Array<{
-    id: string;
-    name: string;
-    args: Record<string, unknown>;
-  }>;
-  source?: CompiledContextAnnotation;
+  toolCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
 }
 
-export interface ContextPreviewV1 {
-  schemaVersion: 1;
+/** Debug-only projection of the actual LangChain input list. */
+export interface ContextPreviewV2 {
+  schemaVersion: 2;
   debugOnly: true;
   generatedAtMs: number;
   sessionId: string;
-  basedOnLatestJobId?: string;
+  basedOnLatestTaskId?: string;
   query: {
-    kind: 'next_turn' | 'job' | 'model_call';
+    kind: 'next_turn' | 'task' | 'model_call';
     sessionId?: string;
-    jobId?: string;
+    taskId?: string;
     modelCallId?: string;
   };
-  verification: {
-    status: 'reconstructed' | 'exact';
-    checksumMatched?: boolean;
-  };
-  contextRulesVersion: string;
+  verification: { status: 'reconstructed' | 'exact'; checksumMatched?: boolean };
   systemPromptVersion: string;
-  prompt?: AgentPromptManifest;
   estimatedInputTokens: number;
-  predictedInputTokens: number;
-  predictedCandidateTokens: number;
-  pressureLevel: 'normal' | 'watch' | 'compact' | 'mandatory' | 'critical';
-  shouldCompress: boolean;
-  mustCompress: boolean;
   limits: {
-    maxContextTokens: number;
-    reservedOutputTokens: number;
     contextWindowTokens: number;
     outputTokenLimit: number;
     inputTokenLimit: number;
   };
+  compactedThroughRowId?: number;
+  projectedToolResultMessageIds: string[];
   manifest: AgentContextInputManifest;
-  selection: {
-    selectedBundleIds: string[];
-    summarizedBundleIds: string[];
-    summarizedMessageGroupIds: string[];
-    truncatedToolResultMessageIds: string[];
-  };
-  blockedDiagnostics: Array<{
-    messageId: string;
-    reason: string;
-    toolCallId?: string;
-  }>;
   messages: ContextPreviewMessage[];
 }

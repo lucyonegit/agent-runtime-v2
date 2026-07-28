@@ -3,31 +3,27 @@ import type { ContextConfig } from '../../config/runtime-config.js';
 import {
   ContextInspectionService,
   type ContextQuery,
-  type ContextInspectionStore,
 } from '../../orchestration/context-inspection.service.js';
 import type { RuntimeTool } from '../../runtime/execution/tool-executor.js';
 import {
   buildStableEnvironmentContext,
-  JOB_AGENT_PROMPT_ID,
-  JOB_AGENT_PROMPT_VERSION,
-  JOB_AGENT_SYSTEM_PROMPT,
-  JOB_AGENT_SYSTEM_PROMPT_VERSION,
-} from '../../runtime/prompting/job-agent-prompt.js';
-import type { ContextPreviewMessage, ContextPreviewV1 } from './context-preview-contract.js';
-
-export type ContextPreviewStore = ContextInspectionStore;
+  TASK_AGENT_PROMPT_ID,
+  TASK_AGENT_PROMPT_VERSION,
+  TASK_AGENT_SYSTEM_PROMPT,
+  TASK_AGENT_SYSTEM_PROMPT_VERSION,
+} from '../../runtime/prompting/task-agent-prompt.js';
+import type { AgentStore } from '../../storage/agent-store.js';
+import type { ContextPreviewMessage, ContextPreviewV2 } from './context-preview-contract.js';
 
 export interface ContextPreviewServiceOptions {
-  store: ContextPreviewStore;
+  store: AgentStore;
   tools: RuntimeTool[];
-  provider: string;
-  modelName: string;
-  maxContextTokens: number;
-  reservedOutputTokens: number;
-  inputTokenLimit?: number;
+  contextWindowTokens: number;
+  outputTokenLimit: number;
+  inputTokenLimit: number;
   sandboxRoot?: string;
   shellPath?: string;
-  contextConfig?: ContextConfig;
+  contextConfig: ContextConfig;
   clock?: { nowMs(): number };
 }
 
@@ -38,17 +34,13 @@ export class ContextPreviewService {
     this.#inspection = new ContextInspectionService({
       store: options.store,
       tools: options.tools.map(item => item.tool),
-      model: {
-        provider: options.provider,
-        name: options.modelName,
-        maxContextTokens: options.maxContextTokens,
-        reservedOutputTokens: options.reservedOutputTokens,
-        inputTokenLimit: options.inputTokenLimit,
-      },
-      systemPrompt: JOB_AGENT_SYSTEM_PROMPT,
-      systemPromptVersion: JOB_AGENT_SYSTEM_PROMPT_VERSION,
-      promptId: JOB_AGENT_PROMPT_ID,
-      promptVersion: JOB_AGENT_PROMPT_VERSION,
+      systemPrompt: TASK_AGENT_SYSTEM_PROMPT,
+      systemPromptVersion: TASK_AGENT_SYSTEM_PROMPT_VERSION,
+      promptId: TASK_AGENT_PROMPT_ID,
+      promptVersion: TASK_AGENT_PROMPT_VERSION,
+      contextWindowTokens: options.contextWindowTokens,
+      outputTokenLimit: options.outputTokenLimit,
+      inputTokenLimit: options.inputTokenLimit,
       getStableContext: sessionId => buildStableEnvironmentContext({
         sandboxRoot: options.sandboxRoot ?? '.agent-sandbox',
         sessionId,
@@ -59,70 +51,48 @@ export class ContextPreviewService {
     });
   }
 
-  preview(sessionId: string): Promise<ContextPreviewV1> {
+  preview(sessionId: string): Promise<ContextPreviewV2> {
     return this.#preview({ kind: 'next_turn', sessionId });
   }
 
-  previewJob(jobId: string): Promise<ContextPreviewV1> {
-    return this.#preview({ kind: 'job', jobId });
+  previewTask(taskId: string): Promise<ContextPreviewV2> {
+    return this.#preview({ kind: 'task', taskId });
   }
 
-  previewModelCall(modelCallId: string): Promise<ContextPreviewV1> {
+  previewModelCall(modelCallId: string): Promise<ContextPreviewV2> {
     return this.#preview({ kind: 'model_call', modelCallId });
   }
 
-  async #preview(query: ContextQuery): Promise<ContextPreviewV1> {
+  async #preview(query: ContextQuery): Promise<ContextPreviewV2> {
     const snapshot = await this.#inspection.inspect(query);
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       debugOnly: true,
       generatedAtMs: snapshot.generatedAtMs,
       sessionId: snapshot.sessionId,
       query,
       verification: snapshot.verification,
-      ...(snapshot.basedOnLatestJobId
-        ? { basedOnLatestJobId: snapshot.basedOnLatestJobId }
+      ...(snapshot.basedOnLatestTaskId
+        ? { basedOnLatestTaskId: snapshot.basedOnLatestTaskId }
         : {}),
-      contextRulesVersion: snapshot.built.contextRulesVersion,
       systemPromptVersion: snapshot.systemPromptVersion,
-      ...(snapshot.built.inputManifest.prompt
-        ? { prompt: snapshot.built.inputManifest.prompt }
-        : {}),
-      estimatedInputTokens: snapshot.built.estimatedInputTokens,
-      predictedInputTokens: snapshot.built.predictedInputTokens,
-      predictedCandidateTokens: snapshot.built.predictedCandidateTokens,
-      pressureLevel: snapshot.built.pressureLevel,
-      shouldCompress: snapshot.built.shouldCompress,
-      mustCompress: snapshot.built.mustCompress,
+      estimatedInputTokens: snapshot.input.estimatedTokens,
       limits: {
-        maxContextTokens: snapshot.maxContextTokens,
-        reservedOutputTokens: snapshot.reservedOutputTokens,
-        contextWindowTokens: snapshot.maxContextTokens,
-        outputTokenLimit: snapshot.reservedOutputTokens,
-        inputTokenLimit: snapshot.built.hardInputLimit,
+        contextWindowTokens: snapshot.contextWindowTokens,
+        outputTokenLimit: snapshot.outputTokenLimit,
+        inputTokenLimit: snapshot.input.inputTokenLimit,
       },
-      manifest: snapshot.built.inputManifest,
-      selection: {
-        selectedBundleIds: snapshot.built.inputManifest.selectedBundleIds ?? [],
-        summarizedBundleIds: snapshot.built.inputManifest.summarizedBundleIds ?? [],
-        summarizedMessageGroupIds:
-          snapshot.built.inputManifest.summarizedMessageGroupIds ?? [],
-        truncatedToolResultMessageIds:
-          snapshot.built.inputManifest.truncatedToolResultMessageIds ?? [],
-      },
-      blockedDiagnostics: snapshot.built.blockedDiagnostics,
-      messages: snapshot.built.messages.map((message, index) => (
-        toPreviewMessage(message, index, snapshot.built.annotations[index])
-      )),
+      ...(snapshot.input.compactedThroughRowId === undefined
+        ? {}
+        : { compactedThroughRowId: snapshot.input.compactedThroughRowId }),
+      projectedToolResultMessageIds: snapshot.input.projectedToolResultMessageIds,
+      manifest: snapshot.input.inputManifest,
+      messages: snapshot.input.messages.map(toPreviewMessage),
     };
   }
 }
 
-function toPreviewMessage(
-  message: BaseMessage,
-  index: number,
-  source?: ContextPreviewMessage['source']
-): ContextPreviewMessage {
+function toPreviewMessage(message: BaseMessage, index: number): ContextPreviewMessage {
   const type = message.getType();
   if (isAIMessage(message)) {
     const toolCalls = message.tool_calls ?? [];
@@ -130,14 +100,9 @@ function toPreviewMessage(
       index,
       type: 'ai',
       content: message.content,
-      ...(source ? { source } : {}),
       ...(message.name ? { name: message.name } : {}),
       ...(toolCalls.length > 0 ? {
-        toolCalls: toolCalls.map(call => ({
-          id: call.id!,
-          name: call.name,
-          args: call.args,
-        })),
+        toolCalls: toolCalls.map(call => ({ id: call.id!, name: call.name, args: call.args })),
       } : {}),
     };
   }
@@ -146,7 +111,6 @@ function toPreviewMessage(
       index,
       type: 'tool',
       content: message.content,
-      ...(source ? { source } : {}),
       ...(message.name ? { name: message.name } : {}),
       toolCallId: message.tool_call_id,
     };
@@ -158,7 +122,6 @@ function toPreviewMessage(
     index,
     type: type === 'system' ? 'system' : 'human',
     content: message.content,
-    ...(source ? { source } : {}),
     ...(message.name ? { name: message.name } : {}),
   };
 }

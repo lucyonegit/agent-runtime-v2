@@ -8,8 +8,8 @@ describe('runtime configuration', () => {
       DASHSCOPE_API_KEY: 'test-secret',
       AGENT_RUNTIME_WORKER_ID: 'worker_test',
       AGENT_SERVER_PORT: '3100',
-      JOB_LEASE_MS: '45000',
-      JOB_HEARTBEAT_MS: '15000',
+      TASK_OWNERSHIP_TIMEOUT_MS: '45000',
+      TASK_OWNERSHIP_REFRESH_MS: '15000',
       AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS: 'true',
       PATH: '/test/bin',
     } });
@@ -51,8 +51,8 @@ describe('runtime configuration', () => {
   it('rejects inconsistent execution ownership timing', () => {
     expect(() => loadRuntimeConfig({ env: {
       DATABASE_URL: 'postgres://runtime',
-      JOB_LEASE_MS: '10000',
-      JOB_HEARTBEAT_MS: '10000',
+      TASK_OWNERSHIP_TIMEOUT_MS: '10000',
+      TASK_OWNERSHIP_REFRESH_MS: '10000',
     } })).toThrow('ownershipRefreshMs must be shorter');
   });
 });

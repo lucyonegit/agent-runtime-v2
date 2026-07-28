@@ -57,7 +57,7 @@ export function createShellTools(
       'Do not use it for persistent servers such as npm start, npm run dev, vite, or next dev; use start_process instead.',
       'Relative cwd values start from the current Session workspace; absolute paths and parent-directory paths are allowed.',
       'Runtime-only HOST, PORT, database, and model-provider variables are removed; pass child variables explicitly with env.',
-      'Commands are subject to the requested timeout, output limits, and Job cancellation.',
+      'Commands are subject to the requested timeout, output limits, and Task cancellation.',
       'Never print or return secrets from the inherited environment.',
     ].join(' '),
     schema: {

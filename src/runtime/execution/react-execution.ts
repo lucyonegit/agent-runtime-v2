@@ -1,24 +1,20 @@
 import { randomUUID } from 'node:crypto';
+import type { AgentTask, AgentTaskRun } from '../../domain/index.js';
+import type { ModelInput } from '../context/types/model-input.types.js';
+import type { AgentStore } from '../../storage/agent-store.js';
+import type { ModelInputBuilder } from '../context/model-input-builder.js';
+import { RuntimeEventWriter, type RuntimeEventPublisher } from '../events/runtime-event-writer.js';
 import { AgentLoop } from '../loop/agent-loop.js';
-import type { AgentJob } from '../../domain/index.js';
 import { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';
-import type { ReActJobExecutionResult } from './types/react-execution.types.js';
-import type { BuiltContext } from '../context/types/context.types.js';
-import type { ReActContextService } from '../context/react-context.service.js';
-import {
-  RuntimeEventWriter,
-  type RuntimeEventPublisher,
-} from '../events/runtime-event-writer.js';
-import { ToolExecutor, type RuntimeTool } from './tool-executor.js';
-import type { AgentStore } from '../../storage/agent-store.js';
-import { FinalAnswerPolicy } from './policies/final-answer-policy.js';
 import { ToolCallPolicy } from './policies/tool-call-policy.js';
 import { PendingToolCallLoader } from './recovery/pending-tool-call-loader.js';
+import { ToolExecutor, type RuntimeTool } from './tool-executor.js';
+import type { ReActTaskExecutionResult } from './types/react-execution.types.js';
 
 export interface ReActExecutionOptions {
   store: AgentStore;
-  context: Pick<ReActContextService, 'buildForJob'>;
+  context: Pick<ModelInputBuilder, 'buildForTask'>;
   workerId: string;
   publisher: RuntimeEventPublisher;
   modelFactory: AuditedModelFactory;
@@ -31,65 +27,74 @@ export interface ReActExecutionOptions {
   clock?: { nowMs(): number };
 }
 
-/**
- * Executes one durable Job through one ReAct loop. Every model turn reloads
- * the canonical database context, so tool calls, plan updates and HITL answers
- * become visible without a nested executor or an in-memory context fork.
- */
+/** Runs one physical TaskRun through the single durable ReAct loop. */
 export class ReActExecution {
   readonly #toolCallPolicy: ToolCallPolicy;
-  readonly #finalAnswerPolicy: FinalAnswerPolicy;
-  readonly #pendingToolCallLoader: PendingToolCallLoader;
+  readonly #pendingToolCalls: PendingToolCallLoader;
 
   constructor(private readonly options: ReActExecutionOptions) {
     this.#toolCallPolicy = new ToolCallPolicy(options.tools);
-    this.#finalAnswerPolicy = new FinalAnswerPolicy(options.store);
-    this.#pendingToolCallLoader = new PendingToolCallLoader(options.store);
+    this.#pendingToolCalls = new PendingToolCallLoader(options.store);
   }
 
-  async runJob(input: {
-    job: AgentJob;
+  async runTask(input: {
+    task: AgentTask;
+    taskRun: AgentTaskRun;
     signal?: AbortSignal;
-  }): Promise<ReActJobExecutionResult> {
-    const checkpoint = await this.options.store.execution.getLatestLoopCheckpoint(input.job.id);
-    const pendingToolCalls = await this.#pendingToolCallLoader.load(
-      input.job,
-      checkpoint?.callMessageId
-    );
-    let current: BuiltContext | undefined;
-    const toolExecutor = this.#toolExecutor();
+  }): Promise<ReActTaskExecutionResult> {
+    const checkpoint = await this.options.store.execution.getLatestCheckpoint(input.task.id);
+    const pendingToolCalls = await this.#pendingToolCalls.load(input.task, checkpoint?.callMessageId);
+    let currentInput: ModelInput | undefined;
+    const toolExecutor = new ToolExecutor({
+      store: this.options.store,
+      workerId: this.options.workerId,
+      tools: this.options.tools,
+      sandboxRoot: this.options.sandboxRoot,
+      publisher: this.options.publisher,
+      clock: this.options.clock,
+    });
     const tools = toolExecutor.tools();
     const resume = checkpoint ? {
       iterationNo: checkpoint.iterationNo,
       executedToolCalls: checkpoint.executedToolCalls,
       pendingToolCalls,
     } : undefined;
+
     return executeDurableAgentLoop({
       loop: new AgentLoop({
         model: this.options.modelFactory.create({
-          job: input.job,
+          task: input.task,
+          taskRun: input.taskRun,
           manifest: () => {
-            if (!current) throw new Error('Model context is unavailable before tool recovery completes.');
-            return current.inputManifest;
+            if (!currentInput) throw new Error('Model input is unavailable before tool recovery completes.');
+            return currentInput.inputManifest;
           },
-          callType: 'job.react',
-          logicalCallKey: 'job.react',
+          callType: 'task.react',
+          logicalCallKey: 'task.react',
           tools,
         }),
-        createOutputId,
+        createOutputId: () => `output_${randomUUID()}`,
         streaming: this.options.streaming,
       }),
-      writer: this.#writer(),
+      writer: new RuntimeEventWriter({
+        store: this.options.store,
+        ownerId: this.options.workerId,
+        tools: this.options.tools,
+        publisher: this.options.publisher,
+        requireModelCallAudit: true,
+        clock: this.options.clock,
+      }),
       store: this.options.store,
-      workerId: this.options.workerId,
+      ownerId: this.options.workerId,
       clock: this.options.clock ?? { nowMs: () => Date.now() },
       input: {
-        job: input.job,
+        task: input.task,
+        taskRun: input.taskRun,
         loopInput: {
           context: {
             loadMessages: async () => {
-              current = await this.options.context.buildForJob(input.job);
-              return current.messages;
+              currentInput = await this.options.context.buildForTask(input.task, input.taskRun);
+              return currentInput.messages;
             },
           },
           tools: {
@@ -101,45 +106,16 @@ export class ReActExecution {
           },
           policy: {
             validateToolCalls: candidate => this.#toolCallPolicy.validate(candidate.toolCalls),
-            validateFinalAnswer: () => this.#finalAnswerPolicy.validate(input.job.id),
           },
-          limits: this.#limits(input.job, input.signal),
+          limits: {
+            maxIterations: this.options.maxIterations,
+            maxToolCalls: this.options.maxToolCalls,
+            deadlineMs: input.taskRun.startedAtMs + this.options.executionDeadlineMs,
+            signal: input.signal,
+          },
           ...(resume ? { resume } : {}),
         },
       },
     });
   }
-
-  #toolExecutor(): ToolExecutor {
-    return new ToolExecutor({
-      store: this.options.store,
-      workerId: this.options.workerId,
-      tools: this.options.tools,
-      sandboxRoot: this.options.sandboxRoot,
-    });
-  }
-
-  #writer(): RuntimeEventWriter {
-    return new RuntimeEventWriter({
-      store: this.options.store,
-      workerId: this.options.workerId,
-      tools: this.options.tools,
-      publisher: this.options.publisher,
-      requireModelCallAudit: true,
-    });
-  }
-
-  #limits(job: AgentJob, signal?: AbortSignal) {
-    return {
-      maxIterations: this.options.maxIterations,
-      maxToolCalls: this.options.maxToolCalls,
-      deadlineMs: (job.startedAtMs ?? Date.now()) + this.options.executionDeadlineMs,
-      signal,
-    };
-  }
-
-}
-
-function createOutputId(): string {
-  return `output_${randomUUID()}`;
 }

@@ -1,138 +1,60 @@
-import type {
-  AgentMessage,
-  AgentToolInvocation,
-} from '../../../domain/index.js';
-import type {
-  BlockedMessageGroup,
-  MessageGroup,
-  MessageGroupBuildResult,
-  RuntimeRefs,
-} from '../types/message-group.types.js';
+import type { AgentMessage } from '../../../domain/index.js';
+import { estimateTextTokens } from './token-budget.helper.js';
+import type { ModelMessageGroup } from '../types/model-input.types.js';
 
-export class MessageGroupBuilder {
-  build(
-    messages: AgentMessage[],
-    invocations: AgentToolInvocation[]
-  ): MessageGroupBuildResult {
-    const orderedMessages = [...messages].sort((left, right) => left.rowId - right.rowId);
-    const messagesById = new Map(orderedMessages.map(message => [message.id, message]));
-    const invocationsByCallMessage = new Map<string, AgentToolInvocation[]>();
-    for (const invocation of invocations) {
-      const values = invocationsByCallMessage.get(invocation.callMessageId) ?? [];
-      values.push(invocation);
-      invocationsByCallMessage.set(invocation.callMessageId, values);
-    }
-    const consumedResultIds = new Set<string>();
-    const groups: MessageGroup[] = [];
-    const blocked: BlockedMessageGroup[] = [];
-
-    for (const message of orderedMessages) {
-      if (consumedResultIds.has(message.id) || message.messageType === 'tool_result') continue;
-      if (message.messageType !== 'tool_call') {
-        groups.push({ id: `message:${message.id}`, type: 'single', messages: [message] });
-        continue;
-      }
-      if (!message.toolCalls?.length) {
-        blocked.push({ callMessage: message, reason: 'missing_tool_calls' });
-        continue;
-      }
-      const candidates = invocationsByCallMessage.get(message.id) ?? [];
-      const byToolCallId = new Map(candidates.map(invocation => [invocation.toolCallId, invocation]));
-      const groupInvocations: AgentToolInvocation[] = [];
-      const resultMessages: AgentMessage[] = [];
-      let failure: BlockedMessageGroup | undefined;
-      for (const toolCall of message.toolCalls) {
-        const invocation = byToolCallId.get(toolCall.id);
-        if (!invocation) {
-          failure = { callMessage: message, reason: 'missing_invocation', toolCallId: toolCall.id };
-          break;
-        }
-        if (!['completed', 'failed'].includes(invocation.status)) {
-          failure = {
-            callMessage: message,
-            reason: 'invocation_not_terminal',
-            toolCallId: toolCall.id,
-          };
-          break;
-        }
-        const resultMessage = invocation.resultMessageId
-          ? messagesById.get(invocation.resultMessageId)
-          : undefined;
-        if (!resultMessage) {
-          failure = {
-            callMessage: message,
-            reason: 'missing_result_message',
-            toolCallId: toolCall.id,
-          };
-          break;
-        }
-        if (
-          resultMessage.messageType !== 'tool_result'
-          || resultMessage.toolCallId !== invocation.toolCallId
-          || resultMessage.toolName !== invocation.toolName
-        ) {
-          failure = {
-            callMessage: message,
-            reason: 'result_protocol_mismatch',
-            toolCallId: toolCall.id,
-          };
-          break;
-        }
-        groupInvocations.push(invocation);
-        resultMessages.push(resultMessage);
-      }
-      if (failure) {
-        blocked.push(failure);
-        continue;
-      }
-      resultMessages.forEach(result => consumedResultIds.add(result.id));
-      groups.push({
-        id: `tool_exchange:${message.id}`,
-        type: 'tool_exchange',
-        callMessage: message,
-        invocations: groupInvocations,
-        resultMessages,
-        refs: refsFor(message),
-      });
-    }
-    return { groups, blocked };
-  }
-}
-
-export function messagesInGroup(group: MessageGroup): AgentMessage[] {
-  switch (group.type) {
-    case 'tool_exchange':
-      return [group.callMessage, ...group.resultMessages];
-    case 'single':
-      return group.messages;
-  }
-}
-
-export function assertNoBlockedMessageGroups(
-  blocked: BlockedMessageGroup[],
-  predicate: (blocked: BlockedMessageGroup) => boolean
-): void {
-  const relevant = blocked.find(predicate);
-  if (!relevant) return;
-  throw new IncompleteMessageGroupError(
-    `Tool exchange ${JSON.stringify(relevant.callMessage.id)} is incomplete: ${relevant.reason}.`
+/**
+ * Groups an Assistant tool-call message with every matching ToolMessage.
+ * Incomplete batches and orphan ToolMessages are excluded from model input.
+ */
+export function buildCompleteMessageGroups(messages: AgentMessage[]): ModelMessageGroup[] {
+  const ordered = [...messages].sort((left, right) => left.rowId - right.rowId);
+  const toolResults = new Map(
+    ordered
+      .filter(message => message.role === 'tool' && message.modelToolCallId)
+      .map(message => [message.modelToolCallId!, message])
   );
-}
+  const groupedResultIds = new Set<string>();
+  const groups: ModelMessageGroup[] = [];
 
-export class IncompleteMessageGroupError extends Error {
-  readonly code = 'incomplete_message_group';
-
-  constructor(message: string) {
-    super(message);
-    this.name = 'IncompleteMessageGroupError';
+  for (const message of ordered) {
+    if (message.role === 'tool') continue;
+    if (message.toolCalls?.length) {
+      const results = message.toolCalls.map(call => toolResults.get(call.id));
+      if (results.some(result => !result)) continue;
+      const complete = [message, ...results as AgentMessage[]];
+      for (const result of results as AgentMessage[]) groupedResultIds.add(result.id);
+      groups.push(toGroup(message.id, complete));
+      continue;
+    }
+    groups.push(toGroup(message.id, [message]));
   }
+
+  // A ToolMessage is protocol-valid only as part of a complete tool-call group.
+  void groupedResultIds;
+  return groups;
 }
 
-function refsFor(message: AgentMessage): RuntimeRefs {
+function toGroup(id: string, messages: AgentMessage[]): ModelMessageGroup {
+  const rowIds = messages.map(message => message.rowId);
+  const contextScope = messages.some(message => message.contextScope === 'task')
+    ? 'task'
+    : 'conversation';
   return {
-    sessionId: message.sessionId,
-    jobId: message.jobId,
-    ...(message.planId ? { planId: message.planId } : {}),
-    ...(message.planStepId ? { planStepId: message.planStepId } : {}),
+    id,
+    messages,
+    estimatedTokens: estimateTextTokens(messages.map(serializeForEstimate).join('\n')),
+    minRowId: Math.min(...rowIds),
+    maxRowId: Math.max(...rowIds),
+    contextScope,
   };
+}
+
+function serializeForEstimate(message: AgentMessage): string {
+  return JSON.stringify({
+    role: message.role,
+    content: message.content,
+    toolCalls: message.toolCalls,
+    modelToolCallId: message.modelToolCallId,
+    toolResult: message.toolResult,
+  });
 }

@@ -1,81 +1,38 @@
 import { describe, expect, it } from 'vitest';
 import {
-  estimateTextTokens,
-} from '../src/runtime/context/helpers/token-budget.helper.js';
-import {
-  buildDurableRuntimeStatePrompt,
   buildStableEnvironmentContext,
-  createJobPromptManifest,
-  JOB_AGENT_PROMPT_ID,
-  JOB_AGENT_PROMPT_VERSION,
-  JOB_AGENT_SYSTEM_PROMPT,
-} from '../src/runtime/prompting/job-agent-prompt.js';
+  createTaskPromptManifest,
+  TASK_AGENT_PROMPT_ID,
+  TASK_AGENT_PROMPT_VERSION,
+  TASK_AGENT_SYSTEM_PROMPT,
+} from '../src/runtime/prompting/task-agent-prompt.js';
 
-describe('prompt governance', () => {
-  it('requires bounded complete writes and sequential chunked file writes', () => {
-    expect(JOB_AGENT_SYSTEM_PROMPT).toContain(
-      'write_file and write_article each write one complete file within their declared character and token limits'
+describe('Task ReAct prompt', () => {
+  it('treats update_plan as guidance instead of a completion gate', () => {
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('Use update_plan');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('is not a completion gate');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('User-visible progress');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain(
+      'Never call update_plan with empty assistant content'
     );
-    expect(JOB_AGENT_SYSTEM_PROMPT).toContain(
-      'call start_file_write once with the intended code/, docs/, or artifacts/ path, then append_file_chunk once per model turn'
-    );
-    expect(JOB_AGENT_SYSTEM_PROMPT).toContain(
-      'Do not rewrite a successful file merely because you speculate that its content was truncated'
-    );
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('ToolMessages and durable runtime state as authoritative facts');
   });
 
-  it('produces deterministic component manifests and isolates dynamic state', () => {
-    const stableContext = buildStableEnvironmentContext({
-      sandboxRoot: '/tmp/agent-sandbox',
+  it('keeps the cacheable environment prefix stable and versioned', () => {
+    const stable = buildStableEnvironmentContext({
+      sandboxRoot: '/tmp/runtime',
       sessionId: 'session_1',
+      shellPath: '/bin/zsh',
     });
-    const first = createJobPromptManifest({
-      systemPrompt: JOB_AGENT_SYSTEM_PROMPT,
-      promptId: JOB_AGENT_PROMPT_ID,
-      promptVersion: JOB_AGENT_PROMPT_VERSION,
-      stableContext,
-      runtimeStateMessages: ['state-v1'],
+    expect(stable).toContain('/tmp/runtime/sessions/session_1/workspace');
+    expect(stable).not.toContain(new Date().toISOString());
+    const manifest = createTaskPromptManifest({
+      systemPrompt: TASK_AGENT_SYSTEM_PROMPT,
+      promptId: TASK_AGENT_PROMPT_ID,
+      promptVersion: TASK_AGENT_PROMPT_VERSION,
+      stableContext: stable,
     });
-    const repeated = createJobPromptManifest({
-      systemPrompt: JOB_AGENT_SYSTEM_PROMPT,
-      promptId: JOB_AGENT_PROMPT_ID,
-      promptVersion: JOB_AGENT_PROMPT_VERSION,
-      stableContext,
-      runtimeStateMessages: ['state-v1'],
-    });
-    const changedState = createJobPromptManifest({
-      systemPrompt: JOB_AGENT_SYSTEM_PROMPT,
-      promptId: JOB_AGENT_PROMPT_ID,
-      promptVersion: JOB_AGENT_PROMPT_VERSION,
-      stableContext,
-      runtimeStateMessages: ['state-v2'],
-    });
-
-    expect(repeated).toEqual(first);
-    expect(changedState.checksum).not.toBe(first.checksum);
-    expect(changedState.components.slice(0, 2)).toEqual(first.components.slice(0, 2));
-    expect(first.components.map(component => component.cacheScope))
-      .toEqual(['stable', 'stable', 'dynamic']);
-  });
-
-  it('bounds a large durable Runtime State while retaining an authoritative envelope', () => {
-    const text = buildDurableRuntimeStatePrompt({
-      job: { id: 'job_1', status: 'running' },
-      plan: {
-        id: 'plan_1',
-        steps: Array.from({ length: 20 }, (_, index) => ({
-          key: `step_${index}`,
-          status: 'completed',
-          result: { summary: 'x'.repeat(5_000) },
-        })),
-      },
-      artifacts: Array.from({ length: 100 }, (_, index) => ({
-        id: `artifact_${index}`,
-        logicalPath: `artifacts/${'long-name-'.repeat(20)}${index}.md`,
-      })),
-    }, 500);
-
-    expect(text).toContain('Durable runtime state (authoritative, schemaVersion=1)');
-    expect(estimateTextTokens(text)).toBeLessThanOrEqual(500);
+    expect(TASK_AGENT_PROMPT_VERSION).toBe(8);
+    expect(manifest.components.map(component => component.cacheScope)).toEqual(['stable', 'stable']);
   });
 });

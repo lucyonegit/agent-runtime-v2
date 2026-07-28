@@ -68,38 +68,9 @@ export interface ExecutionConfig {
 }
 
 export interface ContextConfig {
-  compression: {
-    enabled: boolean;
-    maximumPasses: number;
-    recentRawTokenBudget: number;
-    minimumRecentGroups: number;
-    batchMinimumTokens: number;
-    batchMaximumTokens: number;
-    batchInputFraction: number;
-  };
-  pressure: {
-    watchRatio: number;
-    compressRatio: number;
-    mustCompressRatio: number;
-    criticalRatio: number;
-  };
-  estimation: {
-    historySampleSize: number;
-    minimumCalibrationSamples: number;
-    fallbackCalibrationFactor: number;
-    minimumCalibrationFactor: number;
-    maximumCalibrationFactor: number;
-    calibrationPercentile: number;
-    fallbackErrorReserveTokens: number;
-    minimumErrorReserveTokens: number;
-  };
-  projection: {
-    maximumToolResultTokens: number;
-    toolResultHeadRatio: number;
-    runtimeStateMaximumTokens: number;
-    artifactHistoryLimit: number;
-    recentModelCallLimit: number;
-  };
+  keepRecentInputTokens: number;
+  maxToolResultTokens: number;
+  summaryMaxTokens: number;
 }
 
 export interface ToolsConfig {

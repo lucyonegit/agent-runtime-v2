@@ -1,5 +1,3 @@
-export type AgentUserInputSource = 'tool' | 'agent' | 'recovery';
-export type AgentUserInputAnswerMode = 'as_tool_result' | 'as_user_message';
 export type AgentUserInputStatus = 'pending' | 'answered' | 'cancelled' | 'expired';
 
 export type AgentUserInputSchema =
@@ -10,25 +8,21 @@ export type AgentUserInputSchema =
       min?: number;
       max?: number;
       options: Array<{ label: string; value: string }>;
-    }
-  | { type: 'approval'; approveLabel?: string; rejectLabel?: string };
+    };
 
+/** request_user_input is the only producer; the answer is committed as ToolMessage. */
 export interface AgentUserInputRequest {
   id: string;
   sessionId: string;
-  jobId: string;
-  planId?: string;
-  planStepId?: string;
-  toolInvocationId?: string;
-  source: AgentUserInputSource;
-  answerMode: AgentUserInputAnswerMode;
+  taskId: string;
+  toolCallId: string;
   status: AgentUserInputStatus;
   title?: string;
   prompt: string;
   inputSchema: AgentUserInputSchema;
-  answer?: unknown;
   answerMessageId?: string;
   clientAnswerId?: string;
+  expiresAtMs?: number;
   version: number;
   metadata?: Record<string, unknown>;
   createdAtMs: number;

@@ -6,5 +6,4 @@ export interface CreatePlanToolsOptions {
   workerId: string;
   publisher: RuntimeEventPublisher;
   clock?: { nowMs(): number };
-  ids?: { planId(): string; planStepId(): string };
 }

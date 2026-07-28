@@ -1,7 +1,7 @@
 import type { StoredMessage } from '@langchain/core/messages';
 
 export const AGENT_MODEL_CALL_TYPES = [
-  'job.react',
+  'task.react',
   'context.compress',
 ] as const;
 
@@ -32,9 +32,6 @@ export interface AgentContextInputManifest {
   prompt?: AgentPromptManifest;
   messageGroupIds: string[];
   summaryIds: string[];
-  selectedBundleIds?: string[];
-  summarizedBundleIds?: string[];
-  summarizedMessageGroupIds?: string[];
   truncatedToolResultMessageIds?: string[];
   includedRowIdStart?: number;
   includedRowIdEnd?: number;
@@ -47,26 +44,14 @@ export interface AgentContextInputManifest {
     messages: number;
     reservedOutput: number;
   };
-  tokenPrediction?: {
-    estimatorVersion: string;
-    calibrationSampleCount: number;
-    calibrationFactor: number;
-    errorReserve: number;
-    rawEstimatedInputTokens: number;
-    predictedInputTokens: number;
-    predictedCandidateTokens: number;
-    hardInputLimit: number;
-    pressureLevel: 'normal' | 'watch' | 'compact' | 'mandatory' | 'critical';
-  };
 }
 
 export interface AgentModelCall {
   id: string;
   sessionId: string;
-  jobId: string;
-  attemptId: string;
+  taskId: string;
+  taskRunId: string;
   logicalCallKey: string;
-  callAttemptNo: number;
   callType: AgentModelCallType;
   status: AgentModelCallStatus;
   provider: string;

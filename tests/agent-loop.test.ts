@@ -90,53 +90,7 @@ describe('AgentLoop with LangChain messages', () => {
     });
   });
 
-  it('rejects a premature final answer and continues in the same ReAct loop', async () => {
-    let calls = 0;
-    const observedInputs: BaseLanguageModelInput[] = [];
-    const loop = new AgentLoop({
-      streaming: false,
-      model: invokeModel(input => {
-        observedInputs.push(input);
-        calls += 1;
-        return chunk(calls === 1 ? 'premature answer' : 'finished answer');
-      }),
-    });
-    const validateFinalAnswer = vi.fn(async () => calls === 1
-      ? { type: 'retry' as const, feedback: 'Complete the durable plan first.' }
-      : { type: 'accept' as const });
-
-    const run = await consume(loop.run(loopInput({
-      policy: { validateFinalAnswer },
-    })));
-
-    expect(run.events).toEqual([
-      {
-        type: LOOP_EVENT_TYPES.ModelOutputRejected,
-        outputId: 'output_1',
-        reason: 'Complete the durable plan first.',
-      },
-      {
-        type: LOOP_EVENT_TYPES.ModelOutputCompleted,
-        outputId: 'output_2',
-        content: 'finished answer',
-        toolCalls: [],
-        usage: undefined,
-      },
-    ]);
-    expect(run.result).toEqual({
-      type: 'completed', outputId: 'output_2', content: 'finished answer',
-    });
-    expect(validateFinalAnswer).toHaveBeenCalledTimes(2);
-    expect(Array.isArray(observedInputs[1]) && observedInputs[1].length).toBe(2);
-    if (!Array.isArray(observedInputs[1])) throw new Error('Expected a message list.');
-    const correction = (observedInputs[1] as BaseMessage[])[1];
-    expect(correction?.getType()).toBe('system');
-    expect(correction?.content).toContain(
-      '<runtime_correction code=\"final_answer.rejected\">'
-    );
-  });
-
-  it('corrects a mixed exclusive-tool batch without failing the Job', async () => {
+  it('corrects a mixed exclusive-tool batch without failing the Task', async () => {
     let calls = 0;
     const execute = vi.fn<ToolExecutorPort['execute']>(async ({ call }) => ({
       type: 'completed', content: `${call.name}:done`,
@@ -245,7 +199,7 @@ describe('AgentLoop with LangChain messages', () => {
     expect(execute).not.toHaveBeenCalled();
     expect(await iterator.next()).toMatchObject({
       done: false,
-      value: { type: LOOP_EVENT_TYPES.ToolResultCompleted, toolCallId: 'call_1' },
+      value: { type: LOOP_EVENT_TYPES.ToolResultCompleted, modelToolCallId: 'call_1' },
     });
     expect(execute).toHaveBeenCalledTimes(1);
     await iterator.next();
@@ -418,7 +372,7 @@ describe('AgentLoop with LangChain messages', () => {
     });
     expect(run.events[1]).toMatchObject({
       type: LOOP_EVENT_TYPES.ToolResultFailed,
-      toolCallId: 'call_bad',
+      modelToolCallId: 'call_bad',
       executionStarted: false,
       code: 'invalid_tool_arguments',
     });
@@ -443,7 +397,6 @@ describe('AgentLoop with LangChain messages', () => {
             : {
                 type: 'requires_user_input',
                 request: {
-                  source: 'tool', answerMode: 'as_tool_result',
                   prompt: `answer ${call.name}`, inputSchema: { type: 'text' },
                 },
               },
@@ -458,7 +411,7 @@ describe('AgentLoop with LangChain messages', () => {
       LOOP_EVENT_TYPES.ToolInputRequired,
     ]);
     expect(run.result).toEqual({
-      type: 'waiting_user_input', toolCallIds: ['call_wait_a', 'call_wait_b'],
+      type: 'waiting_for_user', modelToolCallIds: ['call_wait_a', 'call_wait_b'],
     });
   });
 
@@ -580,11 +533,11 @@ describe('AgentLoop with LangChain messages', () => {
     const overflow = new AgentLoop({
       streaming: false,
       model: invokeModel(async () => {
-        throw Object.assign(new Error('too many tokens'), { code: 'context_overflow' });
+        throw Object.assign(new Error('too many tokens'), { code: 'model_input_too_large' });
       }),
     });
     expect((await consume(overflow.run(loopInput()))).result).toMatchObject({
-      type: 'failed', code: 'context_overflow',
+      type: 'failed', code: 'model_input_too_large',
     });
   });
 });
@@ -648,7 +601,7 @@ function loopInput(overrides: AgentLoopInputOverrides = {}): AgentLoopInput {
     }),
   };
   return {
-    target: { sessionId: 'session_1', jobId: 'job_1', attemptId: 'attempt_1' },
+    target: { sessionId: 'session_1', taskId: 'task_1', taskRunId: 'task_run_1' },
     context: {
       loadMessages: async () => [],
       ...context,

@@ -1,0 +1,533 @@
+import type { PoolClient } from 'pg';
+import type { AgentSession } from '../../../domain/index.js';
+import {
+  AgentStoreError,
+  type CancelTaskInput,
+  type CreateRetryTaskInput,
+  type CreateRetryTaskResult,
+  type CreateSessionInput,
+  type CreateTaskWithUserMessageInput,
+  type CreateTaskWithUserMessageResult,
+  type FailTaskInput,
+  type FinishTaskResult,
+  type MarkTaskRecoveryRequiredInput,
+  type MarkTaskRecoveryRequiredResult,
+  type RenewTaskRunOwnershipInput,
+  type StartTaskRunInput,
+  type StartTaskRunResult,
+} from '../../agent-store.js';
+import {
+  mapAgentMessageRow,
+  mapAgentSessionRow,
+  mapAgentTaskRow,
+  mapAgentTaskRunRow,
+  mapAgentToolCallRow,
+  mapAgentToolRunRow,
+  type AgentMessageRow,
+  type AgentSessionRow,
+  type AgentTaskRow,
+  type AgentTaskRunRow,
+  type AgentToolCallRow,
+  type AgentToolRunRow,
+} from '../row-mappers.js';
+import { lockAgentSession, withPostgresTransaction } from '../sql.js';
+import {
+  assertFutureOwnership,
+  assertTaskRunOwnership,
+  isConstraint,
+  requireRow,
+  selectTask,
+  selectTaskRun,
+  taskNotFound,
+  touchSession,
+} from './command-helpers.js';
+
+export async function createSessionCommand(
+  client: PoolClient,
+  input: CreateSessionInput
+): Promise<AgentSession> {
+  try {
+    const result = await client.query<AgentSessionRow>(
+      `insert into agent_sessions(
+         id, title, status, version, created_at_ms, updated_at_ms
+       ) values ($1, $2, 'active', 0, $3, $3)
+       returning *`,
+      [input.id, input.title ?? null, input.nowMs]
+    );
+    return mapAgentSessionRow(requireRow(result.rows[0], 'create session'));
+  } catch (error) {
+    if (isConstraint(error, 'agent_sessions_pkey')) {
+      throw new AgentStoreError(
+        'SESSION_ALREADY_EXISTS',
+        `Session ${JSON.stringify(input.id)} already exists.`,
+        { sessionId: input.id }
+      );
+    }
+    throw error;
+  }
+}
+
+export async function createTaskWithUserMessageCommand(
+  client: PoolClient,
+  input: CreateTaskWithUserMessageInput
+): Promise<CreateTaskWithUserMessageResult> {
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    try {
+      const taskResult = await client.query<AgentTaskRow>(
+        `insert into agent_tasks(
+           id, session_id, goal_message_id, retry_of_task_id, client_request_id,
+           status, version, metadata, created_at_ms, updated_at_ms
+         ) values ($1, $2, $3, $4, $5, 'created', 0, $6, $7, $7)
+         returning *`,
+        [
+          input.taskId,
+          input.sessionId,
+          input.userMessageId,
+          input.retryOfTaskId ?? null,
+          input.clientRequestId ?? null,
+          input.taskMetadata ?? null,
+          input.nowMs,
+        ]
+      );
+      const messageResult = await client.query<AgentMessageRow>(
+        `insert into agent_messages(
+           id, session_id, task_id, role, message_type, context_scope,
+           visibility, channel, content, metadata, created_at_ms
+         ) values (
+           $1, $2, $3, 'user', 'user_message', 'conversation',
+           'ui', 'normal', $4, $5, $6
+         ) returning *`,
+        [
+          input.userMessageId,
+          input.sessionId,
+          input.taskId,
+          input.content,
+          input.messageMetadata ?? null,
+          input.nowMs,
+        ]
+      );
+      const sessionResult = await client.query<AgentSessionRow>(
+        `update agent_sessions
+         set version = version + 1, updated_at_ms = $2
+         where id = $1
+         returning *`,
+        [input.sessionId, input.nowMs]
+      );
+      return {
+        session: mapAgentSessionRow(requireRow(sessionResult.rows[0], 'touch session')),
+        task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'create task')),
+        message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'create goal message')),
+      };
+    } catch (error) {
+      throw mapTaskCreateError(error, input.sessionId, input.taskId, input.clientRequestId);
+    }
+  });
+}
+
+export async function createRetryTaskCommand(
+  client: PoolClient,
+  input: CreateRetryTaskInput
+): Promise<CreateRetryTaskResult> {
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    const source = await selectTask(client, input.retryOfTaskId, true);
+    if (!source || source.session_id !== input.sessionId) throw taskNotFound(input.retryOfTaskId);
+    if (!['completed', 'failed', 'cancelled'].includes(source.status)) {
+      throw new AgentStoreError(
+        'INVALID_TASK_RETRY',
+        `Task ${JSON.stringify(source.id)} must be terminal before it can be retried.`,
+        { taskId: source.id, status: source.status }
+      );
+    }
+    try {
+      const taskResult = await client.query<AgentTaskRow>(
+        `insert into agent_tasks(
+           id, session_id, goal_message_id, retry_of_task_id, client_request_id,
+           status, version, metadata, created_at_ms, updated_at_ms
+         ) values ($1, $2, $3, $4, $5, 'created', 0, $6, $7, $7)
+         returning *`,
+        [
+          input.taskId,
+          input.sessionId,
+          source.goal_message_id,
+          source.id,
+          input.clientRequestId ?? null,
+          input.taskMetadata ?? null,
+          input.nowMs,
+        ]
+      );
+      const sessionResult = await client.query<AgentSessionRow>(
+        `update agent_sessions
+         set version = version + 1, updated_at_ms = $2
+         where id = $1
+         returning *`,
+        [input.sessionId, input.nowMs]
+      );
+      return {
+        session: mapAgentSessionRow(requireRow(sessionResult.rows[0], 'touch session')),
+        task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'create retry task')),
+      };
+    } catch (error) {
+      throw mapTaskCreateError(error, input.sessionId, input.taskId, input.clientRequestId);
+    }
+  });
+}
+
+export async function startTaskRunCommand(
+  client: PoolClient,
+  input: StartTaskRunInput
+): Promise<StartTaskRunResult> {
+  assertFutureOwnership(input.nowMs, input.ownershipExpiresAtMs);
+  return withPostgresTransaction(client, async () => {
+    const task = await selectTask(client, input.taskId, true);
+    if (!task) throw taskNotFound(input.taskId);
+    if (task.version !== input.expectedTaskVersion) {
+      throw staleTaskVersion(task, input.expectedTaskVersion);
+    }
+    const validStart = (
+      (task.status === 'created' && input.trigger === 'initial')
+      || (task.status === 'recovery_required' && input.trigger === 'manual_resume')
+    );
+    if (!validStart) {
+      throw new AgentStoreError(
+        'INVALID_TASK_STATE',
+        `Task ${JSON.stringify(task.id)} cannot start a ${input.trigger} run from ${task.status}.`,
+        { taskId: task.id, status: task.status, trigger: input.trigger }
+      );
+    }
+    const runNoResult = await client.query<{ run_no: number }>(
+      `select coalesce(max(run_no), 0)::integer + 1 as run_no
+       from agent_task_runs where task_id = $1`,
+      [task.id]
+    );
+    const runNo = requireRow(runNoResult.rows[0], 'select task run number').run_no;
+    const runResult = await client.query<AgentTaskRunRow>(
+      `insert into agent_task_runs(
+         id, task_id, run_no, trigger, status, owner_id, ownership_expires_at_ms,
+         started_at_ms, updated_at_ms
+       ) values ($1, $2, $3, $4, 'running', $5, $6, $7, $7)
+       returning *`,
+      [
+        input.taskRunId,
+        task.id,
+        runNo,
+        input.trigger,
+        input.ownerId,
+        input.ownershipExpiresAtMs,
+        input.nowMs,
+      ]
+    );
+    const taskResult = await client.query<AgentTaskRow>(
+      `update agent_tasks
+       set status = 'running', version = version + 1,
+           started_at_ms = coalesce(started_at_ms, $2), updated_at_ms = $2,
+           error_code = null, error_message = null, error_details = null
+       where id = $1
+       returning *`,
+      [task.id, input.nowMs]
+    );
+    await touchSession(client, task.session_id, input.nowMs);
+    return {
+      task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'start task')),
+      taskRun: mapAgentTaskRunRow(requireRow(runResult.rows[0], 'create task run')),
+    };
+  });
+}
+
+export async function renewTaskRunOwnershipCommand(
+  client: PoolClient,
+  input: RenewTaskRunOwnershipInput
+) {
+  assertFutureOwnership(input.nowMs, input.ownershipExpiresAtMs);
+  const result = await client.query<AgentTaskRunRow>(
+    `update agent_task_runs
+     set ownership_expires_at_ms = $5, updated_at_ms = $4
+     where id = $1 and task_id = $2 and status = 'running'
+       and owner_id = $3 and ownership_expires_at_ms > $4
+     returning *`,
+    [
+      input.taskRunId,
+      input.taskId,
+      input.ownerId,
+      input.nowMs,
+      input.ownershipExpiresAtMs,
+    ]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new AgentStoreError(
+      'TASK_OWNERSHIP_LOST',
+      `TaskRun ${JSON.stringify(input.taskRunId)} ownership could not be renewed.`,
+      { taskId: input.taskId, taskRunId: input.taskRunId, ownerId: input.ownerId }
+    );
+  }
+  return mapAgentTaskRunRow(row);
+}
+
+export async function markTaskRecoveryRequiredCommand(
+  client: PoolClient,
+  input: MarkTaskRecoveryRequiredInput
+): Promise<MarkTaskRecoveryRequiredResult> {
+  return withPostgresTransaction(client, async () => {
+    const task = await selectTask(client, input.taskId, true);
+    if (!task) throw taskNotFound(input.taskId);
+    if (task.version !== input.expectedTaskVersion) {
+      throw staleTaskVersion(task, input.expectedTaskVersion);
+    }
+    let taskRun: AgentTaskRunRow | undefined;
+    const toolCalls: AgentToolCallRow[] = [];
+    const toolRuns: AgentToolRunRow[] = [];
+    if (task.status === 'running') {
+      const runResult = await client.query<AgentTaskRunRow>(
+        `select * from agent_task_runs
+         where task_id = $1 and status = 'running'
+         for update`,
+        [task.id]
+      );
+      taskRun = runResult.rows[0];
+      if (!taskRun || Number(taskRun.ownership_expires_at_ms) > input.nowMs) {
+        throw new AgentStoreError(
+          'INVALID_TASK_STATE',
+          `Task ${JSON.stringify(task.id)} still has a live execution owner.`,
+          { taskId: task.id, taskRunId: taskRun?.id }
+        );
+      }
+      const runUpdate = await client.query<AgentTaskRunRow>(
+        `update agent_task_runs
+         set status = 'interrupted', owner_id = null, ownership_expires_at_ms = null,
+             error_code = 'execution_interrupted',
+             error_message = 'The execution owner stopped before the Task completed.',
+             updated_at_ms = $2, ended_at_ms = $2
+         where id = $1 returning *`,
+        [taskRun.id, input.nowMs]
+      );
+      taskRun = requireRow(runUpdate.rows[0], 'interrupt task run');
+
+      const runningCallsResult = await client.query<AgentToolCallRow>(
+        `select call.*
+         from agent_tool_calls call
+         join agent_tool_runs run on run.tool_call_id = call.id
+         where run.task_run_id = $1 and run.status = 'running'
+         order by call.id
+         for update of call`,
+        [taskRun.id]
+      );
+      for (const call of runningCallsResult.rows) {
+        const unsafe = call.side_effect_level === 'side_effecting';
+        const runUpdateResult = await client.query<AgentToolRunRow>(
+          `update agent_tool_runs
+           set status = $2,
+               error_code = $3,
+               error_message = $4,
+               ended_at_ms = $5
+           where tool_call_id = $1 and status = 'running'
+           returning *`,
+          [
+            call.id,
+            unsafe ? 'outcome_unknown' : 'interrupted',
+            unsafe ? 'side_effect_outcome_unknown' : 'execution_interrupted',
+            unsafe
+              ? 'The process stopped before the side-effect outcome was committed.'
+              : 'The tool execution was interrupted before a result was committed.',
+            input.nowMs,
+          ]
+        );
+        toolRuns.push(...runUpdateResult.rows);
+        const callUpdate = await client.query<AgentToolCallRow>(
+          `update agent_tool_calls
+           set status = $2,
+               error_code = $3,
+               error_message = $4,
+               error_details = null,
+               version = version + 1,
+               updated_at_ms = $5
+           where id = $1 returning *`,
+          [
+            call.id,
+            unsafe ? 'outcome_unknown' : 'pending',
+            unsafe ? 'side_effect_outcome_unknown' : null,
+            unsafe ? 'The process stopped before the side-effect outcome was committed.' : null,
+            input.nowMs,
+          ]
+        );
+        toolCalls.push(requireRow(callUpdate.rows[0], 'prepare tool call recovery'));
+      }
+    } else if (task.status !== 'created') {
+      throw new AgentStoreError(
+        'INVALID_TASK_STATE',
+        `Task ${JSON.stringify(task.id)} cannot require recovery from ${task.status}.`,
+        { taskId: task.id, status: task.status }
+      );
+    }
+    const taskResult = await client.query<AgentTaskRow>(
+      `update agent_tasks
+       set status = 'recovery_required', version = version + 1, updated_at_ms = $2
+       where id = $1 returning *`,
+      [task.id, input.nowMs]
+    );
+    await touchSession(client, task.session_id, input.nowMs);
+    return {
+      task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'mark recovery required')),
+      ...(taskRun ? { taskRun: mapAgentTaskRunRow(taskRun) } : {}),
+      toolCalls: toolCalls.map(mapAgentToolCallRow),
+      toolRuns: toolRuns.map(mapAgentToolRunRow),
+    };
+  });
+}
+
+export async function failTaskCommand(
+  client: PoolClient,
+  input: FailTaskInput
+): Promise<FinishTaskResult> {
+  return withPostgresTransaction(client, async () => {
+    const task = await selectTask(client, input.taskId, true);
+    if (!task) throw taskNotFound(input.taskId);
+    if (task.version !== input.expectedTaskVersion) {
+      throw staleTaskVersion(task, input.expectedTaskVersion);
+    }
+    const taskRun = await selectTaskRun(client, input.taskRunId, true);
+    assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
+    const runResult = await client.query<AgentTaskRunRow>(
+      `update agent_task_runs
+       set status = 'failed', owner_id = null, ownership_expires_at_ms = null,
+           error_code = $2, error_message = $3, error_details = $4,
+           updated_at_ms = $5, ended_at_ms = $5
+       where id = $1 returning *`,
+      [
+        taskRun.id,
+        input.error.code,
+        input.error.message,
+        input.error.details === undefined ? null : JSON.stringify(input.error.details),
+        input.nowMs,
+      ]
+    );
+    const taskResult = await client.query<AgentTaskRow>(
+      `update agent_tasks
+       set status = 'failed', error_code = $2, error_message = $3, error_details = $4,
+           version = version + 1, updated_at_ms = $5, completed_at_ms = $5
+       where id = $1 returning *`,
+      [
+        task.id,
+        input.error.code,
+        input.error.message,
+        input.error.details === undefined ? null : JSON.stringify(input.error.details),
+        input.nowMs,
+      ]
+    );
+    const planCleared = await clearActivePlan(client, task.session_id, task.id);
+    await touchSession(client, task.session_id, input.nowMs);
+    return {
+      task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'fail task')),
+      taskRun: mapAgentTaskRunRow(requireRow(runResult.rows[0], 'fail task run')),
+      planCleared,
+    };
+  });
+}
+
+export async function cancelTaskCommand(
+  client: PoolClient,
+  input: CancelTaskInput
+): Promise<FinishTaskResult> {
+  return withPostgresTransaction(client, async () => {
+    const task = await selectTask(client, input.taskId, true);
+    if (!task) throw taskNotFound(input.taskId);
+    if (task.version !== input.expectedTaskVersion) {
+      throw staleTaskVersion(task, input.expectedTaskVersion);
+    }
+    if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+      return { task: mapAgentTaskRow(task), planCleared: false };
+    }
+    const taskRunResult = await client.query<AgentTaskRunRow>(
+      `update agent_task_runs
+       set status = 'cancelled', owner_id = null, ownership_expires_at_ms = null,
+           updated_at_ms = $2, ended_at_ms = $2
+       where task_id = $1 and status in ('running', 'paused')
+       returning *`,
+      [task.id, input.nowMs]
+    );
+    await client.query(
+      `update agent_tool_runs
+       set status = 'cancelled', ended_at_ms = $2
+       where task_id = $1 and status = 'running'`,
+      [task.id, input.nowMs]
+    );
+    await client.query(
+      `update agent_tool_calls
+       set status = 'cancelled', version = version + 1,
+           completed_at_ms = $2, updated_at_ms = $2
+       where task_id = $1 and status in ('pending', 'running', 'waiting_for_user')`,
+      [task.id, input.nowMs]
+    );
+    await client.query(
+      `update agent_user_input_requests
+       set status = 'cancelled', version = version + 1, updated_at_ms = $2
+       where task_id = $1 and status = 'pending'`,
+      [task.id, input.nowMs]
+    );
+    const taskResult = await client.query<AgentTaskRow>(
+      `update agent_tasks
+       set status = 'cancelled', version = version + 1,
+           updated_at_ms = $2, completed_at_ms = $2
+       where id = $1 returning *`,
+      [task.id, input.nowMs]
+    );
+    const planCleared = await clearActivePlan(client, task.session_id, task.id);
+    await touchSession(client, task.session_id, input.nowMs);
+    return {
+      task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'cancel task')),
+      ...(taskRunResult.rows[0] ? { taskRun: mapAgentTaskRunRow(taskRunResult.rows[0]) } : {}),
+      planCleared,
+    };
+  });
+}
+
+async function clearActivePlan(
+  client: PoolClient,
+  sessionId: string,
+  taskId: string
+): Promise<boolean> {
+  const result = await client.query(
+    `delete from agent_active_plans where session_id = $1 and task_id = $2`,
+    [sessionId, taskId]
+  );
+  return result.rowCount === 1;
+}
+
+function staleTaskVersion(task: AgentTaskRow, expectedVersion: number): AgentStoreError {
+  return new AgentStoreError(
+    'CONCURRENCY_CONFLICT',
+    `Task ${JSON.stringify(task.id)} version is stale.`,
+    { taskId: task.id, expectedVersion, actualVersion: task.version }
+  );
+}
+
+function mapTaskCreateError(
+  error: unknown,
+  sessionId: string,
+  taskId: string,
+  clientRequestId?: string
+): unknown {
+  if (isConstraint(error, 'uniq_agent_tasks_active_session')) {
+    return new AgentStoreError(
+      'ACTIVE_TASK_CONFLICT',
+      `Session ${JSON.stringify(sessionId)} already has an active Task.`,
+      { sessionId }
+    );
+  }
+  if (isConstraint(error, 'uniq_agent_tasks_client_request')) {
+    return new AgentStoreError(
+      'CLIENT_REQUEST_CONFLICT',
+      `clientRequestId ${JSON.stringify(clientRequestId)} already exists in this Session.`,
+      { sessionId, clientRequestId }
+    );
+  }
+  if (isConstraint(error, 'agent_tasks_pkey')) {
+    return new AgentStoreError(
+      'TASK_ALREADY_EXISTS',
+      `Task ${JSON.stringify(taskId)} already exists.`,
+      { taskId }
+    );
+  }
+  return error;
+}

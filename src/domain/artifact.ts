@@ -15,17 +15,16 @@ export interface AgentArtifactDraft {
 }
 
 /**
- * An immutable snapshot produced by a tool invocation. logicalPath is the
+ * An immutable snapshot produced by a ToolCall. logicalPath is the
  * user-facing workspace path; storagePath points at the revision snapshot so
  * an older conversation card never changes when the logical file is updated.
  */
 export interface AgentArtifact {
   id: string;
   sessionId: string;
-  jobId: string;
-  planId?: string;
-  planStepId?: string;
-  toolInvocationId: string;
+  taskId: string;
+  toolCallId: string;
+  toolRunId: string;
   resultMessageId: string;
   kind: AgentArtifactKind;
   area: AgentArtifactArea;

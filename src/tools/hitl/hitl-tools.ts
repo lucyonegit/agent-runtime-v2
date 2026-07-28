@@ -11,13 +11,14 @@ import { stringArgument } from '../helpers/tool-input.helper.js';
 export function createHitlTools(): RuntimeTool[] {
   const requestUserInput = new DynamicStructuredTool({
     name: 'request_user_input',
-    description: 'Pause execution and ask the user for text, choice, multi-choice, or approval input.',
+    description: 'Pause execution and ask the user for text, single-choice, or multi-choice input.',
     schema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Short title shown in the UI.' },
         prompt: { type: 'string', description: 'Question or instruction shown to the user.' },
         sensitive: { type: 'boolean', description: 'Hide the answer from normal views.' },
+        expiresInMs: { type: 'number', description: 'Optional positive wait duration in milliseconds.' },
         input: {
           oneOf: [
             {
@@ -51,16 +52,6 @@ export function createHitlTools(): RuntimeTool[] {
               required: ['type', 'options'],
               additionalProperties: false,
             },
-            {
-              type: 'object',
-              properties: {
-                type: { const: 'approval' },
-                approveLabel: { type: 'string' },
-                rejectLabel: { type: 'string' },
-              },
-              required: ['type'],
-              additionalProperties: false,
-            },
           ],
         },
       },
@@ -75,14 +66,15 @@ export function createHitlTools(): RuntimeTool[] {
       const artifact: RuntimeUserInputArtifact = {
         type: 'requires_user_input',
         request: {
-          source: 'tool',
-          answerMode: 'as_tool_result',
           prompt,
           inputSchema: parseInputSchema(values.input),
           ...(stringArgument(values, 'title').trim()
             ? { title: stringArgument(values, 'title').trim() }
             : {}),
           ...(values.sensitive === true ? { sensitiveAnswer: true } : {}),
+          ...(typeof values.expiresInMs === 'number' && values.expiresInMs > 0
+            ? { expiresInMs: Math.floor(values.expiresInMs) }
+            : {}),
         },
       };
       return ['User input is required before execution can continue.', artifact];
@@ -107,13 +99,6 @@ function parseInputSchema(value: unknown): AgentUserInputSchema {
       ...(typeof input.placeholder === 'string' ? { placeholder: input.placeholder } : {}),
       ...(typeof input.defaultValue === 'string' ? { defaultValue: input.defaultValue } : {}),
       ...(typeof input.maxLength === 'number' ? { maxLength: input.maxLength } : {}),
-    };
-  }
-  if (input.type === 'approval') {
-    return {
-      type: 'approval',
-      ...(typeof input.approveLabel === 'string' ? { approveLabel: input.approveLabel } : {}),
-      ...(typeof input.rejectLabel === 'string' ? { rejectLabel: input.rejectLabel } : {}),
     };
   }
   if (input.type === 'single_choice' || input.type === 'multi_choice') {

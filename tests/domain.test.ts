@@ -1,61 +1,63 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACTIVE_JOB_STATUSES,
-  AGENT_CONTEXT_OWNER_TYPES,
-  AGENT_CONTEXT_PURPOSES,
-  AGENT_MESSAGE_CHANNELS,
-  AGENT_MODEL_CALL_TYPES,
-  AGENT_TOOL_INVOCATION_STATUSES,
-  isTerminalJobStatus,
+  ACTIVE_TASK_STATUSES,
+  AGENT_TASK_RUN_STATUSES,
+  AGENT_TASK_RUN_TRIGGERS,
+  AGENT_TASK_STATUSES,
+  AGENT_TOOL_CALL_STATUSES,
+  AGENT_TOOL_RUN_STATUSES,
+  isTerminalTaskStatus,
+  resolveTaskGoalMessage,
+  type AgentMessage,
 } from '../src/domain/index.js';
 
-describe('canonical runtime domain', () => {
-  it('treats failed jobs as terminal and requires a new retry job', () => {
-    expect(isTerminalJobStatus('failed')).toBe(true);
-  });
-
-  it('requires an explicit resume after an interrupted execution is paused', () => {
-    expect(isTerminalJobStatus('recovery_required')).toBe(false);
-  });
-
-  it('defines database-active statuses consistently', () => {
-    expect(ACTIVE_JOB_STATUSES).toEqual([
-      'created',
-      'running',
-      'waiting_user_input',
-      'resuming',
-      'recovery_required',
+describe('durable domain vocabulary', () => {
+  it('exposes only the converged Task and execution states', () => {
+    expect(AGENT_TASK_STATUSES).toEqual([
+      'created', 'running', 'waiting_for_user', 'recovery_required',
+      'completed', 'failed', 'cancelled',
     ]);
-  });
-
-  it('does not expose private reasoning as a persisted message channel', () => {
-    expect(AGENT_MESSAGE_CHANNELS).toEqual(['normal', 'progress', 'final']);
-    expect(AGENT_MESSAGE_CHANNELS).not.toContain('thought');
-  });
-
-  it('tracks each tool invocation independently', () => {
-    expect(AGENT_TOOL_INVOCATION_STATUSES).toEqual([
-      'pending',
-      'running',
-      'waiting_user_input',
-      'completed',
-      'failed',
-      'unknown',
-      'cancelled',
+    expect(ACTIVE_TASK_STATUSES).toEqual([
+      'created', 'running', 'waiting_for_user', 'recovery_required',
     ]);
-  });
-
-  it('uses the final context owner and purpose dictionaries', () => {
-    expect(AGENT_CONTEXT_OWNER_TYPES).toEqual(['session', 'job']);
-    expect(AGENT_CONTEXT_PURPOSES).toEqual([
-      'conversation',
-      'job_execution',
+    expect(AGENT_TASK_RUN_TRIGGERS).toEqual([
+      'initial', 'user_input_answered', 'input_expired', 'manual_resume',
     ]);
+    expect(AGENT_TASK_RUN_STATUSES).toEqual([
+      'running', 'paused', 'completed', 'failed', 'interrupted', 'cancelled',
+    ]);
+    expect(AGENT_TOOL_CALL_STATUSES).toEqual([
+      'pending', 'running', 'waiting_for_user', 'completed', 'failed',
+      'outcome_unknown', 'cancelled',
+    ]);
+    expect(AGENT_TOOL_RUN_STATUSES).toEqual([
+      'running', 'completed', 'failed', 'interrupted', 'outcome_unknown', 'cancelled',
+    ]);
+    expect(isTerminalTaskStatus('completed')).toBe(true);
+    expect(isTerminalTaskStatus('recovery_required')).toBe(false);
   });
 
-  it('uses stable model-call dictionaries', () => {
-    expect(AGENT_MODEL_CALL_TYPES).toEqual(['job.react', 'context.compress']);
-    expect(AGENT_MODEL_CALL_TYPES).toContain('context.compress');
-    expect(AGENT_MODEL_CALL_TYPES).not.toContain('code.react');
+  it('resolves a Task goal by immutable message identity, not timeline position', () => {
+    const messages = [
+      message({ id: 'message_other', content: 'later message' }),
+      message({ id: 'message_goal', content: 'original goal' }),
+    ];
+    expect(resolveTaskGoalMessage({ goalMessageId: 'message_goal' }, messages)?.content)
+      .toBe('original goal');
   });
 });
+
+function message(overrides: Partial<AgentMessage> & Pick<AgentMessage, 'id' | 'content'>): AgentMessage {
+  return {
+    rowId: overrides.id === 'message_goal' ? 1 : 2,
+    sessionId: 'session_1',
+    taskId: 'task_1',
+    role: 'user',
+    messageType: 'user_message',
+    contextScope: 'conversation',
+    visibility: 'ui',
+    channel: 'normal',
+    createdAtMs: 1,
+    ...overrides,
+  };
+}

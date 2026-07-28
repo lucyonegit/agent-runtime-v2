@@ -74,7 +74,7 @@ export function createArtifactTools(
         fileName
       );
       const logicalPath = `artifacts/${fileName}`;
-      const storagePath = `.revisions/${context.toolInvocationId}/${logicalPath}`;
+      const storagePath = `.revisions/${context.toolCallId}/${logicalPath}`;
       const revisionPath = await resolveWorkspacePath(context, storagePath);
       await mkdir(dirname(filePath), { recursive: true });
       await mkdir(dirname(revisionPath), { recursive: true });

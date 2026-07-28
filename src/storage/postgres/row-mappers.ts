@@ -1,20 +1,16 @@
+import type { StoredMessage } from '@langchain/core/messages';
 import type {
+  AgentActivePlan,
   AgentArtifact,
   AgentArtifactArea,
   AgentArtifactKind,
-  AgentJob,
-  AgentJobStatus,
-  AgentLoopCheckpoint,
-  AgentLoopCheckpointPhase,
-  AgentContextSummary,
-  AgentContextOwnerType,
-  AgentContextPurpose,
-  AgentContextSummaryStatus,
-  AgentContextSummaryType,
+  AgentContextCompaction,
   AgentContextInputManifest,
   AgentMessage,
   AgentMessageChannel,
+  AgentMessageContextScope,
   AgentMessageRole,
+  AgentMessageToolCall,
   AgentMessageType,
   AgentMessageVisibility,
   AgentModelCall,
@@ -23,41 +19,165 @@ import type {
   AgentModelOutputDisposition,
   AgentModelUsageSource,
   AgentModelUsageStats,
-  AgentPlan,
-  AgentPlanStatus,
   AgentPlanStep,
-  AgentPlanStepStatus,
   AgentSession,
   AgentSessionStatus,
+  AgentTask,
+  AgentTaskCheckpoint,
+  AgentTaskCheckpointPhase,
+  AgentTaskRun,
+  AgentTaskRunStatus,
+  AgentTaskRunTrigger,
+  AgentTaskStatus,
   AgentToolCall,
-  AgentToolInvocation,
-  AgentToolInvocationStatus,
+  AgentToolCallStatus,
   AgentToolResult,
+  AgentToolRun,
+  AgentToolRunStatus,
   AgentToolSideEffectLevel,
-  AgentUserInputAnswerMode,
   AgentUserInputRequest,
   AgentUserInputSchema,
-  AgentUserInputSource,
   AgentUserInputStatus,
 } from '../../domain/index.js';
-import type { StoredMessage } from '@langchain/core/messages';
+
+type DbBigint = string | number;
 
 export interface AgentSessionRow {
   id: string;
   title: string | null;
   status: string;
   version: number;
-  created_at_ms: string | number;
-  updated_at_ms: string | number;
+  created_at_ms: DbBigint;
+  updated_at_ms: DbBigint;
+}
+
+export interface AgentTaskRow {
+  id: string;
+  session_id: string;
+  goal_message_id: string;
+  retry_of_task_id: string | null;
+  client_request_id: string | null;
+  status: string;
+  error_code: string | null;
+  error_message: string | null;
+  error_details: unknown;
+  version: number;
+  metadata: unknown;
+  created_at_ms: DbBigint;
+  updated_at_ms: DbBigint;
+  started_at_ms: DbBigint | null;
+  completed_at_ms: DbBigint | null;
+}
+
+export interface AgentTaskRunRow {
+  id: string;
+  task_id: string;
+  run_no: number;
+  trigger: string;
+  status: string;
+  owner_id: string | null;
+  ownership_expires_at_ms: DbBigint | null;
+  error_code: string | null;
+  error_message: string | null;
+  error_details: unknown;
+  metadata: unknown;
+  started_at_ms: DbBigint;
+  updated_at_ms: DbBigint;
+  ended_at_ms: DbBigint | null;
+}
+
+export interface AgentMessageRow {
+  row_id: DbBigint;
+  id: string;
+  session_id: string;
+  task_id: string;
+  task_run_id: string | null;
+  output_id: string | null;
+  role: string;
+  message_type: string;
+  context_scope: string;
+  visibility: string;
+  channel: string | null;
+  content: string;
+  tool_calls: unknown;
+  model_tool_call_id: string | null;
+  tool_name: string | null;
+  tool_result: unknown;
+  metadata: unknown;
+  created_at_ms: DbBigint;
+}
+
+export interface AgentTaskCheckpointRow {
+  id: string;
+  session_id: string;
+  task_id: string;
+  task_run_id: string;
+  sequence_no: number;
+  phase: string;
+  call_message_id: string | null;
+  iteration_no: number;
+  executed_tool_calls: number;
+  metadata: unknown;
+  created_at_ms: DbBigint;
+}
+
+export interface AgentToolCallRow {
+  id: string;
+  session_id: string;
+  task_id: string;
+  created_in_task_run_id: string;
+  call_message_id: string;
+  result_message_id: string | null;
+  model_tool_call_id: string;
+  tool_name: string;
+  arguments: unknown;
+  arguments_checksum: string;
+  side_effect_level: string;
+  idempotency_key: string;
+  status: string;
+  error_code: string | null;
+  error_message: string | null;
+  error_details: unknown;
+  version: number;
+  metadata: unknown;
+  created_at_ms: DbBigint;
+  started_at_ms: DbBigint | null;
+  completed_at_ms: DbBigint | null;
+  updated_at_ms: DbBigint;
+}
+
+export interface AgentToolRunRow {
+  id: string;
+  tool_call_id: string;
+  task_id: string;
+  task_run_id: string;
+  run_no: number;
+  worker_id: string;
+  status: string;
+  error_code: string | null;
+  error_message: string | null;
+  error_details: unknown;
+  started_at_ms: DbBigint;
+  ended_at_ms: DbBigint | null;
+  duration_ms: DbBigint | null;
+}
+
+export interface AgentActivePlanRow {
+  session_id: string;
+  task_id: string;
+  title: string;
+  steps: unknown;
+  version: number;
+  created_at_ms: DbBigint;
+  updated_at_ms: DbBigint;
 }
 
 export interface AgentArtifactRow {
   id: string;
   session_id: string;
-  job_id: string;
-  plan_id: string | null;
-  plan_step_id: string | null;
-  tool_invocation_id: string;
+  task_id: string;
+  tool_call_id: string;
+  tool_run_id: string;
   result_message_id: string;
   kind: string;
   area: string;
@@ -66,190 +186,46 @@ export interface AgentArtifactRow {
   logical_path: string;
   storage_path: string;
   media_type: string;
-  size: string | number;
+  size_bytes: DbBigint;
   checksum: string;
   revision: number;
   metadata: unknown;
-  created_at_ms: string | number;
-}
-
-export interface AgentJobRow {
-  id: string;
-  session_id: string;
-  retry_of_job_id: string | null;
-  client_request_id: string | null;
-  status: string;
-  current_attempt_id: string | null;
-  attempt_no: number;
-  lease_owner: string | null;
-  lease_expires_at_ms: string | number | null;
-  error_code: string | null;
-  error_message: string | null;
-  error_details: unknown;
-  version: number;
-  metadata: unknown;
-  created_at_ms: string | number;
-  updated_at_ms: string | number;
-  started_at_ms: string | number | null;
-  completed_at_ms: string | number | null;
-}
-
-export interface AgentMessageRow {
-  row_id: string | number;
-  id: string;
-  session_id: string;
-  job_id: string;
-  plan_id: string | null;
-  plan_step_id: string | null;
-  attempt_id: string | null;
-  output_id: string | null;
-  role: string;
-  message_type: string;
-  visibility: string;
-  channel: string | null;
-  content: string;
-  tool_calls: unknown;
-  tool_call_id: string | null;
-  tool_name: string | null;
-  tool_result: unknown;
-  metadata: unknown;
-  created_at_ms: string | number;
-}
-
-export interface AgentToolInvocationRow {
-  id: string;
-  session_id: string;
-  job_id: string;
-  plan_id: string | null;
-  plan_step_id: string | null;
-  attempt_id: string;
-  call_message_id: string;
-  result_message_id: string | null;
-  tool_call_id: string;
-  tool_name: string;
-  arguments: unknown;
-  arguments_checksum: string;
-  side_effect_level: string;
-  idempotency_key: string;
-  status: string;
-  execution_attempt_no: number;
-  result_payload: unknown;
-  error_code: string | null;
-  error_message: string | null;
-  error_details: unknown;
-  version: number;
-  metadata: unknown;
-  created_at_ms: string | number;
-  started_at_ms: string | number | null;
-  completed_at_ms: string | number | null;
-  updated_at_ms: string | number;
-}
-
-export interface AgentLoopCheckpointRow {
-  id: string;
-  session_id: string;
-  job_id: string;
-  attempt_id: string;
-  sequence_no: number;
-  phase: AgentLoopCheckpointPhase;
-  call_message_id: string | null;
-  iteration_no: number;
-  executed_tool_calls: number;
-  metadata: unknown;
-  created_at_ms: string | number;
+  created_at_ms: DbBigint;
 }
 
 export interface AgentUserInputRequestRow {
   id: string;
   session_id: string;
-  job_id: string;
-  plan_id: string | null;
-  plan_step_id: string | null;
-  tool_invocation_id: string | null;
-  source: string;
-  answer_mode: string;
+  task_id: string;
+  tool_call_id: string;
   status: string;
   title: string | null;
   prompt: string;
   input_schema: unknown;
-  answer: unknown;
   answer_message_id: string | null;
   client_answer_id: string | null;
+  expires_at_ms: DbBigint | null;
   version: number;
   metadata: unknown;
-  created_at_ms: string | number;
-  updated_at_ms: string | number;
-  answered_at_ms: string | number | null;
+  created_at_ms: DbBigint;
+  updated_at_ms: DbBigint;
+  answered_at_ms: DbBigint | null;
 }
 
-export interface AgentPlanRow {
-  id: string;
+export interface AgentContextCompactionRow {
   session_id: string;
-  job_id: string;
-  title: string;
-  goal: string;
-  status: string;
-  version: number;
-  metadata: unknown;
-  created_at_ms: string | number;
-  updated_at_ms: string | number;
-  completed_at_ms: string | number | null;
-}
-
-export interface AgentPlanStepRow {
-  id: string;
-  plan_id: string;
-  key: string;
-  position: number;
-  title: string;
-  description: string | null;
-  status: string;
-  result: unknown;
-  error_code: string | null;
-  error_message: string | null;
-  error_details: unknown;
-  version: number;
-  metadata: unknown;
-  created_at_ms: string | number;
-  updated_at_ms: string | number;
-  completed_at_ms: string | number | null;
-}
-
-export interface AgentContextSummaryRow {
-  id: string;
-  session_id: string;
-  job_id: string | null;
-  owner_type: string;
-  owner_id: string;
-  purpose: string;
-  context_rules_version: string;
-  summary_type: string;
-  status: string;
-  source_row_id_start: string | number;
-  source_row_id_end: string | number;
-  parent_summary_id: string | null;
-  replaces_summary_id: string | null;
+  through_message_row_id: DbBigint;
   summary: string;
-  summary_format: string;
-  source_message_count: number;
-  source_token_count: number | null;
-  summary_token_count: number | null;
-  model: string | null;
-  compression_prompt_version: string;
-  checksum: string;
   version: number;
-  metadata: unknown;
-  created_at_ms: string | number;
-  updated_at_ms: string | number;
+  updated_at_ms: DbBigint;
 }
 
 export interface AgentModelCallRow {
   id: string;
   session_id: string;
-  job_id: string;
-  attempt_id: string;
+  task_id: string;
+  task_run_id: string;
   logical_call_key: string;
-  call_attempt_no: number;
   call_type: string;
   status: string;
   provider: string;
@@ -277,26 +253,26 @@ export interface AgentModelCallRow {
   error_message: string | null;
   error_details: unknown;
   metadata: unknown;
-  created_at_ms: string | number;
-  completed_at_ms: string | number | null;
+  created_at_ms: DbBigint;
+  completed_at_ms: DbBigint | null;
 }
 
 export interface AgentModelUsageStatsRow {
   session_id: string;
   total_model_calls: number;
-  total_estimated_input_tokens: string | number;
-  total_actual_input_tokens: string | number;
-  total_actual_output_tokens: string | number;
-  total_cache_read_input_tokens: string | number;
-  total_cache_write_input_tokens: string | number;
-  total_tokens: string | number;
+  total_estimated_input_tokens: DbBigint;
+  total_actual_input_tokens: DbBigint;
+  total_actual_output_tokens: DbBigint;
+  total_cache_read_input_tokens: DbBigint;
+  total_cache_write_input_tokens: DbBigint;
+  total_tokens: DbBigint;
   latest_model_call_id: string | null;
   latest_model: string | null;
   latest_context_usage_ratio: number | null;
   max_context_tokens: number | null;
   warning_level: string;
   version: number;
-  updated_at_ms: string | number;
+  updated_at_ms: DbBigint;
 }
 
 export function mapAgentSessionRow(row: AgentSessionRow): AgentSession {
@@ -310,62 +286,42 @@ export function mapAgentSessionRow(row: AgentSessionRow): AgentSession {
   };
 }
 
-export function mapAgentArtifactRow(row: AgentArtifactRow): AgentArtifact {
+export function mapAgentTaskRow(row: AgentTaskRow): AgentTask {
   return {
     id: row.id,
     sessionId: row.session_id,
-    jobId: row.job_id,
-    ...(row.plan_id === null ? {} : { planId: row.plan_id }),
-    ...(row.plan_step_id === null ? {} : { planStepId: row.plan_step_id }),
-    toolInvocationId: row.tool_invocation_id,
-    resultMessageId: row.result_message_id,
-    kind: row.kind as AgentArtifactKind,
-    area: row.area as AgentArtifactArea,
-    title: row.title,
-    fileName: row.file_name,
-    logicalPath: row.logical_path,
-    storagePath: row.storage_path,
-    mediaType: row.media_type,
-    size: mapBigint(row.size, 'agent_artifacts.size'),
-    checksum: row.checksum,
-    revision: row.revision,
-    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_artifacts.metadata') }),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_artifacts.created_at_ms'),
+    goalMessageId: row.goal_message_id,
+    ...(row.retry_of_task_id === null ? {} : { retryOfTaskId: row.retry_of_task_id }),
+    ...(row.client_request_id === null ? {} : { clientRequestId: row.client_request_id }),
+    status: row.status as AgentTaskStatus,
+    ...mapExecutionError(row),
+    version: row.version,
+    ...mapMetadata(row.metadata, 'agent_tasks.metadata'),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_tasks.created_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_tasks.updated_at_ms'),
+    ...mapOptionalBigint('startedAtMs', row.started_at_ms, 'agent_tasks.started_at_ms'),
+    ...mapOptionalBigint('completedAtMs', row.completed_at_ms, 'agent_tasks.completed_at_ms'),
   };
 }
 
-export function mapAgentJobRow(row: AgentJobRow): AgentJob {
+export function mapAgentTaskRunRow(row: AgentTaskRunRow): AgentTaskRun {
   return {
     id: row.id,
-    sessionId: row.session_id,
-    ...(row.retry_of_job_id === null ? {} : { retryOfJobId: row.retry_of_job_id }),
-    ...(row.client_request_id === null ? {} : { clientRequestId: row.client_request_id }),
-    status: row.status as AgentJobStatus,
-    ...(row.current_attempt_id === null ? {} : { currentAttemptId: row.current_attempt_id }),
-    attemptNo: row.attempt_no,
-    ...(row.lease_owner === null ? {} : { leaseOwner: row.lease_owner }),
-    ...(row.lease_expires_at_ms === null
-      ? {}
-      : { leaseExpiresAtMs: mapBigint(row.lease_expires_at_ms, 'agent_jobs.lease_expires_at_ms') }),
-    ...(row.error_code === null || row.error_message === null
-      ? {}
-      : {
-          error: {
-            code: row.error_code,
-            message: row.error_message,
-            ...(row.error_details === null ? {} : { details: row.error_details }),
-          },
-        }),
-    version: row.version,
-    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_jobs.metadata') }),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_jobs.created_at_ms'),
-    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_jobs.updated_at_ms'),
-    ...(row.started_at_ms === null
-      ? {}
-      : { startedAtMs: mapBigint(row.started_at_ms, 'agent_jobs.started_at_ms') }),
-    ...(row.completed_at_ms === null
-      ? {}
-      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_jobs.completed_at_ms') }),
+    taskId: row.task_id,
+    runNo: row.run_no,
+    trigger: row.trigger as AgentTaskRunTrigger,
+    status: row.status as AgentTaskRunStatus,
+    ...(row.owner_id === null ? {} : { ownerId: row.owner_id }),
+    ...mapOptionalBigint(
+      'ownershipExpiresAtMs',
+      row.ownership_expires_at_ms,
+      'agent_task_runs.ownership_expires_at_ms'
+    ),
+    ...mapExecutionError(row),
+    ...mapMetadata(row.metadata, 'agent_task_runs.metadata'),
+    startedAtMs: mapBigint(row.started_at_ms, 'agent_task_runs.started_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_task_runs.updated_at_ms'),
+    ...mapOptionalBigint('endedAtMs', row.ended_at_ms, 'agent_task_runs.ended_at_ms'),
   };
 }
 
@@ -374,201 +330,152 @@ export function mapAgentMessageRow(row: AgentMessageRow): AgentMessage {
     rowId: mapBigint(row.row_id, 'agent_messages.row_id'),
     id: row.id,
     sessionId: row.session_id,
-    jobId: row.job_id,
-    ...(row.plan_id === null ? {} : { planId: row.plan_id }),
-    ...(row.plan_step_id === null ? {} : { planStepId: row.plan_step_id }),
-    ...(row.attempt_id === null ? {} : { attemptId: row.attempt_id }),
+    taskId: row.task_id,
+    ...(row.task_run_id === null ? {} : { taskRunId: row.task_run_id }),
     ...(row.output_id === null ? {} : { outputId: row.output_id }),
     role: row.role as AgentMessageRole,
     messageType: row.message_type as AgentMessageType,
+    contextScope: row.context_scope as AgentMessageContextScope,
     visibility: row.visibility as AgentMessageVisibility,
     ...(row.channel === null ? {} : { channel: row.channel as AgentMessageChannel }),
     content: row.content,
-    ...(row.tool_calls === null ? {} : { toolCalls: row.tool_calls as AgentToolCall[] }),
-    ...(row.tool_call_id === null ? {} : { toolCallId: row.tool_call_id }),
+    ...(row.tool_calls === null
+      ? {}
+      : { toolCalls: mapArray(row.tool_calls, 'agent_messages.tool_calls') as AgentMessageToolCall[] }),
+    ...(row.model_tool_call_id === null ? {} : { modelToolCallId: row.model_tool_call_id }),
     ...(row.tool_name === null ? {} : { toolName: row.tool_name }),
     ...(row.tool_result === null ? {} : { toolResult: row.tool_result as AgentToolResult }),
-    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_messages.metadata') }),
+    ...mapMetadata(row.metadata, 'agent_messages.metadata'),
     createdAtMs: mapBigint(row.created_at_ms, 'agent_messages.created_at_ms'),
   };
 }
 
-export function mapAgentToolInvocationRow(
-  row: AgentToolInvocationRow
-): AgentToolInvocation {
+export function mapAgentTaskCheckpointRow(row: AgentTaskCheckpointRow): AgentTaskCheckpoint {
   return {
     id: row.id,
     sessionId: row.session_id,
-    jobId: row.job_id,
-    ...(row.plan_id === null ? {} : { planId: row.plan_id }),
-    ...(row.plan_step_id === null ? {} : { planStepId: row.plan_step_id }),
-    attemptId: row.attempt_id,
-    callMessageId: row.call_message_id,
-    ...(row.result_message_id === null ? {} : { resultMessageId: row.result_message_id }),
-    toolCallId: row.tool_call_id,
-    toolName: row.tool_name,
-    arguments: mapRecord(row.arguments, 'agent_tool_invocations.arguments'),
-    argumentsChecksum: row.arguments_checksum,
-    sideEffectLevel: row.side_effect_level as AgentToolSideEffectLevel,
-    idempotencyKey: row.idempotency_key,
-    status: row.status as AgentToolInvocationStatus,
-    executionAttemptNo: row.execution_attempt_no,
-    ...(row.result_payload === null ? {} : { resultPayload: row.result_payload }),
-    ...(row.error_code === null || row.error_message === null
-      ? {}
-      : {
-          error: {
-            code: row.error_code,
-            message: row.error_message,
-            ...(row.error_details === null ? {} : { details: row.error_details }),
-          },
-        }),
-    version: row.version,
-    ...(row.metadata === null
-      ? {}
-      : { metadata: mapRecord(row.metadata, 'agent_tool_invocations.metadata') }),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_tool_invocations.created_at_ms'),
-    ...(row.started_at_ms === null
-      ? {}
-      : { startedAtMs: mapBigint(row.started_at_ms, 'agent_tool_invocations.started_at_ms') }),
-    ...(row.completed_at_ms === null
-      ? {}
-      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_tool_invocations.completed_at_ms') }),
-    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_tool_invocations.updated_at_ms'),
-  };
-}
-
-export function mapAgentLoopCheckpointRow(
-  row: AgentLoopCheckpointRow
-): AgentLoopCheckpoint {
-  return {
-    id: row.id,
-    sessionId: row.session_id,
-    jobId: row.job_id,
-    attemptId: row.attempt_id,
+    taskId: row.task_id,
+    taskRunId: row.task_run_id,
     sequenceNo: row.sequence_no,
-    phase: row.phase as AgentLoopCheckpointPhase,
+    phase: row.phase as AgentTaskCheckpointPhase,
     ...(row.call_message_id === null ? {} : { callMessageId: row.call_message_id }),
     iterationNo: row.iteration_no,
     executedToolCalls: row.executed_tool_calls,
-    ...(row.metadata === null
-      ? {}
-      : { metadata: mapRecord(row.metadata, 'agent_loop_checkpoints.metadata') }),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_loop_checkpoints.created_at_ms'),
+    ...mapMetadata(row.metadata, 'agent_task_checkpoints.metadata'),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_task_checkpoints.created_at_ms'),
   };
 }
 
-export function mapAgentUserInputRequestRow(
-  row: AgentUserInputRequestRow
-): AgentUserInputRequest {
+export function mapAgentToolCallRow(row: AgentToolCallRow): AgentToolCall {
   return {
     id: row.id,
     sessionId: row.session_id,
-    jobId: row.job_id,
-    ...(row.plan_id === null ? {} : { planId: row.plan_id }),
-    ...(row.plan_step_id === null ? {} : { planStepId: row.plan_step_id }),
-    ...(row.tool_invocation_id === null ? {} : { toolInvocationId: row.tool_invocation_id }),
-    source: row.source as AgentUserInputSource,
-    answerMode: row.answer_mode as AgentUserInputAnswerMode,
+    taskId: row.task_id,
+    createdInTaskRunId: row.created_in_task_run_id,
+    callMessageId: row.call_message_id,
+    ...(row.result_message_id === null ? {} : { resultMessageId: row.result_message_id }),
+    modelToolCallId: row.model_tool_call_id,
+    toolName: row.tool_name,
+    arguments: mapRecord(row.arguments, 'agent_tool_calls.arguments'),
+    argumentsChecksum: row.arguments_checksum,
+    sideEffectLevel: row.side_effect_level as AgentToolSideEffectLevel,
+    idempotencyKey: row.idempotency_key,
+    status: row.status as AgentToolCallStatus,
+    ...mapExecutionError(row),
+    version: row.version,
+    ...mapMetadata(row.metadata, 'agent_tool_calls.metadata'),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_tool_calls.created_at_ms'),
+    ...mapOptionalBigint('startedAtMs', row.started_at_ms, 'agent_tool_calls.started_at_ms'),
+    ...mapOptionalBigint('completedAtMs', row.completed_at_ms, 'agent_tool_calls.completed_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_tool_calls.updated_at_ms'),
+  };
+}
+
+export function mapAgentToolRunRow(row: AgentToolRunRow): AgentToolRun {
+  return {
+    id: row.id,
+    toolCallId: row.tool_call_id,
+    taskId: row.task_id,
+    taskRunId: row.task_run_id,
+    runNo: row.run_no,
+    workerId: row.worker_id,
+    status: row.status as AgentToolRunStatus,
+    ...mapExecutionError(row),
+    startedAtMs: mapBigint(row.started_at_ms, 'agent_tool_runs.started_at_ms'),
+    ...mapOptionalBigint('endedAtMs', row.ended_at_ms, 'agent_tool_runs.ended_at_ms'),
+    ...mapOptionalBigint('durationMs', row.duration_ms, 'agent_tool_runs.duration_ms'),
+  };
+}
+
+export function mapAgentActivePlanRow(row: AgentActivePlanRow): AgentActivePlan {
+  return {
+    sessionId: row.session_id,
+    taskId: row.task_id,
+    title: row.title,
+    steps: mapArray(row.steps, 'agent_active_plans.steps') as AgentPlanStep[],
+    version: row.version,
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_active_plans.created_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_active_plans.updated_at_ms'),
+  };
+}
+
+export function mapAgentArtifactRow(row: AgentArtifactRow): AgentArtifact {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    taskId: row.task_id,
+    toolCallId: row.tool_call_id,
+    toolRunId: row.tool_run_id,
+    resultMessageId: row.result_message_id,
+    kind: row.kind as AgentArtifactKind,
+    area: row.area as AgentArtifactArea,
+    title: row.title,
+    fileName: row.file_name,
+    logicalPath: row.logical_path,
+    storagePath: row.storage_path,
+    mediaType: row.media_type,
+    size: mapBigint(row.size_bytes, 'agent_artifacts.size_bytes'),
+    checksum: row.checksum,
+    revision: row.revision,
+    ...mapMetadata(row.metadata, 'agent_artifacts.metadata'),
+    createdAtMs: mapBigint(row.created_at_ms, 'agent_artifacts.created_at_ms'),
+  };
+}
+
+export function mapAgentUserInputRequestRow(row: AgentUserInputRequestRow): AgentUserInputRequest {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    taskId: row.task_id,
+    toolCallId: row.tool_call_id,
     status: row.status as AgentUserInputStatus,
     ...(row.title === null ? {} : { title: row.title }),
     prompt: row.prompt,
-    inputSchema: mapRecord(row.input_schema, 'agent_user_input_requests.input_schema') as AgentUserInputSchema,
-    ...(row.answer === null ? {} : { answer: row.answer }),
+    inputSchema: mapRecord(
+      row.input_schema,
+      'agent_user_input_requests.input_schema'
+    ) as AgentUserInputSchema,
     ...(row.answer_message_id === null ? {} : { answerMessageId: row.answer_message_id }),
     ...(row.client_answer_id === null ? {} : { clientAnswerId: row.client_answer_id }),
+    ...mapOptionalBigint('expiresAtMs', row.expires_at_ms, 'agent_user_input_requests.expires_at_ms'),
     version: row.version,
-    ...(row.metadata === null
-      ? {}
-      : { metadata: mapRecord(row.metadata, 'agent_user_input_requests.metadata') }),
+    ...mapMetadata(row.metadata, 'agent_user_input_requests.metadata'),
     createdAtMs: mapBigint(row.created_at_ms, 'agent_user_input_requests.created_at_ms'),
     updatedAtMs: mapBigint(row.updated_at_ms, 'agent_user_input_requests.updated_at_ms'),
-    ...(row.answered_at_ms === null
-      ? {}
-      : { answeredAtMs: mapBigint(row.answered_at_ms, 'agent_user_input_requests.answered_at_ms') }),
+    ...mapOptionalBigint('answeredAtMs', row.answered_at_ms, 'agent_user_input_requests.answered_at_ms'),
   };
 }
 
-export function mapAgentPlanRow(row: AgentPlanRow): AgentPlan {
+export function mapAgentContextCompactionRow(row: AgentContextCompactionRow): AgentContextCompaction {
   return {
-    id: row.id,
     sessionId: row.session_id,
-    jobId: row.job_id,
-    title: row.title,
-    goal: row.goal,
-    status: row.status as AgentPlanStatus,
-    version: row.version,
-    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_plans.metadata') }),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_plans.created_at_ms'),
-    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_plans.updated_at_ms'),
-    ...(row.completed_at_ms === null
-      ? {}
-      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_plans.completed_at_ms') }),
-  };
-}
-
-export function mapAgentPlanStepRow(row: AgentPlanStepRow): AgentPlanStep {
-  return {
-    id: row.id,
-    planId: row.plan_id,
-    key: row.key,
-    position: row.position,
-    title: row.title,
-    ...(row.description === null ? {} : { description: row.description }),
-    status: row.status as AgentPlanStepStatus,
-    ...(row.result === null ? {} : {
-      result: mapRecord(row.result, 'agent_plan_steps.result'),
-    }),
-    ...(row.error_code === null || row.error_message === null
-      ? {}
-      : {
-          error: {
-            code: row.error_code,
-            message: row.error_message,
-            ...(row.error_details === null ? {} : { details: row.error_details }),
-          },
-        }),
-    version: row.version,
-    ...(row.metadata === null
-      ? {}
-      : { metadata: mapRecord(row.metadata, 'agent_plan_steps.metadata') }),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_plan_steps.created_at_ms'),
-    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_plan_steps.updated_at_ms'),
-    ...(row.completed_at_ms === null
-      ? {}
-      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_plan_steps.completed_at_ms') }),
-  };
-}
-
-export function mapAgentContextSummaryRow(row: AgentContextSummaryRow): AgentContextSummary {
-  return {
-    id: row.id,
-    sessionId: row.session_id,
-    ...(row.job_id === null ? {} : { jobId: row.job_id }),
-    ownerType: row.owner_type as AgentContextOwnerType,
-    ownerId: row.owner_id,
-    purpose: row.purpose as AgentContextPurpose,
-    contextRulesVersion: row.context_rules_version,
-    summaryType: row.summary_type as AgentContextSummaryType,
-    status: row.status as AgentContextSummaryStatus,
-    sourceRowIdStart: mapBigint(row.source_row_id_start, 'agent_context_summaries.source_row_id_start'),
-    sourceRowIdEnd: mapBigint(row.source_row_id_end, 'agent_context_summaries.source_row_id_end'),
-    ...(row.parent_summary_id === null ? {} : { parentSummaryId: row.parent_summary_id }),
-    ...(row.replaces_summary_id === null ? {} : { replacesSummaryId: row.replaces_summary_id }),
+    throughMessageRowId: mapBigint(
+      row.through_message_row_id,
+      'agent_context_compactions.through_message_row_id'
+    ),
     summary: row.summary,
-    summaryFormat: row.summary_format as 'markdown' | 'json',
-    sourceMessageCount: row.source_message_count,
-    ...(row.source_token_count === null ? {} : { sourceTokenCount: row.source_token_count }),
-    ...(row.summary_token_count === null ? {} : { summaryTokenCount: row.summary_token_count }),
-    ...(row.model === null ? {} : { model: row.model }),
-    compressionPromptVersion: row.compression_prompt_version,
-    checksum: row.checksum,
     version: row.version,
-    ...(row.metadata === null
-      ? {}
-      : { metadata: mapRecord(row.metadata, 'agent_context_summaries.metadata') }),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_context_summaries.created_at_ms'),
-    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_context_summaries.updated_at_ms'),
+    updatedAtMs: mapBigint(row.updated_at_ms, 'agent_context_compactions.updated_at_ms'),
   };
 }
 
@@ -576,16 +483,18 @@ export function mapAgentModelCallRow(row: AgentModelCallRow): AgentModelCall {
   return {
     id: row.id,
     sessionId: row.session_id,
-    jobId: row.job_id,
-    attemptId: row.attempt_id,
+    taskId: row.task_id,
+    taskRunId: row.task_run_id,
     logicalCallKey: row.logical_call_key,
-    callAttemptNo: row.call_attempt_no,
     callType: row.call_type as AgentModelCallType,
     status: row.status as AgentModelCallStatus,
     provider: row.provider,
     model: row.model,
     contextRulesVersion: row.context_rules_version,
-    inputManifest: mapRecord(row.input_manifest, 'agent_model_calls.input_manifest') as unknown as AgentContextInputManifest,
+    inputManifest: mapRecord(
+      row.input_manifest,
+      'agent_model_calls.input_manifest'
+    ) as unknown as AgentContextInputManifest,
     inputMessages: mapArray(row.input_messages, 'agent_model_calls.input_messages') as StoredMessage[],
     inputChecksum: row.input_checksum,
     maxContextTokens: row.max_context_tokens,
@@ -606,15 +515,15 @@ export function mapAgentModelCallRow(row: AgentModelCallRow): AgentModelCall {
       : { outputDispositionReason: row.output_disposition_reason }),
     ...(row.result_type === null ? {} : { resultType: row.result_type }),
     ...(row.result_payload === null ? {} : { resultPayload: row.result_payload }),
-    ...(row.tool_names === null ? {} : { toolNames: row.tool_names as string[] }),
+    ...(row.tool_names === null
+      ? {}
+      : { toolNames: mapArray(row.tool_names, 'agent_model_calls.tool_names') as string[] }),
     ...(row.error_code === null ? {} : { errorCode: row.error_code }),
     ...(row.error_message === null ? {} : { errorMessage: row.error_message }),
     ...(row.error_details === null ? {} : { errorDetails: row.error_details }),
-    ...(row.metadata === null ? {} : { metadata: mapRecord(row.metadata, 'agent_model_calls.metadata') }),
+    ...mapMetadata(row.metadata, 'agent_model_calls.metadata'),
     createdAtMs: mapBigint(row.created_at_ms, 'agent_model_calls.created_at_ms'),
-    ...(row.completed_at_ms === null
-      ? {}
-      : { completedAtMs: mapBigint(row.completed_at_ms, 'agent_model_calls.completed_at_ms') }),
+    ...mapOptionalBigint('completedAtMs', row.completed_at_ms, 'agent_model_calls.completed_at_ms'),
   };
 }
 
@@ -640,7 +549,34 @@ export function mapAgentModelUsageStatsRow(row: AgentModelUsageStatsRow): AgentM
   };
 }
 
-function mapBigint(value: string | number, field: string): number {
+function mapExecutionError(row: {
+  error_code: string | null;
+  error_message: string | null;
+  error_details: unknown;
+}): { error?: { code: string; message: string; details?: unknown } } {
+  if (row.error_code === null || row.error_message === null) return {};
+  return {
+    error: {
+      code: row.error_code,
+      message: row.error_message,
+      ...(row.error_details === null ? {} : { details: row.error_details }),
+    },
+  };
+}
+
+function mapMetadata(value: unknown, field: string): { metadata?: Record<string, unknown> } {
+  return value === null ? {} : { metadata: mapRecord(value, field) };
+}
+
+function mapOptionalBigint<Key extends string>(
+  key: Key,
+  value: DbBigint | null,
+  field: string
+): Partial<Record<Key, number>> {
+  return value === null ? {} : { [key]: mapBigint(value, field) } as Partial<Record<Key, number>>;
+}
+
+function mapBigint(value: DbBigint, field: string): number {
   const mapped = typeof value === 'number' ? value : Number(value);
   if (!Number.isSafeInteger(mapped)) {
     throw new RangeError(`${field} is outside the JavaScript safe integer range.`);

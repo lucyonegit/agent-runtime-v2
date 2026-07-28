@@ -3,6 +3,7 @@ import {
   type StructuredToolInterface,
 } from '@langchain/core/tools';
 import { resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type {
   AgentToolSideEffectLevel,
 } from '../../domain/index.js';
@@ -14,19 +15,20 @@ import {
   type ToolExecutorPort,
 } from '../loop/agent-loop.js';
 import type { AgentStore } from '../../storage/agent-store.js';
+import type { RuntimeEventPublisher } from '../events/runtime-event-writer.js';
 import { mapStoreError } from '../errors/runtime-error.js';
 import { checksumToolArguments } from './helpers/tool-call-identity.helper.js';
-import { ToolInvocationReplay } from './tool-pipeline/tool-invocation-replay.js';
+import { ToolResultLoader } from './tool-pipeline/tool-result-loader.js';
 import { validateToolInput } from './tool-pipeline/tool-input-validator.js';
 import { normalizeToolOutput } from './tool-pipeline/tool-result-normalizer.js';
 
 export interface RuntimeToolContext {
   sessionId: string;
-  jobId: string;
+  taskId: string;
   sandboxRoot: string;
-  attemptId: string;
-  toolInvocationId: string;
+  taskRunId: string;
   toolCallId: string;
+  modelToolCallId: string;
   idempotencyKey: string;
   signal?: AbortSignal;
 }
@@ -34,6 +36,8 @@ export interface RuntimeToolContext {
 export interface RuntimeTool {
   tool: StructuredToolInterface;
   sideEffectLevel: AgentToolSideEffectLevel;
+  /** task is used by temporary control tools such as update_plan. */
+  contextScope?: 'conversation' | 'task';
   exclusive?: boolean;
   /**
    * This tool must be chosen after the model has observed the results from
@@ -76,6 +80,7 @@ export interface ToolExecutorOptions {
   workerId: string;
   tools: RuntimeTool[];
   sandboxRoot?: string;
+  publisher?: RuntimeEventPublisher;
   clock?: { nowMs(): number };
 }
 
@@ -85,7 +90,8 @@ export class ToolExecutor implements ToolExecutorPort {
   readonly #tools: Map<string, RuntimeTool>;
   readonly #sandboxRoot: string;
   readonly #clock: { nowMs(): number };
-  readonly #replay: ToolInvocationReplay;
+  readonly #publisher?: RuntimeEventPublisher;
+  readonly #results: ToolResultLoader;
 
   constructor(options: ToolExecutorOptions) {
     this.#store = options.store;
@@ -96,7 +102,8 @@ export class ToolExecutor implements ToolExecutorPort {
     }
     this.#sandboxRoot = resolve(options.sandboxRoot ?? '.agent-sandbox');
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
-    this.#replay = new ToolInvocationReplay(options.store);
+    this.#publisher = options.publisher;
+    this.#results = new ToolResultLoader(options.store);
   }
 
   tools(): StructuredToolInterface[] {
@@ -106,11 +113,12 @@ export class ToolExecutor implements ToolExecutorPort {
   async execute(request: ToolExecutionRequest): Promise<ToolExecutionResult> {
     let startResult;
     try {
-      startResult = await this.#store.execution.tryStartTool({
-        jobId: request.target.jobId,
-        toolCallId: request.call.id,
+      startResult = await this.#store.execution.startToolRun({
+        taskId: request.target.taskId,
+        taskRunId: request.target.taskRunId,
+        modelToolCallId: request.call.id,
+        toolRunId: `tool_run_${randomUUID()}`,
         workerId: this.#workerId,
-        attemptId: request.target.attemptId,
         nowMs: this.#clock.nowMs(),
       });
     } catch (error) {
@@ -120,20 +128,32 @@ export class ToolExecutor implements ToolExecutorPort {
       });
     }
 
-    if (!startResult.started) return this.#replay.load(startResult.invocation);
-    const invocation = startResult.invocation;
+    if (!startResult.started) return this.#results.load(startResult.toolCall);
+    const toolCall = startResult.toolCall;
+    await this.#publish({
+      type: 'tool_call.upserted',
+      sessionId: toolCall.sessionId,
+      toolCall,
+    });
+    if (startResult.toolRun) {
+      await this.#publish({
+        type: 'tool_run.upserted',
+        sessionId: toolCall.sessionId,
+        toolRun: startResult.toolRun,
+      });
+    }
     const runtimeTool = this.#tools.get(request.call.name);
     if (!runtimeTool) {
       return { type: 'failed', code: 'tool_not_found', message: `Tool not found: ${request.call.name}` };
     }
     if (
-      invocation.toolName !== request.call.name
-      || invocation.argumentsChecksum !== checksumToolArguments(request.call.args)
-      || invocation.sideEffectLevel !== runtimeTool.sideEffectLevel
+      toolCall.toolName !== request.call.name
+      || toolCall.argumentsChecksum !== checksumToolArguments(request.call.args)
+      || toolCall.sideEffectLevel !== runtimeTool.sideEffectLevel
     ) {
       throw new FatalToolExecutionError(
         'storage_error',
-        `Started ToolInvocation ${JSON.stringify(invocation.id)} does not match the runtime tool contract.`
+        `Started ToolCall ${JSON.stringify(toolCall.id)} does not match the runtime tool contract.`
       );
     }
     const argumentLimitFailure = validateToolInput(
@@ -144,12 +164,12 @@ export class ToolExecutor implements ToolExecutorPort {
 
     const context: RuntimeToolContext = {
       sessionId: request.target.sessionId,
-      jobId: request.target.jobId,
+      taskId: request.target.taskId,
       sandboxRoot: this.#sandboxRoot,
-      attemptId: request.target.attemptId,
-      toolInvocationId: invocation.id,
-      toolCallId: invocation.toolCallId,
-      idempotencyKey: invocation.idempotencyKey,
+      taskRunId: request.target.taskRunId,
+      toolCallId: toolCall.id,
+      modelToolCallId: toolCall.modelToolCallId,
+      idempotencyKey: toolCall.idempotencyKey,
       signal: request.signal,
     };
     try {
@@ -176,6 +196,10 @@ export class ToolExecutor implements ToolExecutorPort {
           : {}),
       };
     }
+  }
+
+  async #publish(event: Parameters<RuntimeEventPublisher['publish']>[0]): Promise<void> {
+    try { await this.#publisher?.publish(event); } catch { /* SessionView is authoritative. */ }
   }
 
 }

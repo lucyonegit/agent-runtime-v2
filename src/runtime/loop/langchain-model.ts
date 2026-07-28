@@ -6,21 +6,21 @@ import type {
   UsageMetadata,
 } from '@langchain/core/messages';
 import type { Runnable } from '@langchain/core/runnables';
-import type { AgentToolCall } from '../../domain/index.js';
+import type { AgentMessageToolCall } from '../../domain/index.js';
 import type { LoopFailureCode } from './loop-result.js';
 
 export type LangChainChatRunnable = Runnable<BaseLanguageModelInput, AIMessageChunk>;
 
 export interface LangChainToolCallError {
   code: Extract<LoopFailureCode, 'invalid_tool_arguments' | 'model_error'>;
-  call: AgentToolCall;
+  call: AgentMessageToolCall;
   message: string;
   details: { index: number; reason: string };
 }
 
 export interface LangChainModelTurn {
   content: string;
-  toolCalls: AgentToolCall[];
+  toolCalls: AgentMessageToolCall[];
   errors: LangChainToolCallError[];
   usage?: UsageMetadata;
   finishReason?: string;
@@ -53,7 +53,7 @@ function finishReason(metadata: Record<string, unknown>): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
 }
 
-function requireToolCallId(call: ToolCall, fallbackId: string): AgentToolCall {
+function requireToolCallId(call: ToolCall, fallbackId: string): AgentMessageToolCall {
   return {
     type: 'tool_call',
     id: call.id ?? fallbackId,
@@ -67,7 +67,7 @@ function invalidToolCallError(
   index: number,
   fallbackId: string
 ): LangChainToolCallError {
-  const normalized: AgentToolCall = {
+  const normalized: AgentMessageToolCall = {
     type: 'tool_call',
     id: call.id ?? fallbackId,
     name: call.name ?? `invalid_tool_${index}`,

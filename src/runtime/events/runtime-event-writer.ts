@@ -1,12 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentJob, AgentMessage, AgentRealtimeEvent } from '../../domain/index.js';
-import {
-  LOOP_EVENT_TYPES,
-  type LoopEvent,
-} from '../loop/loop-events.js';
+import type { AgentMessage, AgentRealtimeEvent, AgentTask } from '../../domain/index.js';
+import { LOOP_EVENT_TYPES, type LoopEvent } from '../loop/loop-events.js';
 import type { RuntimeTool } from '../execution/tool-executor.js';
 import type { AgentLoopTarget } from '../loop/agent-loop.js';
-import type { AgentStore } from '../../storage/agent-store.js';
+import type { AgentStore, FinishTaskResult } from '../../storage/agent-store.js';
 import { mapStoreError } from '../errors/runtime-error.js';
 import { LoopEventHandler } from './handlers/loop-event.handler.js';
 
@@ -19,14 +16,14 @@ export interface RuntimeEventPublisher {
 export interface RuntimeEventWriterIds {
   eventId(): string;
   messageId(): string;
-  toolInvocationId(): string;
+  toolCallId(): string;
   artifactId?(): string;
   userInputRequestId(): string;
 }
 
 export interface RuntimeEventWriterOptions {
   store: AgentStore;
-  workerId: string;
+  ownerId: string;
   tools: RuntimeTool[];
   publisher?: RuntimeEventPublisher;
   ids?: RuntimeEventWriterIds;
@@ -40,75 +37,59 @@ export type RuntimeEventRecordResult =
   | { type: 'discarded_output' }
   | { type: 'committed_tool_calls'; message: AgentMessage }
   | { type: 'committed_tool_result'; message: AgentMessage }
-  | { type: 'final_candidate'; event: Extract<LoopEvent, {
-      type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted;
-    }> }
-  | { type: 'input_required'; event: Extract<LoopEvent, {
-      type: typeof LOOP_EVENT_TYPES.ToolInputRequired;
-    }> };
+  | { type: 'final_candidate'; event: Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted }> }
+  | { type: 'input_required'; event: Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ToolInputRequired }> };
 
 export class RuntimeEventWriter {
-  readonly #store: AgentStore;
-  readonly #workerId: string;
-  readonly #publisher?: RuntimeEventPublisher;
   readonly #ids: RuntimeEventWriterIds;
   readonly #clock: { nowMs(): number };
-  readonly #onPublishError?: (error: unknown, event: AgentRealtimeEvent) => void;
   readonly #messageIdsByOutput = new Map<string, string>();
-  readonly #loopEventHandler: LoopEventHandler;
+  readonly #handler: LoopEventHandler;
 
-  constructor(options: RuntimeEventWriterOptions) {
-    this.#store = options.store;
-    this.#workerId = options.workerId;
-    this.#publisher = options.publisher;
+  constructor(private readonly options: RuntimeEventWriterOptions) {
     this.#ids = options.ids ?? randomWriterIds;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
-    this.#onPublishError = options.onPublishError;
-    this.#loopEventHandler = new LoopEventHandler({
-      store: this.#store,
-      workerId: this.#workerId,
+    this.#handler = new LoopEventHandler({
+      store: options.store,
+      ownerId: options.ownerId,
       tools: options.tools,
       ids: this.#ids,
       clock: this.#clock,
       requireModelCallAudit: options.requireModelCallAudit ?? false,
-      messageId: (jobId, outputId) => this.#messageId(jobId, outputId),
+      messageId: (taskId, outputId) => this.#messageId(taskId, outputId),
       publish: event => this.#publish(event),
     });
   }
 
-  async record(event: LoopEvent, target: AgentLoopTarget): Promise<RuntimeEventRecordResult> {
-    return this.#loopEventHandler.record(event, target);
+  record(event: LoopEvent, target: AgentLoopTarget): Promise<RuntimeEventRecordResult> {
+    return this.#handler.record(event, target);
   }
 
   async completeFinal(
     event: Extract<LoopEvent, { type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted }>,
     target: AgentLoopTarget
-  ): Promise<{ job: AgentJob; message: AgentMessage }> {
-    if (event.toolCalls.length > 0) {
-      throw new TypeError('A tool-call model output cannot complete a Job as final.');
-    }
+  ): Promise<{ task: AgentTask; message: AgentMessage }> {
+    if (event.toolCalls.length > 0) throw new TypeError('A tool-call output cannot be final.');
     try {
-      const committed = await this.#store.execution.completeWithFinalMessage({
+      const committed = await this.options.store.execution.completeTask({
         sessionId: target.sessionId,
-        jobId: target.jobId,
-        attemptId: target.attemptId,
-        workerId: this.#workerId,
+        taskId: target.taskId,
+        taskRunId: target.taskRunId,
+        ownerId: this.options.ownerId,
         outputId: event.outputId,
-        messageId: this.#messageId(target.jobId, event.outputId),
+        messageId: this.#messageId(target.taskId, event.outputId),
         content: event.content,
         nowMs: this.#clock.nowMs(),
       });
-      await this.#publish({
-        type: 'message.upserted',
-        sessionId: target.sessionId,
-        message: committed.message,
-      });
-      await this.#publish({
-        type: 'job.upserted',
-        sessionId: target.sessionId,
-        job: committed.job,
-      });
-      return committed;
+      await this.#publish({ type: 'message.upserted', sessionId: target.sessionId, message: committed.message });
+      await this.#publish({ type: 'task.upserted', sessionId: target.sessionId, task: committed.task });
+      if (committed.taskRun) {
+        await this.#publish({ type: 'task_run.upserted', sessionId: target.sessionId, taskRun: committed.taskRun });
+      }
+      if (committed.planCleared) {
+        await this.#publish({ type: 'plan.cleared', sessionId: target.sessionId, taskId: target.taskId });
+      }
+      return { task: committed.task, message: committed.message };
     } catch (error) {
       throw mapStoreError(error);
     }
@@ -120,50 +101,59 @@ export class RuntimeEventWriter {
   ) {
     if (events.length === 0) throw new TypeError('Input waiting requires at least one event.');
     try {
-      const committed = await this.#store.execution.waitForUserInput({
+      const committed = await this.options.store.execution.waitForUserInput({
         sessionId: target.sessionId,
-        jobId: target.jobId,
-        attemptId: target.attemptId,
-        workerId: this.#workerId,
+        taskId: target.taskId,
+        taskRunId: target.taskRunId,
+        ownerId: this.options.ownerId,
         requests: events.map(event => ({
           requestId: this.#ids.userInputRequestId(),
-          toolCallId: event.toolCallId,
-          source: event.request.source,
-          answerMode: event.request.answerMode,
+          modelToolCallId: event.modelToolCallId,
           title: event.request.title,
           prompt: event.request.prompt,
           inputSchema: event.request.inputSchema,
+          ...(event.request.expiresInMs ? {
+            expiresAtMs: this.#clock.nowMs() + event.request.expiresInMs,
+          } : {}),
           ...(event.request.sensitiveAnswer ? { metadata: { sensitiveAnswer: true } } : {}),
         })),
         nowMs: this.#clock.nowMs(),
       });
-      for (const invocation of committed.invocations) {
-        await this.#publish({
-          type: 'tool_invocation.upserted',
-          sessionId: target.sessionId,
-          invocation,
-        });
+      for (const toolCall of committed.toolCalls) {
+        await this.#publish({ type: 'tool_call.upserted', sessionId: target.sessionId, toolCall });
+      }
+      for (const toolRun of committed.toolRuns) {
+        await this.#publish({ type: 'tool_run.upserted', sessionId: target.sessionId, toolRun });
       }
       for (const request of committed.requests) {
-        await this.#publish({
-          type: 'user_input.upserted',
-          sessionId: target.sessionId,
-          request,
-        });
+        await this.#publish({ type: 'user_input.upserted', sessionId: target.sessionId, request });
       }
-      await this.#publish({
-        type: 'job.upserted',
-        sessionId: target.sessionId,
-        job: committed.job,
-      });
+      await this.#publish({ type: 'task_run.upserted', sessionId: target.sessionId, taskRun: committed.taskRun });
+      await this.#publish({ type: 'task.upserted', sessionId: target.sessionId, task: committed.task });
       return committed;
     } catch (error) {
       throw mapStoreError(error);
     }
   }
 
-  #messageId(jobId: string, outputId: string): string {
-    const key = `${jobId}:${outputId}`;
+  async publishTaskFinish(result: FinishTaskResult): Promise<void> {
+    await this.#publish({
+      type: 'task.upserted', sessionId: result.task.sessionId, task: result.task,
+    });
+    if (result.taskRun) {
+      await this.#publish({
+        type: 'task_run.upserted', sessionId: result.task.sessionId, taskRun: result.taskRun,
+      });
+    }
+    if (result.planCleared) {
+      await this.#publish({
+        type: 'plan.cleared', sessionId: result.task.sessionId, taskId: result.task.id,
+      });
+    }
+  }
+
+  #messageId(taskId: string, outputId: string): string {
+    const key = `${taskId}:${outputId}`;
     let messageId = this.#messageIdsByOutput.get(key);
     if (!messageId) {
       messageId = this.#ids.messageId();
@@ -173,15 +163,11 @@ export class RuntimeEventWriter {
   }
 
   async #publish(event: AgentRealtimeEvent): Promise<void> {
-    if (!this.#publisher) return;
+    if (!this.options.publisher) return;
     try {
-      await this.#publisher.publish(event);
+      await this.options.publisher.publish(event);
     } catch (error) {
-      try {
-        this.#onPublishError?.(error, event);
-      } catch {
-        // Publishing is post-commit and must never change the durable outcome.
-      }
+      try { this.options.onPublishError?.(error, event); } catch { /* post-commit only */ }
     }
   }
 }
@@ -189,7 +175,7 @@ export class RuntimeEventWriter {
 const randomWriterIds: RuntimeEventWriterIds = {
   eventId: () => `event_${randomUUID()}`,
   messageId: () => `message_${randomUUID()}`,
-  toolInvocationId: () => `invocation_${randomUUID()}`,
+  toolCallId: () => `tool_call_${randomUUID()}`,
   artifactId: () => `artifact_${randomUUID()}`,
   userInputRequestId: () => `input_${randomUUID()}`,
 };

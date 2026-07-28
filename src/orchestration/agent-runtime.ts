@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { JobManagerPort } from './jobs/job-manager.js';
+import type { TaskManagerPort } from './tasks/task-manager.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { SessionView, type SessionProcessReader } from '../view/session-view.js';
 
 export interface AgentRuntimeOptions {
   store: AgentStore;
-  jobs: JobManagerPort;
+  tasks: TaskManagerPort;
   processReader?: SessionProcessReader;
   removeSessionWorkspace?: (sessionId: string) => Promise<void>;
   beforeDeleteSession?: (sessionId: string) => Promise<void>;
@@ -17,7 +17,7 @@ export interface AgentRuntimeOptions {
 
 export class AgentRuntime {
   readonly #store: AgentStore;
-  readonly #jobs: JobManagerPort;
+  readonly #tasks: TaskManagerPort;
   readonly #removeSessionWorkspace?: (sessionId: string) => Promise<void>;
   readonly #beforeDeleteSession?: (sessionId: string) => Promise<void>;
   readonly #clock: { nowMs(): number };
@@ -26,7 +26,7 @@ export class AgentRuntime {
 
   constructor(options: AgentRuntimeOptions) {
     this.#store = options.store;
-    this.#jobs = options.jobs;
+    this.#tasks = options.tasks;
     this.#removeSessionWorkspace = options.removeSessionWorkspace;
     this.#beforeDeleteSession = options.beforeDeleteSession;
     this.#clock = options.clock ?? { nowMs: () => Date.now() };
@@ -51,11 +51,11 @@ export class AgentRuntime {
   }
 
   async start(): Promise<void> {
-    await this.#jobs.start();
+    await this.#tasks.start();
   }
 
   async stop(): Promise<void> {
-    await this.#jobs.shutdown();
+    await this.#tasks.shutdown();
   }
 
   async deleteSession(sessionId: string) {
@@ -65,32 +65,32 @@ export class AgentRuntime {
     return deleted;
   }
 
-  async createJob(input: {
+  async createTask(input: {
     sessionId: string;
     message: string;
     clientRequestId: string;
   }) {
-    return this.#jobs.createJob(input);
+    return this.#tasks.createTask(input);
   }
 
-  async cancelJob(jobId: string, expectedVersion: number) {
-    return this.#jobs.cancelJob(jobId, expectedVersion);
+  async cancelTask(taskId: string, expectedVersion: number) {
+    return this.#tasks.cancelTask(taskId, expectedVersion);
   }
 
-  async retryJob(input: { failedJobId: string; clientRequestId: string }) {
-    return this.#jobs.retryJob(input);
+  async retryTask(input: { sourceTaskId: string; clientRequestId: string }) {
+    return this.#tasks.retryTask(input);
   }
 
-  async continueAsNewJob(input: {
-    failedJobId: string;
+  async continueAsNewTask(input: {
+    sourceTaskId: string;
     clientRequestId: string;
     message: string;
   }) {
-    return this.#jobs.continueAsNewJob(input);
+    return this.#tasks.continueAsNewTask(input);
   }
 
-  async resumeJob(jobId: string, expectedVersion: number) {
-    return this.#jobs.resumeJob(jobId, expectedVersion);
+  async resumeTask(taskId: string, expectedVersion: number) {
+    return this.#tasks.resumeTask(taskId, expectedVersion);
   }
 
   async answerUserInputRequest(input: {
@@ -99,7 +99,7 @@ export class AgentRuntime {
     clientAnswerId: string;
     answer: unknown;
   }) {
-    return this.#jobs.answerUserInputRequest(input);
+    return this.#tasks.answerUserInputRequest(input);
   }
 }
 

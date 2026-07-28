@@ -12,34 +12,27 @@ export type RuntimeErrorCode =
   | 'tool_not_found'
   | 'tool_failed'
   | 'tool_state_unknown'
-  | 'context_overflow'
-  | 'invalid_job_state'
+  | 'model_input_too_large'
+  | 'invalid_task_state'
   | 'invalid_plan_state'
   | 'idempotency_conflict'
   | 'concurrency_conflict'
-  | 'lease_lost'
+  | 'ownership_lost'
   | 'storage_error';
 
 export class RuntimeError extends Error {
-  readonly code: RuntimeErrorCode;
   readonly retryable: boolean;
-  readonly details?: Record<string, unknown>;
-
   constructor(
-    code: RuntimeErrorCode,
+    readonly code: RuntimeErrorCode,
     message: string,
-    options: {
-      retryable?: boolean;
-      details?: Record<string, unknown>;
-      cause?: unknown;
-    } = {}
+    options: { retryable?: boolean; details?: Record<string, unknown>; cause?: unknown } = {}
   ) {
     super(message, { cause: options.cause });
     this.name = 'RuntimeError';
-    this.code = code;
     this.retryable = options.retryable ?? defaultRetryable(code);
     this.details = options.details;
   }
+  readonly details?: Record<string, unknown>;
 }
 
 export function mapStoreError(error: unknown): RuntimeError {
@@ -50,51 +43,30 @@ export function mapStoreError(error: unknown): RuntimeError {
       cause: error,
     });
   }
-
+  const options = { details: error.details, cause: error };
   switch (error.code) {
     case 'CONCURRENCY_CONFLICT':
-    case 'ACTIVE_JOB_CONFLICT':
-      return new RuntimeError('concurrency_conflict', error.message, {
-        details: error.details,
-        cause: error,
-      });
-    case 'JOB_LEASE_LOST':
-      return new RuntimeError('lease_lost', error.message, {
-        details: error.details,
-        cause: error,
-      });
-    case 'INVALID_JOB_STATE':
-    case 'INVALID_JOB_RETRY':
+    case 'ACTIVE_TASK_CONFLICT':
+      return new RuntimeError('concurrency_conflict', error.message, options);
+    case 'TASK_OWNERSHIP_LOST':
+      return new RuntimeError('ownership_lost', error.message, options);
+    case 'INVALID_TASK_STATE':
+    case 'INVALID_TASK_RETRY':
+    case 'TASK_NOT_FOUND':
+    case 'TASK_RUN_NOT_FOUND':
     case 'INVALID_USER_INPUT_STATE':
     case 'USER_INPUT_REQUEST_NOT_FOUND':
-      return new RuntimeError('invalid_job_state', error.message, {
-        details: error.details,
-        cause: error,
-      });
-    case 'INVALID_PLAN_STATE':
-    case 'PLAN_NOT_FOUND':
-    case 'PLAN_STEP_NOT_FOUND':
-      return new RuntimeError('invalid_plan_state', error.message, {
-        retryable: false,
-        details: error.details,
-        cause: error,
-      });
+      return new RuntimeError('invalid_task_state', error.message, options);
+    case 'ACTIVE_PLAN_NOT_FOUND':
+      return new RuntimeError('invalid_plan_state', error.message, { ...options, retryable: false });
+    case 'CLIENT_REQUEST_CONFLICT':
     case 'USER_INPUT_ANSWER_CONFLICT':
-      return new RuntimeError('idempotency_conflict', error.message, {
-        details: error.details,
-        cause: error,
-      });
+      return new RuntimeError('idempotency_conflict', error.message, options);
     default:
-      return new RuntimeError('storage_error', error.message, {
-        retryable: false,
-        details: error.details,
-        cause: error,
-      });
+      return new RuntimeError('storage_error', error.message, { ...options, retryable: false });
   }
 }
 
 function defaultRetryable(code: RuntimeErrorCode): boolean {
-  return code === 'model_error'
-    || code === 'model_output_truncated'
-    || code === 'storage_error';
+  return code === 'model_error' || code === 'model_output_truncated' || code === 'storage_error';
 }

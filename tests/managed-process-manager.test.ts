@@ -52,7 +52,11 @@ describe('ManagedProcessManager', () => {
       expect.objectContaining({ id: started.id, status: 'running' }),
     ]);
     await expect(manager.startProcess({
-      context: { ...context, toolInvocationId: 'invocation_process_2', toolCallId: 'call_process_2' },
+      context: {
+        ...context,
+        toolCallId: 'tool_call_process_2',
+        modelToolCallId: 'model_call_process_2',
+      },
       name: 'test-server',
       command: `node -e "require('http').createServer((q,r)=>r.end('ready')).listen(Number(process.env.PORT),'127.0.0.1')"`,
       port: 'auto',
@@ -144,10 +148,10 @@ function toolContext(sandboxRoot: string): RuntimeToolContext {
   return {
     sandboxRoot,
     sessionId: 'session_process',
-    jobId: 'job_process',
-    attemptId: 'attempt_process',
-    toolInvocationId: 'invocation_process',
-    toolCallId: 'call_process',
+    taskId: 'task_process',
+    taskRunId: 'task_run_process',
+    toolCallId: 'tool_call_process',
+    modelToolCallId: 'model_call_process',
     idempotencyKey: 'process_idempotency',
   };
 }

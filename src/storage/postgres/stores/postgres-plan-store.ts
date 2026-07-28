@@ -1,39 +1,33 @@
 import type { Pool } from 'pg';
-import type { AgentPlan, AgentPlanStep } from '../../../domain/index.js';
-import type {
-  ApplyPlanUpdateInput,
-  ApplyPlanUpdateResult,
-  PlanStore,
-} from '../../agent-store.js';
-import { applyPlanUpdateCommand } from '../transaction-commands.js';
+import type { AgentActivePlan } from '../../../domain/index.js';
+import type { ApplyActivePlanInput, PlanStore } from '../../agent-store.js';
+import { applyActivePlanCommand } from '../transaction-commands.js';
 import {
-  mapAgentPlanRow,
-  mapAgentPlanStepRow,
-  type AgentPlanRow,
-  type AgentPlanStepRow,
+  mapAgentActivePlanRow,
+  type AgentActivePlanRow,
 } from '../row-mappers.js';
 import { withPostgresClient } from './postgres-store.helper.js';
 
 export class PostgresPlanStore implements PlanStore {
   constructor(private readonly pool: Pool) {}
 
-  async getByJobId(jobId: string): Promise<AgentPlan | undefined> {
-    const result = await this.pool.query<AgentPlanRow>(
-      `select * from agent_plans where job_id = $1`,
-      [jobId]
+  async getActive(sessionId: string): Promise<AgentActivePlan | undefined> {
+    const result = await this.pool.query<AgentActivePlanRow>(
+      `select * from agent_active_plans where session_id = $1`,
+      [sessionId]
     );
-    return result.rows[0] ? mapAgentPlanRow(result.rows[0]) : undefined;
+    return result.rows[0] ? mapAgentActivePlanRow(result.rows[0]) : undefined;
   }
 
-  async listSteps(planId: string): Promise<AgentPlanStep[]> {
-    const result = await this.pool.query<AgentPlanStepRow>(
-      `select * from agent_plan_steps where plan_id = $1 order by position asc`,
-      [planId]
-    );
-    return result.rows.map(mapAgentPlanStepRow);
+  async apply(input: ApplyActivePlanInput): Promise<AgentActivePlan> {
+    return withPostgresClient(this.pool, client => applyActivePlanCommand(client, input));
   }
 
-  async applyUpdate(input: ApplyPlanUpdateInput): Promise<ApplyPlanUpdateResult> {
-    return withPostgresClient(this.pool, client => applyPlanUpdateCommand(client, input));
+  async clear(sessionId: string, taskId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `delete from agent_active_plans where session_id = $1 and task_id = $2`,
+      [sessionId, taskId]
+    );
+    return result.rowCount === 1;
   }
 }

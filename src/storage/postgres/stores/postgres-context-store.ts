@@ -1,56 +1,31 @@
 import type { Pool } from 'pg';
-import type {
-  AgentContextOwnerType,
-  AgentContextPurpose,
-  AgentContextSummary,
-} from '../../../domain/index.js';
+import type { AgentContextCompaction } from '../../../domain/index.js';
 import type {
   ContextStore,
-  ReplaceContextSummaryInput,
+  ReplaceContextCompactionInput,
 } from '../../agent-store.js';
-import { replaceContextSummaryCommand } from '../transaction-commands.js';
+import { replaceContextCompactionCommand } from '../transaction-commands.js';
 import {
-  mapAgentContextSummaryRow,
-  type AgentContextSummaryRow,
+  mapAgentContextCompactionRow,
+  type AgentContextCompactionRow,
 } from '../row-mappers.js';
 import { withPostgresClient } from './postgres-store.helper.js';
 
 export class PostgresContextStore implements ContextStore {
   constructor(private readonly pool: Pool) {}
 
-  async listActiveSummaries(
-    ownerType: AgentContextOwnerType,
-    ownerId: string,
-    purpose: AgentContextPurpose,
-    contextRulesVersion: string
-  ): Promise<AgentContextSummary[]> {
-    const result = await this.pool.query<AgentContextSummaryRow>(
-      `select * from agent_context_summaries
-       where owner_type = $1 and owner_id = $2 and purpose = $3
-         and context_rules_version = $4 and status = 'active'
-       order by source_row_id_end desc, id asc`,
-      [ownerType, ownerId, purpose, contextRulesVersion]
+  async getCompaction(sessionId: string): Promise<AgentContextCompaction | undefined> {
+    const result = await this.pool.query<AgentContextCompactionRow>(
+      `select * from agent_context_compactions where session_id = $1`,
+      [sessionId]
     );
-    return result.rows.map(mapAgentContextSummaryRow);
+    return result.rows[0] ? mapAgentContextCompactionRow(result.rows[0]) : undefined;
   }
 
-  async getSummariesByIds(ids: string[]): Promise<AgentContextSummary[]> {
-    if (ids.length === 0) return [];
-    const result = await this.pool.query<AgentContextSummaryRow>(
-      `select * from agent_context_summaries where id = any($1::text[])`,
-      [ids]
+  async replaceCompaction(input: ReplaceContextCompactionInput): Promise<AgentContextCompaction> {
+    return withPostgresClient(
+      this.pool,
+      client => replaceContextCompactionCommand(client, input)
     );
-    const byId = new Map(result.rows.map(row => {
-      const summary = mapAgentContextSummaryRow(row);
-      return [summary.id, summary] as const;
-    }));
-    return ids.flatMap(id => {
-      const summary = byId.get(id);
-      return summary ? [summary] : [];
-    });
-  }
-
-  async replaceSummary(input: ReplaceContextSummaryInput): Promise<AgentContextSummary> {
-    return withPostgresClient(this.pool, client => replaceContextSummaryCommand(client, input));
   }
 }

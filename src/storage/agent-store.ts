@@ -1,67 +1,59 @@
+import type { StoredMessage } from '@langchain/core/messages';
 import type {
+  AgentActivePlan,
   AgentArtifact,
   AgentArtifactDraft,
-  AgentJob,
-  AgentLoopCheckpoint,
   AgentContextInputManifest,
-  AgentContextOwnerType,
-  AgentContextPurpose,
-  AgentContextSummary,
-  AgentContextSummaryType,
-  AgentJobError,
+  AgentContextCompaction,
+  AgentExecutionError,
   AgentMessage,
+  AgentMessageToolCall,
   AgentModelCall,
   AgentModelCallType,
   AgentModelOutputDisposition,
   AgentModelUsageSource,
   AgentModelUsageStats,
-  AgentPlan,
   AgentPlanStep,
   AgentSession,
+  AgentTask,
+  AgentTaskCheckpoint,
+  AgentTaskRun,
+  AgentTaskRunTrigger,
   AgentToolCall,
-  AgentToolInvocation,
+  AgentToolRun,
   AgentToolSideEffectLevel,
-  AgentUserInputAnswerMode,
   AgentUserInputRequest,
   AgentUserInputSchema,
-  AgentUserInputSource,
 } from '../domain/index.js';
-import type { StoredMessage } from '@langchain/core/messages';
 
 export type AgentStoreErrorCode =
   | 'SESSION_NOT_FOUND'
   | 'SESSION_ALREADY_EXISTS'
-  | 'JOB_NOT_FOUND'
-  | 'JOB_ALREADY_EXISTS'
-  | 'ACTIVE_JOB_CONFLICT'
+  | 'TASK_NOT_FOUND'
+  | 'TASK_ALREADY_EXISTS'
+  | 'ACTIVE_TASK_CONFLICT'
   | 'CLIENT_REQUEST_CONFLICT'
   | 'CONCURRENCY_CONFLICT'
-  | 'INVALID_JOB_STATE'
-  | 'INVALID_JOB_RETRY'
-  | 'JOB_LEASE_LOST'
-  | 'TOOL_INVOCATION_NOT_FOUND'
-  | 'TOOL_INVOCATION_CONFLICT'
-  | 'INVALID_TOOL_INVOCATION_STATE'
+  | 'INVALID_TASK_STATE'
+  | 'INVALID_TASK_RETRY'
+  | 'TASK_RUN_NOT_FOUND'
+  | 'TASK_OWNERSHIP_LOST'
+  | 'TOOL_CALL_NOT_FOUND'
+  | 'TOOL_CALL_CONFLICT'
+  | 'INVALID_TOOL_CALL_STATE'
   | 'USER_INPUT_REQUEST_NOT_FOUND'
   | 'INVALID_USER_INPUT_STATE'
   | 'USER_INPUT_ANSWER_CONFLICT'
-  | 'PLAN_NOT_FOUND'
-  | 'PLAN_STEP_NOT_FOUND'
-  | 'INVALID_PLAN_STATE';
+  | 'ACTIVE_PLAN_NOT_FOUND';
 
 export class AgentStoreError extends Error {
-  readonly code: AgentStoreErrorCode;
-  readonly details?: Record<string, unknown>;
-
   constructor(
-    code: AgentStoreErrorCode,
+    readonly code: AgentStoreErrorCode,
     message: string,
-    details?: Record<string, unknown>
+    readonly details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'AgentStoreError';
-    this.code = code;
-    this.details = details;
   }
 }
 
@@ -71,129 +63,162 @@ export interface CreateSessionInput {
   nowMs: number;
 }
 
-export interface CreateJobAndAppendUserMessageInput {
+export interface CreateTaskWithUserMessageInput {
   sessionId: string;
-  jobId: string;
+  taskId: string;
   userMessageId: string;
   content: string;
-  retryOfJobId?: string;
+  retryOfTaskId?: string;
   clientRequestId?: string;
-  jobMetadata?: Record<string, unknown>;
+  taskMetadata?: Record<string, unknown>;
   messageMetadata?: Record<string, unknown>;
   nowMs: number;
 }
 
-export interface CreateJobAndAppendUserMessageResult {
+export interface CreateTaskWithUserMessageResult {
   session: AgentSession;
-  job: AgentJob;
+  task: AgentTask;
   message: AgentMessage;
 }
 
-export interface CreateRetryJobInput {
+export interface CreateRetryTaskInput {
   sessionId: string;
-  jobId: string;
-  retryOfJobId: string;
+  taskId: string;
+  retryOfTaskId: string;
   clientRequestId?: string;
-  jobMetadata?: Record<string, unknown>;
+  taskMetadata?: Record<string, unknown>;
   nowMs: number;
 }
 
-export interface CreateRetryJobResult {
+export interface CreateRetryTaskResult {
   session: AgentSession;
-  job: AgentJob;
+  task: AgentTask;
 }
 
-export interface StartJobExecutionInput {
-  jobId: string;
-  expectedVersion: number;
-  workerId: string;
-  attemptId: string;
+export interface StartTaskRunInput {
+  taskId: string;
+  expectedTaskVersion: number;
+  taskRunId: string;
+  trigger: AgentTaskRunTrigger;
+  ownerId: string;
   nowMs: number;
-  leaseUntilMs: number;
+  ownershipExpiresAtMs: number;
 }
 
-export interface ListJobsNeedingRuntimeRecoveryInput {
+export interface StartTaskRunResult {
+  task: AgentTask;
+  taskRun: AgentTaskRun;
+}
+
+export interface RenewTaskRunOwnershipInput {
+  taskId: string;
+  taskRunId: string;
+  ownerId: string;
+  nowMs: number;
+  ownershipExpiresAtMs: number;
+}
+
+export interface ListTasksNeedingRecoveryInput {
   nowMs: number;
   createdBeforeMs: number;
   limit: number;
 }
 
-export interface MarkJobRecoveryRequiredInput {
-  jobId: string;
-  expectedVersion: number;
+export interface TaskRecoveryCandidate {
+  task: AgentTask;
+  taskRun?: AgentTaskRun;
+}
+
+export interface MarkTaskRecoveryRequiredInput {
+  taskId: string;
+  expectedTaskVersion: number;
   nowMs: number;
 }
 
-export interface RenewJobExecutionLeaseInput extends StartJobExecutionInput {}
+export interface MarkTaskRecoveryRequiredResult {
+  task: AgentTask;
+  taskRun?: AgentTaskRun;
+  toolCalls: AgentToolCall[];
+  toolRuns: AgentToolRun[];
+}
 
-export interface FailJobInput {
-  jobId: string;
-  expectedVersion: number;
-  workerId: string;
-  attemptId: string;
-  error: AgentJobError;
+export interface FailTaskInput {
+  taskId: string;
+  expectedTaskVersion: number;
+  taskRunId: string;
+  ownerId: string;
+  error: AgentExecutionError;
   nowMs: number;
 }
 
-export interface CancelJobInput {
-  jobId: string;
-  expectedVersion: number;
+export interface FinishTaskResult {
+  task: AgentTask;
+  taskRun?: AgentTaskRun;
+  planCleared: boolean;
+}
+
+export interface CancelTaskInput {
+  taskId: string;
+  expectedTaskVersion: number;
   nowMs: number;
 }
 
-interface PendingToolInvocationInput {
-  invocationId: string;
-  call: AgentToolCall;
+interface PendingToolCallInput {
+  id: string;
+  call: AgentMessageToolCall;
   argumentsChecksum: string;
   sideEffectLevel: AgentToolSideEffectLevel;
   idempotencyKey: string;
   metadata?: Record<string, unknown>;
 }
 
-export interface CommitModelToolCallsInput {
+export interface SaveToolCallsInput {
   sessionId: string;
-  jobId: string;
-  attemptId: string;
-  workerId: string;
+  taskId: string;
+  taskRunId: string;
+  ownerId: string;
   outputId: string;
   messageId: string;
   content: string;
-  invocations: PendingToolInvocationInput[];
+  toolCalls: PendingToolCallInput[];
+  contextScope: 'conversation' | 'task';
   nowMs: number;
 }
 
-export interface CommitModelToolCallsResult {
+export interface SaveToolCallsResult {
   message: AgentMessage;
-  invocations: AgentToolInvocation[];
+  toolCalls: AgentToolCall[];
 }
 
-export interface TryStartToolExecutionInput {
-  jobId: string;
-  toolCallId: string;
+export interface StartToolRunInput {
+  taskId: string;
+  taskRunId: string;
+  modelToolCallId: string;
+  toolRunId: string;
   workerId: string;
-  attemptId: string;
   nowMs: number;
 }
 
-export interface TryStartToolExecutionResult {
-  invocation: AgentToolInvocation;
+export interface StartToolRunResult {
+  toolCall: AgentToolCall;
+  toolRun?: AgentToolRun;
   started: boolean;
 }
 
-export interface PrepareToolInvocationsForRecoveryInput {
-  jobId: string;
-  workerId: string;
-  attemptId: string;
+export interface PrepareToolCallsForResumeInput {
+  taskId: string;
+  taskRunId: string;
+  ownerId: string;
   nowMs: number;
 }
 
-export interface PrepareToolInvocationsForRecoveryResult {
-  checkpoint?: AgentLoopCheckpoint;
-  invocations: AgentToolInvocation[];
-  blockedInvocations: AgentToolInvocation[];
+export interface PrepareToolCallsForResumeResult {
+  checkpoint?: AgentTaskCheckpoint;
+  toolCalls: AgentToolCall[];
+  blockedToolCalls: AgentToolCall[];
 }
 
-type CommittedToolOutcome =
+type CompletedToolOutcome =
   | {
       status: 'completed';
       content: string;
@@ -210,63 +235,64 @@ type CommittedToolOutcome =
       durationMs: number;
     };
 
-export interface CommitToolResultInput {
+export interface CompleteToolCallInput {
   sessionId: string;
-  jobId: string;
-  attemptId: string;
-  workerId: string;
-  toolCallId: string;
+  taskId: string;
+  taskRunId: string;
+  ownerId: string;
+  modelToolCallId: string;
   messageId: string;
-  outcome: CommittedToolOutcome;
+  outcome: CompletedToolOutcome;
   nowMs: number;
 }
 
-export interface CommitToolResultResult {
+export interface CompleteToolCallResult {
   message: AgentMessage;
-  invocation: AgentToolInvocation;
+  toolCall: AgentToolCall;
+  toolRun: AgentToolRun;
   artifacts: AgentArtifact[];
 }
 
-export interface CompleteJobWithFinalMessageInput {
+export interface CompleteTaskWithFinalMessageInput {
   sessionId: string;
-  jobId: string;
-  attemptId: string;
-  workerId: string;
+  taskId: string;
+  taskRunId: string;
+  ownerId: string;
   outputId: string;
   messageId: string;
   content: string;
   nowMs: number;
 }
 
-export interface CompleteJobWithFinalMessageResult {
-  job: AgentJob;
+export interface CompleteTaskWithFinalMessageResult extends FinishTaskResult {
   message: AgentMessage;
 }
 
 interface PendingUserInputRequestInput {
   requestId: string;
-  toolCallId?: string;
-  source: AgentUserInputSource;
-  answerMode: AgentUserInputAnswerMode;
+  modelToolCallId: string;
   title?: string;
   prompt: string;
   inputSchema: AgentUserInputSchema;
+  expiresAtMs?: number;
   metadata?: Record<string, unknown>;
 }
 
-export interface CreateInputRequestsAndMarkWaitingInput {
+export interface WaitForUserInputInput {
   sessionId: string;
-  jobId: string;
-  attemptId: string;
-  workerId: string;
+  taskId: string;
+  taskRunId: string;
+  ownerId: string;
   requests: PendingUserInputRequestInput[];
   nowMs: number;
 }
 
-export interface CreateInputRequestsAndMarkWaitingResult {
-  job: AgentJob;
+export interface WaitForUserInputResult {
+  task: AgentTask;
+  taskRun: AgentTaskRun;
   requests: AgentUserInputRequest[];
-  invocations: AgentToolInvocation[];
+  toolCalls: AgentToolCall[];
+  toolRuns: AgentToolRun[];
 }
 
 export interface SaveUserInputAnswerInput {
@@ -275,60 +301,57 @@ export interface SaveUserInputAnswerInput {
   clientAnswerId: string;
   answer: unknown;
   answerMessageId: string;
-  workerId: string;
-  attemptId: string;
+  taskRunId: string;
+  ownerId: string;
   nowMs: number;
-  leaseUntilMs: number;
+  ownershipExpiresAtMs: number;
 }
 
 export interface SaveUserInputAnswerResult {
   request: AgentUserInputRequest;
   answerMessage: AgentMessage;
-  job: AgentJob;
-  invocation?: AgentToolInvocation;
+  task: AgentTask;
+  taskRun?: AgentTaskRun;
+  toolCall: AgentToolCall;
   shouldResume: boolean;
-  attemptId?: string;
 }
 
-interface ApplyPlanStepInput {
-  id: string;
-  key: string;
-  position: number;
-  title: string;
-  description?: string;
-  status: AgentPlanStep['status'];
-  result?: AgentPlanStep['result'];
-  error?: AgentJobError;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ApplyPlanUpdateInput {
-  sessionId: string;
-  jobId: string;
-  workerId: string;
-  attemptId: string;
-  planId: string;
+export interface ExpireUserInputRequestInput {
+  requestId: string;
   expectedVersion: number;
-  title: string;
-  goal: string;
-  steps: ApplyPlanStepInput[];
-  metadata?: Record<string, unknown>;
+  resultMessageId: string;
+  taskRunId: string;
+  ownerId: string;
   nowMs: number;
+  ownershipExpiresAtMs: number;
 }
 
-export interface ApplyPlanUpdateResult {
-  plan: AgentPlan;
+export interface ExpireUserInputRequestResult {
+  request: AgentUserInputRequest;
+  resultMessage: AgentMessage;
+  task: AgentTask;
+  taskRun?: AgentTaskRun;
+  toolCall: AgentToolCall;
+  shouldResume: boolean;
+}
+
+export interface ApplyActivePlanInput {
+  sessionId: string;
+  taskId: string;
+  taskRunId: string;
+  ownerId: string;
+  title: string;
   steps: AgentPlanStep[];
+  nowMs: number;
 }
 
 export interface StartModelCallInput {
   id: string;
   sessionId: string;
-  jobId: string;
-  attemptId: string;
-  workerId: string;
+  taskId: string;
+  taskRunId: string;
+  ownerId: string;
   logicalCallKey: string;
-  callAttemptNo: number;
   callType: AgentModelCallType;
   provider: string;
   model: string;
@@ -345,7 +368,7 @@ export interface StartModelCallInput {
 }
 
 export interface SetModelCallOutputDispositionInput {
-  jobId: string;
+  taskId: string;
   outputId: string;
   disposition: Exclude<AgentModelOutputDisposition, 'pending'>;
   reason?: string;
@@ -375,128 +398,80 @@ export interface CompleteModelCallResult {
   usage: AgentModelUsageStats;
 }
 
-export interface ReplaceContextSummaryInput {
-  id: string;
+export interface ReplaceContextCompactionInput {
   sessionId: string;
-  jobId?: string;
-  ownerType: AgentContextOwnerType;
-  ownerId: string;
-  purpose: AgentContextPurpose;
-  contextRulesVersion: string;
-  summaryType: AgentContextSummaryType;
-  sourceRowIdStart: number;
-  sourceRowIdEnd: number;
-  parentSummaryId?: string;
+  throughMessageRowId: number;
   summary: string;
-  summaryFormat: 'markdown' | 'json';
-  sourceMessageCount: number;
-  sourceTokenCount?: number;
-  summaryTokenCount?: number;
-  model?: string;
-  compressionPromptVersion: string;
-  checksum: string;
-  metadata?: Record<string, unknown>;
   nowMs: number;
 }
 
-/** Session aggregate queries and lifecycle commands. */
 export interface SessionStore {
   create(input: CreateSessionInput): Promise<AgentSession>;
   list(): Promise<AgentSession[]>;
   delete(sessionId: string): Promise<boolean>;
   get(sessionId: string): Promise<AgentSession | undefined>;
   listMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
-  listJobs(sessionId: string): Promise<AgentJob[]>;
-  listPlans(sessionId: string): Promise<AgentPlan[]>;
-  listPlanSteps(sessionId: string): Promise<AgentPlanStep[]>;
-  listToolInvocations(sessionId: string): Promise<AgentToolInvocation[]>;
+  listTasks(sessionId: string): Promise<AgentTask[]>;
+  listTaskRuns(sessionId: string): Promise<AgentTaskRun[]>;
+  listToolCalls(sessionId: string): Promise<AgentToolCall[]>;
+  listToolRuns(sessionId: string): Promise<AgentToolRun[]>;
   listArtifacts(sessionId: string): Promise<AgentArtifact[]>;
   listUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
 }
 
-/** Durable Job lifecycle commands. Cross-table commands remain atomic. */
-export interface JobStore {
-  get(jobId: string): Promise<AgentJob | undefined>;
-  getByClientRequestId(
-    sessionId: string,
-    clientRequestId: string
-  ): Promise<AgentJob | undefined>;
-  listNeedingRecovery(input: ListJobsNeedingRuntimeRecoveryInput): Promise<AgentJob[]>;
-  markRecoveryRequired(input: MarkJobRecoveryRequiredInput): Promise<AgentJob>;
-  createWithUserMessage(
-    input: CreateJobAndAppendUserMessageInput
-  ): Promise<CreateJobAndAppendUserMessageResult>;
-  createRetry(input: CreateRetryJobInput): Promise<CreateRetryJobResult>;
-  startExecution(input: StartJobExecutionInput): Promise<AgentJob>;
-  renewExecutionOwnership(input: RenewJobExecutionLeaseInput): Promise<AgentJob>;
-  fail(input: FailJobInput): Promise<AgentJob>;
-  cancel(input: CancelJobInput): Promise<AgentJob>;
+export interface TaskStore {
+  get(taskId: string): Promise<AgentTask | undefined>;
+  getByClientRequestId(sessionId: string, clientRequestId: string): Promise<AgentTask | undefined>;
+  getLatestRun(taskId: string): Promise<AgentTaskRun | undefined>;
+  listNeedingRecovery(input: ListTasksNeedingRecoveryInput): Promise<TaskRecoveryCandidate[]>;
+  createWithUserMessage(input: CreateTaskWithUserMessageInput): Promise<CreateTaskWithUserMessageResult>;
+  createRetry(input: CreateRetryTaskInput): Promise<CreateRetryTaskResult>;
+  startRun(input: StartTaskRunInput): Promise<StartTaskRunResult>;
+  renewRunOwnership(input: RenewTaskRunOwnershipInput): Promise<AgentTaskRun>;
+  markRecoveryRequired(input: MarkTaskRecoveryRequiredInput): Promise<MarkTaskRecoveryRequiredResult>;
+  fail(input: FailTaskInput): Promise<FinishTaskResult>;
+  cancel(input: CancelTaskInput): Promise<FinishTaskResult>;
 }
 
-/** ReAct checkpoint, tool and HITL persistence. */
 export interface ExecutionStore {
-  getToolInvocation(jobId: string, toolCallId: string): Promise<AgentToolInvocation | undefined>;
-  getLatestLoopCheckpoint(jobId: string): Promise<AgentLoopCheckpoint | undefined>;
-  commitModelToolCalls(input: CommitModelToolCallsInput): Promise<CommitModelToolCallsResult>;
-  tryStartTool(input: TryStartToolExecutionInput): Promise<TryStartToolExecutionResult>;
-  prepareToolsForRecovery(
-    input: PrepareToolInvocationsForRecoveryInput
-  ): Promise<PrepareToolInvocationsForRecoveryResult>;
-  commitToolResult(input: CommitToolResultInput): Promise<CommitToolResultResult>;
-  completeWithFinalMessage(
-    input: CompleteJobWithFinalMessageInput
-  ): Promise<CompleteJobWithFinalMessageResult>;
-  waitForUserInput(
-    input: CreateInputRequestsAndMarkWaitingInput
-  ): Promise<CreateInputRequestsAndMarkWaitingResult>;
-  answerUserInput(
-    input: SaveUserInputAnswerInput
-  ): Promise<SaveUserInputAnswerResult>;
+  getToolCall(taskId: string, modelToolCallId: string): Promise<AgentToolCall | undefined>;
+  getLatestCheckpoint(taskId: string): Promise<AgentTaskCheckpoint | undefined>;
+  saveToolCalls(input: SaveToolCallsInput): Promise<SaveToolCallsResult>;
+  startToolRun(input: StartToolRunInput): Promise<StartToolRunResult>;
+  prepareToolCallsForResume(input: PrepareToolCallsForResumeInput): Promise<PrepareToolCallsForResumeResult>;
+  completeToolCall(input: CompleteToolCallInput): Promise<CompleteToolCallResult>;
+  completeTask(input: CompleteTaskWithFinalMessageInput): Promise<CompleteTaskWithFinalMessageResult>;
+  waitForUserInput(input: WaitForUserInputInput): Promise<WaitForUserInputResult>;
+  answerUserInput(input: SaveUserInputAnswerInput): Promise<SaveUserInputAnswerResult>;
+  listExpiredUserInputRequests(nowMs: number, limit: number): Promise<AgentUserInputRequest[]>;
+  expireUserInput(input: ExpireUserInputRequestInput): Promise<ExpireUserInputRequestResult>;
 }
 
-/** Plan projection and update commands. */
 export interface PlanStore {
-  getByJobId(jobId: string): Promise<AgentPlan | undefined>;
-  listSteps(planId: string): Promise<AgentPlanStep[]>;
-  applyUpdate(input: ApplyPlanUpdateInput): Promise<ApplyPlanUpdateResult>;
+  getActive(sessionId: string): Promise<AgentActivePlan | undefined>;
+  apply(input: ApplyActivePlanInput): Promise<AgentActivePlan>;
+  clear(sessionId: string, taskId: string): Promise<boolean>;
 }
 
-/** Model-call audit and token-usage persistence. */
 export interface ModelStore {
   getCall(modelCallId: string): Promise<AgentModelCall | undefined>;
-  listCalls(jobId: string): Promise<AgentModelCall[]>;
+  listCalls(taskId: string): Promise<AgentModelCall[]>;
   listRecentSessionCalls(sessionId: string, limit: number): Promise<AgentModelCall[]>;
   getUsageStats(sessionId: string): Promise<AgentModelUsageStats | undefined>;
   startCall(input: StartModelCallInput): Promise<AgentModelCall>;
   completeCall(input: CompleteModelCallInput): Promise<CompleteModelCallResult>;
-  setCallOutputDisposition(
-    input: SetModelCallOutputDispositionInput
-  ): Promise<AgentModelCall>;
+  setCallOutputDisposition(input: SetModelCallOutputDispositionInput): Promise<AgentModelCall>;
   abandonStartedCalls(nowMs: number): Promise<AgentModelCall[]>;
 }
 
-/** Context-summary queries and replacement command. */
 export interface ContextStore {
-  listActiveSummaries(
-    ownerType: AgentContextOwnerType,
-    ownerId: string,
-    purpose: AgentContextPurpose,
-    contextRulesVersion: string
-  ): Promise<AgentContextSummary[]>;
-  getSummariesByIds(ids: string[]): Promise<AgentContextSummary[]>;
-  replaceSummary(input: ReplaceContextSummaryInput): Promise<AgentContextSummary>;
+  getCompaction(sessionId: string): Promise<AgentContextCompaction | undefined>;
+  replaceCompaction(input: ReplaceContextCompactionInput): Promise<AgentContextCompaction>;
 }
 
-/**
- * The single persistence root used by Runtime and Orchestration.
- *
- * Each property exposes one cohesive storage capability. Callers can now read
- * `store.jobs.startExecution()` or `store.models.completeCall()` without
- * searching a flat list of unrelated database operations.
- */
 export interface AgentStore {
   readonly sessions: SessionStore;
-  readonly jobs: JobStore;
+  readonly tasks: TaskStore;
   readonly execution: ExecutionStore;
   readonly plans: PlanStore;
   readonly models: ModelStore;

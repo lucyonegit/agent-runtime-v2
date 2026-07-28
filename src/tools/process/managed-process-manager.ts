@@ -56,8 +56,8 @@ interface WorkspaceProcessSpec {
   schemaVersion: 1;
   id: string;
   sessionId: string;
-  jobId: string;
-  toolInvocationId: string;
+  taskId: string;
+  toolCallId: string;
   ownershipToken: string;
   name: string;
   command: string;
@@ -137,10 +137,10 @@ export class ManagedProcessManager {
       );
     }
 
-    const processId = processIdForInvocation(input.context.toolInvocationId);
-    const existingForInvocation = this.#registry.get(processId)?.record;
-    if (existingForInvocation && isActive(existingForInvocation.status)) {
-      return existingForInvocation;
+    const processId = processIdForToolCall(input.context.toolCallId);
+    const existingForToolCall = this.#registry.get(processId)?.record;
+    if (existingForToolCall && isActive(existingForToolCall.status)) {
+      return existingForToolCall;
     }
     const conflictingName = [...this.#registry.values()].find(entry => (
       entry.record.sessionId === input.context.sessionId
@@ -194,8 +194,8 @@ export class ManagedProcessManager {
       schemaVersion: PROCESS_SPEC_VERSION,
       id: processId,
       sessionId: input.context.sessionId,
-      jobId: input.context.jobId,
-      toolInvocationId: input.context.toolInvocationId,
+      taskId: input.context.taskId,
+      toolCallId: input.context.toolCallId,
       ownershipToken: randomBytes(24).toString('hex'),
       name,
       command,
@@ -223,7 +223,7 @@ export class ManagedProcessManager {
         if (existing) return existing;
         throw new RuntimeToolExecutionError(
           'managed_process_conflict',
-          `Tool invocation ${JSON.stringify(input.context.toolInvocationId)} already created a local process.`,
+          `ToolCall ${JSON.stringify(input.context.toolCallId)} already created a local process.`,
           { processId }
         );
       }
@@ -412,8 +412,8 @@ export class ManagedProcessManager {
     const record: AgentManagedProcess = {
       id: spec.id,
       sessionId: spec.sessionId,
-      jobId: spec.jobId,
-      toolInvocationId: spec.toolInvocationId,
+      taskId: spec.taskId,
+      toolCallId: spec.toolCallId,
       name: spec.name,
       command: spec.command,
       cwd: logicalPath(
@@ -595,8 +595,8 @@ export class ManagedProcessManager {
   }
 }
 
-function processIdForInvocation(toolInvocationId: string): string {
-  return `process_${createHash('sha256').update(toolInvocationId).digest('hex').slice(0, 32)}`;
+function processIdForToolCall(toolCallId: string): string {
+  return `process_${createHash('sha256').update(toolCallId).digest('hex').slice(0, 32)}`;
 }
 
 function processSpecPath(sandboxRoot: string, sessionId: string, processId: string): string {
@@ -627,8 +627,8 @@ async function readProcessSpec(path: string): Promise<WorkspaceProcessSpec> {
   for (const [name, value] of Object.entries({
     id: spec.id,
     sessionId: spec.sessionId,
-    jobId: spec.jobId,
-    toolInvocationId: spec.toolInvocationId,
+    taskId: spec.taskId,
+    toolCallId: spec.toolCallId,
     ownershipToken: spec.ownershipToken,
     name: spec.name,
     command: spec.command,
