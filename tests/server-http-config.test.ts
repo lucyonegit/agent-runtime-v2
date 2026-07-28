@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ExecutionContext } from '@nestjs/common';
-import { DEFAULT_SERVER_CONFIG } from '../src/config/runtime-config.js';
+import { DEFAULT_SERVER_CONFIG, loadRuntimeConfig } from '../src/config/runtime-config.js';
 import { AgentDebugController } from '../src/server/http/agent-debug.controller.js';
 import { AgentController } from '../src/server/http/agent.controller.js';
 import { AgentHttpModule } from '../src/server/http/agent-http.module.js';
+import { AgentManagedProcessController } from '../src/server/http/agent-managed-process.controller.js';
+import { restrictHttpToolCapabilities } from '../src/server/http/http-tool-capabilities.js';
 import {
   requireRuntimeHttpAuthToken,
   RuntimeHttpAuthGuard,
@@ -27,6 +29,7 @@ describe('Agent HTTP CORS configuration', () => {
     expect(DEFAULT_SERVER_CONFIG.cors.allowedHeaders).toContain('authorization');
     expect(DEFAULT_SERVER_CONFIG.cors.allowedHeaders).toContain('content-type');
     expect(DEFAULT_SERVER_CONFIG.debugEndpointsEnabled).toBe(false);
+    expect(DEFAULT_SERVER_CONFIG.toolCapabilities).toEqual(['artifacts', 'filesystem']);
   });
 
   it('does not register Debug Context routes unless explicitly enabled', () => {
@@ -35,6 +38,47 @@ describe('Agent HTTP CORS configuration', () => {
       AgentController,
       AgentDebugController,
     ]);
+  });
+
+  it('keeps host tools and their process endpoints out of HTTP by default', () => {
+    const config = loadRuntimeConfig({ env: { DATABASE_URL: 'postgres://runtime' } });
+    const restricted = restrictHttpToolCapabilities(config);
+
+    expect(config.tools.enabled).toMatchObject({
+      shell: true,
+      managedProcesses: true,
+      browser: true,
+    });
+    expect(restricted.tools.enabled).toEqual({
+      hitl: true,
+      basic: true,
+      artifacts: true,
+      filesystem: true,
+      shell: false,
+      managedProcesses: false,
+      browser: false,
+    });
+    expect(httpModule(false, false).controllers).not.toContain(
+      AgentManagedProcessController
+    );
+    expect(httpModule(false, true).controllers).toContain(
+      AgentManagedProcessController
+    );
+  });
+
+  it('enables only explicitly granted HTTP tool capabilities', () => {
+    const config = loadRuntimeConfig({ env: {
+      DATABASE_URL: 'postgres://runtime',
+      AGENT_SERVER_TOOL_CAPABILITIES: 'shell,browser',
+    } });
+
+    expect(restrictHttpToolCapabilities(config).tools.enabled).toMatchObject({
+      artifacts: false,
+      filesystem: false,
+      shell: true,
+      managedProcesses: false,
+      browser: true,
+    });
   });
 
   it('requires a long bearer token before the HTTP server starts', () => {
@@ -68,13 +112,17 @@ function context(authorization: string | undefined): ExecutionContext {
   } as unknown as ExecutionContext;
 }
 
-function httpModule(debugEndpointsEnabled: boolean) {
+function httpModule(
+  debugEndpointsEnabled: boolean,
+  managedProcessEndpointsEnabled = false
+) {
   return AgentHttpModule.forRoot(
     null as never,
     null as never,
     null as never,
     null as never,
     'test-runtime-auth-token-32-characters',
-    debugEndpointsEnabled
+    debugEndpointsEnabled,
+    managedProcessEndpointsEnabled
   );
 }

@@ -6,10 +6,12 @@ import { createAgentApplication } from './runtime/agent-application.factory.js';
 import { AgentHttpModule } from './http/agent-http.module.js';
 import { RuntimeExceptionFilter } from './http/runtime-exception.filter.js';
 import { requireRuntimeHttpAuthToken } from './http/runtime-http-auth.guard.js';
+import { restrictHttpToolCapabilities } from './http/http-tool-capabilities.js';
 
 const config = loadRuntimeConfig();
 const authToken = requireRuntimeHttpAuthToken(config.server.authToken);
-const application = await createAgentApplication(config);
+const httpRuntimeConfig = restrictHttpToolCapabilities(config);
+const application = await createAgentApplication(httpRuntimeConfig);
 await application.start();
 const app = await NestFactory.create<NestFastifyApplication>(
   AgentHttpModule.forRoot(
@@ -18,7 +20,8 @@ const app = await NestFactory.create<NestFastifyApplication>(
     application.contextPreview,
     application.managedProcesses,
     authToken,
-    config.server.debugEndpointsEnabled
+    config.server.debugEndpointsEnabled,
+    httpRuntimeConfig.tools.enabled.managedProcesses
   ),
   new FastifyAdapter(),
   { logger: config.server.logger }

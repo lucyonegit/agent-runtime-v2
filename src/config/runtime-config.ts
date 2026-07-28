@@ -12,12 +12,14 @@ import {
   loadRuntimeConfigFile,
   readBundledRuntimeConfigFile,
 } from './runtime-config.helper.js';
+import type { HttpToolCapability } from './runtime-capabilities.js';
 
 export {
   DASHSCOPE_OPENAI_BASE_URL,
   resolveModelTokenLimits,
 };
 export type {
+  HttpToolCapability,
   ModelProvider,
   ModelTokenOverrides,
   ResolvedModelTokenLimits,
@@ -30,6 +32,7 @@ export interface ServerConfig {
   port: number;
   authToken: string;
   debugEndpointsEnabled: boolean;
+  toolCapabilities: HttpToolCapability[];
   logger: ServerLogLevel[];
   cors: {
     origin: string[];

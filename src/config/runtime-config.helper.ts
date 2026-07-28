@@ -5,6 +5,8 @@ import type {
   ToolsConfig,
 } from './runtime-config.js';
 import { DASHSCOPE_OPENAI_BASE_URL } from '../runtime/model/model-profiles.js';
+import { HTTP_TOOL_CAPABILITIES } from './runtime-capabilities.js';
+import type { HttpToolCapability } from './runtime-capabilities.js';
 
 const BUNDLED_CONFIG_FILE = fileURLToPath(new URL('./runtime.json', import.meta.url));
 
@@ -65,6 +67,9 @@ function applyEnvironmentOverrides(
   assignBoolean(env, 'AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS', value => {
     config.server.debugEndpointsEnabled = value;
   });
+  assignCommaSeparatedList(env, 'AGENT_SERVER_TOOL_CAPABILITIES', value => {
+    config.server.toolCapabilities = value as HttpToolCapability[];
+  });
   assignString(env, 'DATABASE_URL', value => { config.postgres.url = value; });
 
   if (env.DASHSCOPE_API_KEY?.trim()) {
@@ -119,6 +124,7 @@ function validateConfig(config: RuntimeConfigFile): void {
     throw new RangeError('server.authToken must contain at least 32 characters when configured.');
   }
   booleanValue(config.server.debugEndpointsEnabled, 'server.debugEndpointsEnabled');
+  validateHttpToolCapabilities(config.server.toolCapabilities);
   if (config.server.logger.length === 0) throw new RangeError('server.logger cannot be empty.');
   if (!Array.isArray(config.server.cors.origin) || config.server.cors.origin.length === 0) {
     throw new TypeError('server.cors.origin must be a non-empty array of explicit origins.');
@@ -165,6 +171,24 @@ function validateHttpOrigin(value: unknown): void {
   try { url = new URL(value); } catch { throw new TypeError(`Invalid CORS origin: ${value}`); }
   if (!['http:', 'https:'].includes(url.protocol) || url.origin !== value) {
     throw new TypeError(`CORS origin must be an explicit HTTP(S) origin: ${value}`);
+  }
+}
+
+function validateHttpToolCapabilities(value: unknown): void {
+  if (!Array.isArray(value)) {
+    throw new TypeError('server.toolCapabilities must be an array.');
+  }
+  const allowed = new Set<string>(HTTP_TOOL_CAPABILITIES);
+  const seen = new Set<string>();
+  for (const capability of value) {
+    nonEmptyString(capability, 'server.toolCapabilities[]');
+    if (!allowed.has(capability)) {
+      throw new TypeError(`Unsupported HTTP tool capability: ${capability}`);
+    }
+    if (seen.has(capability)) {
+      throw new TypeError(`Duplicate HTTP tool capability: ${capability}`);
+    }
+    seen.add(capability);
   }
 }
 
@@ -232,6 +256,15 @@ function assignBoolean(
     throw new TypeError(`${name} must be true or false.`);
   }
   assign(raw === 'true');
+}
+
+function assignCommaSeparatedList(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  assign: (value: string[]) => void
+): void {
+  if (env[name] === undefined) return;
+  assign(env[name]!.split(',').map(value => value.trim()).filter(Boolean));
 }
 
 function nonEmptyString(value: unknown, name: string): asserts value is string {

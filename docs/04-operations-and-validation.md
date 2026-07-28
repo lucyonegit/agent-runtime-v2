@@ -8,6 +8,8 @@ standalone HTTP 默认 fail closed：启动前必须设置至少 32 字符的 `A
 
 Context Preview 可能包含敏感答案、工具参数和模型输入，三个 Debug Context HTTP 路由默认不注册。仅在受控的本地排障环境中设置 `AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS=true`；Electron 内部 IPC 的 Context Preview 不受这个 HTTP 开关影响。
 
+standalone HTTP 默认 capability 只有 `artifacts,filesystem`，因此不能调用宿主 Shell、启动长驻进程或访问网络。需要时通过完整列表显式设置，例如 `AGENT_SERVER_TOOL_CAPABILITIES=artifacts,filesystem,shell,managedProcesses,browser`；全局 `tools.enabled` 仍是上限，HTTP capability 不能重新开启全局已关闭的工具。未授权 `managedProcesses` 时，对应 HTTP 管理路由也不注册。Electron 受控 IPC 不套用这层 HTTP capability 收缩。
+
 ## 2. 破坏式重建数据库
 
 开发环境执行：

@@ -4,6 +4,7 @@ import { AgentRuntime } from '../../orchestration/agent-runtime.js';
 import { ContextPreviewService } from '../debug/context-preview.service.js';
 import { RuntimeEventBus } from '../runtime/runtime-event-bus.js';
 import { AgentDebugController } from './agent-debug.controller.js';
+import { AgentManagedProcessController } from './agent-managed-process.controller.js';
 import { AgentController } from './agent.controller.js';
 import { ManagedProcessManager } from '../../tools/index.js';
 import {
@@ -19,21 +20,26 @@ export class AgentHttpModule {
     contextPreview: ContextPreviewService,
     managedProcesses: ManagedProcessManager,
     authToken: string,
-    debugEndpointsEnabled: boolean
+    debugEndpointsEnabled: boolean,
+    managedProcessEndpointsEnabled: boolean
   ): DynamicModule {
     return {
       module: AgentHttpModule,
-      controllers: debugEndpointsEnabled
-        ? [AgentController, AgentDebugController]
-        : [AgentController],
+      controllers: [
+        AgentController,
+        ...(debugEndpointsEnabled ? [AgentDebugController] : []),
+        ...(managedProcessEndpointsEnabled ? [AgentManagedProcessController] : []),
+      ],
       providers: [
         { provide: AgentRuntime, useValue: runtime },
         { provide: RuntimeEventBus, useValue: events },
-        { provide: ManagedProcessManager, useValue: managedProcesses },
         { provide: RUNTIME_HTTP_AUTH_TOKEN, useValue: authToken },
         { provide: APP_GUARD, useClass: RuntimeHttpAuthGuard },
         ...(debugEndpointsEnabled
           ? [{ provide: ContextPreviewService, useValue: contextPreview }]
+          : []),
+        ...(managedProcessEndpointsEnabled
+          ? [{ provide: ManagedProcessManager, useValue: managedProcesses }]
           : []),
       ],
     };

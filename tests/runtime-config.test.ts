@@ -10,6 +10,7 @@ describe('runtime configuration', () => {
       AGENT_SERVER_PORT: '3100',
       AGENT_SERVER_AUTH_TOKEN: 'test-runtime-auth-token-32-characters',
       AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS: 'true',
+      AGENT_SERVER_TOOL_CAPABILITIES: 'filesystem,shell',
       TASK_OWNERSHIP_TIMEOUT_MS: '45000',
       TASK_OWNERSHIP_REFRESH_MS: '15000',
       AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS: 'true',
@@ -22,6 +23,7 @@ describe('runtime configuration', () => {
         port: 3_100,
         authToken: 'test-runtime-auth-token-32-characters',
         debugEndpointsEnabled: true,
+        toolCapabilities: ['filesystem', 'shell'],
       },
       postgres: { url: 'postgres://runtime' },
       model: { provider: 'dashscope', apiKey: 'test-secret', modelName: 'qwen3.7-max' },
@@ -67,5 +69,12 @@ describe('runtime configuration', () => {
       DATABASE_URL: 'postgres://runtime',
       AGENT_SERVER_AUTH_TOKEN: 'too-short',
     } })).toThrow('at least 32 characters');
+  });
+
+  it('rejects unknown standalone HTTP tool capabilities', () => {
+    expect(() => loadRuntimeConfig({ env: {
+      DATABASE_URL: 'postgres://runtime',
+      AGENT_SERVER_TOOL_CAPABILITIES: 'filesystem,host-root',
+    } })).toThrow('Unsupported HTTP tool capability');
   });
 });

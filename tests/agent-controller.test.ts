@@ -9,8 +9,7 @@ describe('AgentController SSE', () => {
     vi.useFakeTimers();
     const controller = new AgentController(
       null as never,
-      new RuntimeEventBus(),
-      null as never
+      new RuntimeEventBus()
     );
     const received: unknown[] = [];
     const subscription = controller.sessionEvents('session_1').subscribe(event => {
