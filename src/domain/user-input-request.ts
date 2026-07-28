@@ -1,5 +1,7 @@
 export type AgentUserInputStatus = 'pending' | 'answered' | 'cancelled' | 'expired';
 
+import { AGENT_REQUEST_LIMITS } from './request-limits.js';
+
 export type AgentUserInputSchema =
   | { type: 'text'; placeholder?: string; defaultValue?: string; maxLength?: number }
   | { type: 'single_choice'; options: Array<{ label: string; value: string }> }
@@ -21,8 +23,16 @@ export function validateAgentUserInputSchema(
 ): AgentUserInputSchemaValidation {
   if (schema.type === 'text') {
     if (schema.maxLength !== undefined
-      && (!Number.isSafeInteger(schema.maxLength) || schema.maxLength < 0)) {
-      return invalid('Text input maxLength must be a non-negative safe integer.');
+      && (!Number.isSafeInteger(schema.maxLength)
+        || schema.maxLength < 0
+        || schema.maxLength > AGENT_REQUEST_LIMITS.userInputTextCharacters)) {
+      return invalid(
+        `Text input maxLength must be between 0 and ${AGENT_REQUEST_LIMITS.userInputTextCharacters}.`
+      );
+    }
+    if (schema.defaultValue !== undefined
+      && schema.defaultValue.length > AGENT_REQUEST_LIMITS.userInputTextCharacters) {
+      return invalid('Text input defaultValue exceeds the global input limit.');
     }
     if (schema.defaultValue !== undefined && schema.maxLength !== undefined
       && schema.defaultValue.length > schema.maxLength) {
@@ -60,10 +70,9 @@ export function validateAgentUserInputAnswer(
   if (!schemaValidation.valid) return schemaValidation;
   if (schema.type === 'text') {
     if (typeof answer !== 'string') return invalid('Text input requires a string answer.');
-    if (schema.maxLength !== undefined) {
-      if (answer.length > schema.maxLength) {
-        return invalid(`Text input must not exceed ${schema.maxLength} characters.`);
-      }
+    const maximum = schema.maxLength ?? AGENT_REQUEST_LIMITS.userInputTextCharacters;
+    if (answer.length > maximum) {
+      return invalid(`Text input must not exceed ${maximum} characters.`);
     }
     return { valid: true };
   }

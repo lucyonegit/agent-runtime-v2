@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AGENT_REQUEST_LIMITS, assertAgentRequestText } from '../domain/index.js';
 import type { TaskManagerPort } from './tasks/task-manager.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { SessionView, type SessionProcessReader } from '../view/session-view.js';
@@ -35,6 +36,12 @@ export class AgentRuntime {
   }
 
   async createSession(input: { title?: string }) {
+    assertAgentRequestText(
+      input.title,
+      'title',
+      AGENT_REQUEST_LIMITS.sessionTitleCharacters,
+      { optional: true }
+    );
     return this.#store.sessions.create({
       id: this.#ids.sessionId(),
       title: input.title,
@@ -71,6 +78,16 @@ export class AgentRuntime {
     message: string;
     clientRequestId: string;
   }) {
+    assertAgentRequestText(
+      input.message,
+      'message',
+      AGENT_REQUEST_LIMITS.taskMessageCharacters
+    );
+    assertAgentRequestText(
+      input.clientRequestId,
+      'clientRequestId',
+      AGENT_REQUEST_LIMITS.idempotencyKeyCharacters
+    );
     return this.#tasks.createTask(input);
   }
 
@@ -79,6 +96,11 @@ export class AgentRuntime {
   }
 
   async retryTask(input: { sourceTaskId: string; clientRequestId: string }) {
+    assertAgentRequestText(
+      input.clientRequestId,
+      'clientRequestId',
+      AGENT_REQUEST_LIMITS.idempotencyKeyCharacters
+    );
     return this.#tasks.retryTask(input);
   }
 
@@ -87,6 +109,16 @@ export class AgentRuntime {
     clientRequestId: string;
     message: string;
   }) {
+    assertAgentRequestText(
+      input.message,
+      'message',
+      AGENT_REQUEST_LIMITS.taskMessageCharacters
+    );
+    assertAgentRequestText(
+      input.clientRequestId,
+      'clientRequestId',
+      AGENT_REQUEST_LIMITS.idempotencyKeyCharacters
+    );
     return this.#tasks.continueAsNewTask(input);
   }
 
@@ -100,6 +132,11 @@ export class AgentRuntime {
     clientAnswerId: string;
     answer: unknown;
   }) {
+    assertAgentRequestText(
+      input.clientAnswerId,
+      'clientAnswerId',
+      AGENT_REQUEST_LIMITS.idempotencyKeyCharacters
+    );
     return this.#tasks.answerUserInputRequest(input);
   }
 }

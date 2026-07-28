@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentTask } from '../src/domain/index.js';
+import { AGENT_REQUEST_LIMITS, type AgentTask } from '../src/domain/index.js';
 import { AgentRuntime } from '../src/orchestration/agent-runtime.js';
 import type { TaskManagerPort } from '../src/orchestration/tasks/task-manager.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
@@ -25,6 +25,29 @@ describe('AgentRuntime application facade', () => {
     await expect(runtime.cancelTask('task_1', 1)).resolves.toBe(cancelled);
 
     expect(tasks.cancelTask).toHaveBeenCalledWith('task_1', 1);
+  });
+
+  it('rejects oversized public text fields before persistence or execution', async () => {
+    const tasks = taskManager();
+    const create = vi.fn();
+    const runtime = createRuntime({ sessions: { create } } as unknown as AgentStore, tasks);
+
+    await expect(runtime.createSession({
+      title: 'x'.repeat(AGENT_REQUEST_LIMITS.sessionTitleCharacters + 1),
+    })).rejects.toThrow('title must not exceed');
+    await expect(runtime.createTask({
+      sessionId: 'session_1',
+      message: 'x'.repeat(AGENT_REQUEST_LIMITS.taskMessageCharacters + 1),
+      clientRequestId: 'request_1',
+    })).rejects.toThrow('message must not exceed');
+    await expect(runtime.retryTask({
+      sourceTaskId: 'task_1',
+      clientRequestId: 'x'.repeat(AGENT_REQUEST_LIMITS.idempotencyKeyCharacters + 1),
+    })).rejects.toThrow('clientRequestId must not exceed');
+
+    expect(create).not.toHaveBeenCalled();
+    expect(tasks.createTask).not.toHaveBeenCalled();
+    expect(tasks.retryTask).not.toHaveBeenCalled();
   });
 
   it('fences execution and finishes external cleanup before deleting durable state', async () => {

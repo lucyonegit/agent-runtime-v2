@@ -6,6 +6,7 @@ export * from './message.js';
 export * from './model-call.js';
 export * from './plan.js';
 export * from './realtime-event.js';
+export * from './request-limits.js';
 export * from './session.js';
 export * from './task.js';
 export * from './task-checkpoint.js';

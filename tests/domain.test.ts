@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AGENT_REQUEST_LIMITS,
   ACTIVE_TASK_STATUSES,
   AGENT_TASK_RUN_STATUSES,
   AGENT_TASK_RUN_TRIGGERS,
@@ -102,6 +103,14 @@ describe('durable domain vocabulary', () => {
       max: 1,
       options: [{ label: 'One', value: 'one' }],
     })).toMatchObject({ valid: false });
+    expect(validateAgentUserInputSchema({
+      type: 'text',
+      maxLength: AGENT_REQUEST_LIMITS.userInputTextCharacters + 1,
+    })).toMatchObject({ valid: false });
+    expect(validateAgentUserInputAnswer(
+      { type: 'text' },
+      'x'.repeat(AGENT_REQUEST_LIMITS.userInputTextCharacters + 1)
+    )).toMatchObject({ valid: false });
   });
 });
 
