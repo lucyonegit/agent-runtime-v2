@@ -61,19 +61,7 @@ export class ResumeTaskFlow {
           },
           nowMs: this.clock.nowMs(),
         });
-        await this.events.publishAll([
-          { type: 'task.upserted', sessionId: failed.task.sessionId, task: failed.task },
-          ...(failed.taskRun ? [{
-            type: 'task_run.upserted' as const,
-            sessionId: failed.task.sessionId,
-            taskRun: failed.taskRun,
-          }] : []),
-          ...(failed.planCleared ? [{
-            type: 'plan.cleared' as const,
-            sessionId: failed.task.sessionId,
-            taskId: failed.task.id,
-          }] : []),
-        ]);
+        await this.events.publishTaskFinish(failed);
         return failed.task;
       }
 

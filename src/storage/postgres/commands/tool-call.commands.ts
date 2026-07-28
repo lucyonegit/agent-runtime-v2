@@ -41,6 +41,10 @@ import {
   toolCallNotFound,
   touchSession,
 } from './command-helpers.js';
+import {
+  appendTerminalTaskCheckpoint,
+  assertNoActiveTaskChildren,
+} from './task-terminalization.helper.js';
 
 export async function saveToolCallsCommand(
   client: PoolClient,
@@ -489,6 +493,7 @@ export async function completeTaskCommand(
     if (!task || task.session_id !== input.sessionId) throw taskNotFound(input.taskId);
     const taskRun = await selectTaskRun(client, input.taskRunId, true);
     assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
+    await assertNoActiveTaskChildren(client, task.id);
     const messageResult = await client.query<AgentMessageRow>(
       `insert into agent_messages(
          id, session_id, task_id, task_run_id, output_id,
@@ -522,13 +527,11 @@ export async function completeTaskCommand(
        where id = $1 returning *`,
       [task.id, input.nowMs]
     );
-    await appendTaskCheckpoint(client, {
+    const checkpoint = await appendTerminalTaskCheckpoint(client, {
       sessionId: input.sessionId,
       taskId: input.taskId,
       taskRunId: input.taskRunId,
       phase: 'completed',
-      iterationNo: (await selectLatestTaskCheckpoint(client, input.taskId))?.iteration_no ?? 0,
-      executedToolCalls: await countCompletedToolCalls(client, input.taskId),
       nowMs: input.nowMs,
     });
     const planResult = await client.query(
@@ -540,16 +543,11 @@ export async function completeTaskCommand(
       task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'complete task')),
       taskRun: mapAgentTaskRunRow(requireRow(runResult.rows[0], 'complete task run')),
       message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'save final message')),
+      toolCalls: [],
+      toolRuns: [],
+      userInputRequests: [],
+      ...(checkpoint ? { checkpoint } : {}),
       planCleared: planResult.rowCount === 1,
     };
   });
-}
-
-async function countCompletedToolCalls(client: PoolClient, taskId: string): Promise<number> {
-  const result = await client.query<{ count: number }>(
-    `select count(*)::integer as count
-     from agent_tool_calls where task_id = $1 and status in ('completed', 'failed')`,
-    [taskId]
-  );
-  return requireRow(result.rows[0], 'count completed tool calls').count;
 }

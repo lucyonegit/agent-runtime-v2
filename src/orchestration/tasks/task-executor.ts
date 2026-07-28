@@ -3,6 +3,7 @@ import type { AgentTask, AgentTaskRun } from '../../domain/index.js';
 import type { ReActExecution } from '../../runtime/execution/react-execution.js';
 import { RuntimeError } from '../../runtime/errors/runtime-error.js';
 import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
+import { taskFinishEvents } from '../../runtime/events/helpers/task-finish-events.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { ExecutionOwnershipService } from './shared/execution-ownership.service.js';
 import { InterruptedTaskScanner } from './shared/interrupted-task-scanner.js';
@@ -177,21 +178,7 @@ export class TaskExecutor implements TaskExecutorPort {
         },
         nowMs: this.#options.clock.nowMs(),
       });
-      await this.#publish({ type: 'task.upserted', sessionId: failed.task.sessionId, task: failed.task });
-      if (failed.taskRun) {
-        await this.#publish({
-          type: 'task_run.upserted',
-          sessionId: failed.task.sessionId,
-          taskRun: failed.taskRun,
-        });
-      }
-      if (failed.planCleared) {
-        await this.#publish({
-          type: 'plan.cleared',
-          sessionId: failed.task.sessionId,
-          taskId: failed.task.id,
-        });
-      }
+      for (const event of taskFinishEvents(failed)) await this.#publish(event);
     } catch {
       // A terminal transaction or newer owner won the race.
     }

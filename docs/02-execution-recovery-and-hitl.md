@@ -37,6 +37,8 @@ Checkpoint 记录 `sequenceNo/phase/callMessageId/iterationNo/executedToolCalls`
 
 Checkpoint 不复制完整消息；恢复输入从 Message、ToolCall 和 ToolRun 重建。
 
+Task 进入终态时使用一个事务收口 Task、TaskRun、所有活动 ToolCall/ToolRun、待处理 UserInputRequest、ActivePlan，以及已有 TaskRun 时的终态 Checkpoint。失败或取消会把未开始/可中断工具标为 `cancelled`；有已开始证据的 `side_effecting` 工具仍标为 `outcome_unknown`。事务返回全部变化 projection，Runtime 随后按 ToolCall、ToolRun、UserInputRequest、TaskRun、Task、Plan 的完整批次发布事件。完成路径若仍存在活动子状态会拒绝提交，避免出现 Task=`completed` 但工具仍在运行的矛盾状态。
+
 ## 3. 中断发现与人工恢复
 
 TaskExecutor 周期扫描 `running` 且 `ownershipExpiresAtMs <= now` 的 TaskRun：

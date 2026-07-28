@@ -1,5 +1,7 @@
 import type { AgentRealtimeEvent, AgentTask } from '../../../domain/index.js';
 import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-writer.js';
+import { taskFinishEvents } from '../../../runtime/events/helpers/task-finish-events.js';
+import type { FinishTaskResult } from '../../../storage/agent-store.js';
 
 /** Best-effort projection of state that is already committed in PostgreSQL. */
 export class TaskEventPublisher {
@@ -7,6 +9,10 @@ export class TaskEventPublisher {
 
   publishTask(task: AgentTask): Promise<void> {
     return this.publish({ type: 'task.upserted', sessionId: task.sessionId, task });
+  }
+
+  publishTaskFinish(result: FinishTaskResult): Promise<void> {
+    return this.publishAll(taskFinishEvents(result));
   }
 
   async publishAll(events: AgentRealtimeEvent[]): Promise<void> {

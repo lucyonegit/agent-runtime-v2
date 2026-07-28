@@ -41,6 +41,10 @@ import {
   taskNotFound,
   touchSession,
 } from './command-helpers.js';
+import {
+  appendTerminalTaskCheckpoint,
+  terminalizeTaskChildren,
+} from './task-terminalization.helper.js';
 
 export async function createSessionCommand(
   client: PoolClient,
@@ -402,6 +406,11 @@ export async function failTaskCommand(
         input.nowMs,
       ]
     );
+    const children = await terminalizeTaskChildren(client, {
+      taskId: task.id,
+      phase: 'failed',
+      nowMs: input.nowMs,
+    });
     const taskResult = await client.query<AgentTaskRow>(
       `update agent_tasks
        set status = 'failed', error_code = $2, error_message = $3, error_details = $4,
@@ -415,11 +424,21 @@ export async function failTaskCommand(
         input.nowMs,
       ]
     );
+    const checkpoint = await appendTerminalTaskCheckpoint(client, {
+      sessionId: task.session_id,
+      taskId: task.id,
+      taskRunId: taskRun.id,
+      phase: 'failed',
+      metadata: { errorCode: input.error.code },
+      nowMs: input.nowMs,
+    });
     const planCleared = await clearActivePlan(client, task.session_id, task.id);
     await touchSession(client, task.session_id, input.nowMs);
     return {
       task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'fail task')),
       taskRun: mapAgentTaskRunRow(requireRow(runResult.rows[0], 'fail task run')),
+      ...children,
+      ...(checkpoint ? { checkpoint } : {}),
       planCleared,
     };
   });
@@ -436,7 +455,13 @@ export async function cancelTaskCommand(
       throw staleTaskVersion(task, input.expectedTaskVersion);
     }
     if (['completed', 'failed', 'cancelled'].includes(task.status)) {
-      return { task: mapAgentTaskRow(task), planCleared: false };
+      return {
+        task: mapAgentTaskRow(task),
+        toolCalls: [],
+        toolRuns: [],
+        userInputRequests: [],
+        planCleared: false,
+      };
     }
     const taskRunResult = await client.query<AgentTaskRunRow>(
       `update agent_task_runs
@@ -446,58 +471,11 @@ export async function cancelTaskCommand(
        returning *`,
       [task.id, input.nowMs]
     );
-    await client.query(
-      `update agent_tool_runs run
-       set status = case
-             when call.side_effect_level = 'side_effecting' then 'outcome_unknown'
-             else 'cancelled'
-           end,
-           error_code = case
-             when call.side_effect_level = 'side_effecting' then 'side_effect_outcome_unknown'
-             else null
-           end,
-           error_message = case
-             when call.side_effect_level = 'side_effecting'
-               then 'The Task was cancelled after the side-effecting tool started; its outcome is unknown.'
-             else null
-           end,
-           ended_at_ms = $2
-       from agent_tool_calls call
-       where run.tool_call_id = call.id and run.task_id = $1 and run.status = 'running'`,
-      [task.id, input.nowMs]
-    );
-    await client.query(
-      `update agent_tool_calls
-       set status = case
-             when status = 'running' and side_effect_level = 'side_effecting' then 'outcome_unknown'
-             else 'cancelled'
-           end,
-           error_code = case
-             when status = 'running' and side_effect_level = 'side_effecting'
-               then 'side_effect_outcome_unknown'
-             else null
-           end,
-           error_message = case
-             when status = 'running' and side_effect_level = 'side_effecting'
-               then 'The Task was cancelled after the side-effecting tool started; its outcome is unknown.'
-             else null
-           end,
-           error_details = null,
-           version = version + 1,
-           completed_at_ms = case
-             when status = 'running' and side_effect_level = 'side_effecting' then null::bigint
-             else $2::bigint
-           end,
-           updated_at_ms = $2
-       where task_id = $1 and status in ('pending', 'running', 'waiting_for_user')`,
-      [task.id, input.nowMs]
-    );
-    await client.query(
-      `update agent_user_input_requests
-       set status = 'cancelled', version = version + 1, updated_at_ms = $2
-       where task_id = $1 and status = 'pending'`,
-      [task.id, input.nowMs]
-    );
+    const children = await terminalizeTaskChildren(client, {
+      taskId: task.id,
+      phase: 'cancelled',
+      nowMs: input.nowMs,
+    });
     const taskResult = await client.query<AgentTaskRow>(
       `update agent_tasks
        set status = 'cancelled', version = version + 1,
@@ -505,11 +483,27 @@ export async function cancelTaskCommand(
        where id = $1 returning *`,
       [task.id, input.nowMs]
     );
+    const latestRunResult = await client.query<AgentTaskRunRow>(
+      `select * from agent_task_runs
+       where task_id = $1
+       order by run_no desc
+       limit 1`,
+      [task.id]
+    );
+    const checkpoint = await appendTerminalTaskCheckpoint(client, {
+      sessionId: task.session_id,
+      taskId: task.id,
+      taskRunId: taskRunResult.rows[0]?.id ?? latestRunResult.rows[0]?.id,
+      phase: 'cancelled',
+      nowMs: input.nowMs,
+    });
     const planCleared = await clearActivePlan(client, task.session_id, task.id);
     await touchSession(client, task.session_id, input.nowMs);
     return {
       task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'cancel task')),
       ...(taskRunResult.rows[0] ? { taskRun: mapAgentTaskRunRow(taskRunResult.rows[0]) } : {}),
+      ...children,
+      ...(checkpoint ? { checkpoint } : {}),
       planCleared,
     };
   });

@@ -104,6 +104,10 @@ describe('PostgresAgentStore converged model', () => {
       task: { status: 'completed' },
       taskRun: { status: 'completed' },
       message: { role: 'assistant', channel: 'final', contextScope: 'conversation' },
+      checkpoint: { phase: 'completed', executedToolCalls: 1 },
+      toolCalls: [],
+      toolRuns: [],
+      userInputRequests: [],
       planCleared: true,
     });
     await expect(store.plans.getActive(task.sessionId)).resolves.toBeUndefined();
@@ -444,7 +448,7 @@ describe('PostgresAgentStore converged model', () => {
       });
     }
 
-    await store.tasks.cancel({
+    const cancelled = await store.tasks.cancel({
       taskId: task.id,
       expectedTaskVersion: started.task.version,
       nowMs: 23,
@@ -460,6 +464,170 @@ describe('PostgresAgentStore converged model', () => {
     });
     expect(calls.find(call => call.id === 'tool_call_read')).toMatchObject({ status: 'cancelled' });
     expect(runs.find(run => run.id === 'tool_run_read')).toMatchObject({ status: 'cancelled' });
+    expect(cancelled).toMatchObject({
+      task: { status: 'cancelled' },
+      taskRun: { status: 'cancelled' },
+      checkpoint: { phase: 'cancelled', executedToolCalls: 2 },
+      userInputRequests: [],
+      toolCalls: expect.arrayContaining([
+        expect.objectContaining({ id: 'tool_call_side_effect', status: 'outcome_unknown' }),
+        expect.objectContaining({ id: 'tool_call_read', status: 'cancelled' }),
+      ]),
+      toolRuns: expect.arrayContaining([
+        expect.objectContaining({ id: 'tool_run_side_effect', status: 'outcome_unknown' }),
+        expect.objectContaining({ id: 'tool_run_read', status: 'cancelled' }),
+      ]),
+    });
+  });
+
+  it('atomically closes active children and appends a failed checkpoint', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await store.execution.saveToolCalls({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      outputId: 'output_tools',
+      messageId: 'message_tools',
+      content: '',
+      contextScope: 'task',
+      toolCalls: [
+        {
+          id: 'tool_call_side_effect',
+          call: { id: 'model_side_effect', name: 'run_shell', args: { command: 'deploy' }, type: 'tool_call' },
+          argumentsChecksum: 'side_effect_checksum',
+          sideEffectLevel: 'side_effecting',
+          idempotencyKey: 'side_effect_key',
+        },
+        {
+          id: 'tool_call_pending',
+          call: { id: 'model_pending', name: 'read_file', args: { path: 'code/a.ts' }, type: 'tool_call' },
+          argumentsChecksum: 'pending_checksum',
+          sideEffectLevel: 'read_only',
+          idempotencyKey: 'pending_key',
+        },
+      ],
+      nowMs: 21,
+    });
+    await store.execution.startToolRun({
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      modelToolCallId: 'model_side_effect',
+      toolRunId: 'tool_run_side_effect',
+      workerId: 'worker_1',
+      nowMs: 22,
+    });
+    await store.plans.apply({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      title: 'Fail safely',
+      steps: [{ step: 'Run', status: 'in_progress' }],
+      nowMs: 23,
+    });
+
+    const failed = await store.tasks.fail({
+      taskId: task.id,
+      expectedTaskVersion: started.task.version,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      error: { code: 'runtime_error', message: 'Execution crashed.' },
+      nowMs: 24,
+    });
+
+    expect(failed).toMatchObject({
+      task: { status: 'failed' },
+      taskRun: { status: 'failed' },
+      checkpoint: {
+        phase: 'failed',
+        executedToolCalls: 2,
+        metadata: { errorCode: 'runtime_error' },
+      },
+      planCleared: true,
+      toolCalls: expect.arrayContaining([
+        expect.objectContaining({ id: 'tool_call_side_effect', status: 'outcome_unknown' }),
+        expect.objectContaining({ id: 'tool_call_pending', status: 'cancelled' }),
+      ]),
+      toolRuns: [expect.objectContaining({
+        id: 'tool_run_side_effect',
+        status: 'outcome_unknown',
+      })],
+      userInputRequests: [],
+    });
+    await expect(store.plans.getActive(task.sessionId)).resolves.toBeUndefined();
+    await expect(store.execution.getLatestCheckpoint(task.id)).resolves.toMatchObject({
+      phase: 'failed',
+    });
+  });
+
+  it('cancels pending HITL projections and returns their terminal events', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await createWaitingToolCall(task.id, started.taskRun.id, 21);
+    await store.plans.apply({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      title: 'Wait for input',
+      steps: [{ step: 'Ask', status: 'in_progress' }],
+      nowMs: 23,
+    });
+    const waiting = await store.execution.waitForUserInput({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      requests: [{
+        requestId: 'input_1',
+        modelToolCallId: 'model_input_call_1',
+        prompt: 'Choose a value',
+        inputSchema: { type: 'text' },
+      }],
+      nowMs: 25,
+    });
+
+    const cancelled = await store.tasks.cancel({
+      taskId: task.id,
+      expectedTaskVersion: waiting.task.version,
+      nowMs: 26,
+    });
+
+    expect(cancelled).toMatchObject({
+      task: { status: 'cancelled' },
+      taskRun: { status: 'cancelled' },
+      checkpoint: { phase: 'cancelled', executedToolCalls: 1 },
+      planCleared: true,
+      toolCalls: [expect.objectContaining({
+        id: 'tool_call_input_1',
+        status: 'cancelled',
+      })],
+      toolRuns: [],
+      userInputRequests: [expect.objectContaining({
+        id: 'input_1',
+        status: 'cancelled',
+      })],
+    });
+  });
+
+  it('refuses to mark a Task completed while child execution is active', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await createWaitingToolCall(task.id, started.taskRun.id, 21);
+
+    await expect(store.execution.completeTask({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      outputId: 'output_final',
+      messageId: 'message_final',
+      content: 'Done too early.',
+      nowMs: 23,
+    })).rejects.toMatchObject({ code: 'INVALID_TASK_STATE' });
+    await expect(store.tasks.get(task.id)).resolves.toMatchObject({ status: 'running' });
   });
 });
 

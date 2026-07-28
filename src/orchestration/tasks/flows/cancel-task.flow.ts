@@ -17,19 +17,7 @@ export class CancelTaskFlow {
     const result = await this.#cancelLatest(taskId, expectedVersion);
     // The database fence is committed before process-local I/O is aborted.
     this.execution.abortExecution(result.task.id);
-    await this.events.publishAll([
-      { type: 'task.upserted', sessionId: result.task.sessionId, task: result.task },
-      ...(result.taskRun ? [{
-        type: 'task_run.upserted' as const,
-        sessionId: result.task.sessionId,
-        taskRun: result.taskRun,
-      }] : []),
-      ...(result.planCleared ? [{
-        type: 'plan.cleared' as const,
-        sessionId: result.task.sessionId,
-        taskId: result.task.id,
-      }] : []),
-    ]);
+    await this.events.publishTaskFinish(result);
     return result.task;
   }
 
@@ -45,7 +33,15 @@ export class CancelTaskFlow {
       if (!(mapped instanceof RuntimeError && mapped.code === 'concurrency_conflict')) throw mapped;
       const latest = await this.store.tasks.get(taskId);
       if (!latest) throw mapped;
-      if (latest.status === 'cancelled') return { task: latest, planCleared: false };
+      if (latest.status === 'cancelled') {
+        return {
+          task: latest,
+          toolCalls: [],
+          toolRuns: [],
+          userInputRequests: [],
+          planCleared: false,
+        };
+      }
       if (!['created', 'running', 'waiting_for_user', 'recovery_required'].includes(latest.status)) {
         throw mapped;
       }

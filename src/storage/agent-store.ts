@@ -154,6 +154,10 @@ export interface FailTaskInput {
 export interface FinishTaskResult {
   task: AgentTask;
   taskRun?: AgentTaskRun;
+  toolCalls: AgentToolCall[];
+  toolRuns: AgentToolRun[];
+  userInputRequests: AgentUserInputRequest[];
+  checkpoint?: AgentTaskCheckpoint;
   planCleared: boolean;
 }
 

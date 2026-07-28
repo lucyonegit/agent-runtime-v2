@@ -6,6 +6,7 @@ import type { AgentLoopTarget } from '../loop/agent-loop.js';
 import type { AgentStore, FinishTaskResult } from '../../storage/agent-store.js';
 import { mapStoreError } from '../errors/runtime-error.js';
 import { LoopEventHandler } from './handlers/loop-event.handler.js';
+import { taskFinishEvents } from './helpers/task-finish-events.js';
 
 export { redactToolArguments } from './helpers/event-payload.helper.js';
 
@@ -83,13 +84,7 @@ export class RuntimeEventWriter {
         nowMs: this.#clock.nowMs(),
       });
       await this.#publish({ type: 'message.upserted', sessionId: target.sessionId, message: committed.message });
-      await this.#publish({ type: 'task.upserted', sessionId: target.sessionId, task: committed.task });
-      if (committed.taskRun) {
-        await this.#publish({ type: 'task_run.upserted', sessionId: target.sessionId, taskRun: committed.taskRun });
-      }
-      if (committed.planCleared) {
-        await this.#publish({ type: 'plan.cleared', sessionId: target.sessionId, taskId: target.taskId });
-      }
+      await this.publishTaskFinish(committed);
       return { task: committed.task, message: committed.message };
     } catch (error) {
       throw mapStoreError(error);
@@ -138,19 +133,7 @@ export class RuntimeEventWriter {
   }
 
   async publishTaskFinish(result: FinishTaskResult): Promise<void> {
-    await this.#publish({
-      type: 'task.upserted', sessionId: result.task.sessionId, task: result.task,
-    });
-    if (result.taskRun) {
-      await this.#publish({
-        type: 'task_run.upserted', sessionId: result.task.sessionId, taskRun: result.taskRun,
-      });
-    }
-    if (result.planCleared) {
-      await this.#publish({
-        type: 'plan.cleared', sessionId: result.task.sessionId, taskId: result.task.id,
-      });
-    }
+    for (const event of taskFinishEvents(result)) await this.#publish(event);
   }
 
   #messageId(taskId: string, outputId: string): string {
