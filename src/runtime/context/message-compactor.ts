@@ -32,6 +32,7 @@ export class MessageCompactor {
     taskRun: AgentTaskRun;
     groups: ModelMessageGroup[];
     current?: AgentContextCompaction;
+    signal?: AbortSignal;
   }): Promise<AgentContextCompaction | undefined> {
     const candidates = selectOldConversationGroups(
       input.groups,
@@ -71,7 +72,7 @@ export class MessageCompactor {
       callType: 'context.compress',
       logicalCallKey: `context.compress:${throughMessageRowId}`,
     });
-    const response = await model.invoke(messages);
+    const response = await model.invoke(messages, { signal: input.signal });
     const summary = trimToEstimatedTokens(
       response.text.trim(),
       this.options.config.summaryMaxTokens

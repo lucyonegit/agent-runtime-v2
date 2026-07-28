@@ -93,7 +93,11 @@ export class ReActExecution {
         loopInput: {
           context: {
             loadMessages: async () => {
-              currentInput = await this.options.context.buildForTask(input.task, input.taskRun);
+              currentInput = await this.options.context.buildForTask(
+                input.task,
+                input.taskRun,
+                { signal: input.signal }
+              );
               return currentInput.messages;
             },
           },

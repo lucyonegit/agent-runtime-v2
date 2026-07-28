@@ -54,7 +54,11 @@ export class ModelInputBuilder {
     }
   }
 
-  async buildForTask(task: AgentTask, taskRun: AgentTaskRun): Promise<ModelInput> {
+  async buildForTask(
+    task: AgentTask,
+    taskRun: AgentTaskRun,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<ModelInput> {
     let built = await this.#build(task);
     if (built.input.estimatedTokens <= built.input.inputTokenLimit) return built.input;
     if (!this.#compactor) {
@@ -67,6 +71,7 @@ export class ModelInputBuilder {
       taskRun,
       groups: buildCompleteMessageGroups(eligible),
       current: built.snapshot.compaction,
+      signal: options.signal,
     });
     if (!updated) {
       throw new RuntimeError('model_input_too_large', 'Model input is too large and has no older complete messages to compact.');

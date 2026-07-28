@@ -197,12 +197,17 @@ export class AgentLoop {
       try {
         messages = [...await input.context.loadMessages(iteration)];
       } catch (error) {
+        if (input.limits.signal?.aborted || isAbortError(error)) {
+          return cancelledResult(input.limits.signal);
+        }
         return {
           type: 'failed',
           code: 'context_build_error',
           message: error instanceof Error ? error.message : 'Failed to build model context.',
         };
       }
+      const afterContext = this.#terminalPreflight(input.limits);
+      if (afterContext) return afterContext;
       if (correctionMessages.length > 0) {
         messages.push(...correctionMessages);
         correctionMessages = [];

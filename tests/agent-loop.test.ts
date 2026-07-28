@@ -503,6 +503,37 @@ describe('AgentLoop with LangChain messages', () => {
     })))).result).toEqual({ type: 'cancelled', reason: 'ownership_lost' });
   });
 
+  it('treats context-build aborts and elapsed deadlines as terminal before model invocation', async () => {
+    const invoke = vi.fn(async () => chunk('unused'));
+    const controller = new AbortController();
+    const aborting = new AgentLoop({ streaming: false, model: invokeModel(invoke) });
+    const cancelled = await consume(aborting.run(loopInput({
+      context: {
+        loadMessages: async () => {
+          controller.abort('runtime_shutdown');
+          throw new DOMException('Context build was cancelled.', 'AbortError');
+        },
+      },
+      limits: { maxIterations: 2, maxToolCalls: 2, signal: controller.signal },
+    })));
+    expect(cancelled.result).toEqual({ type: 'cancelled', reason: 'runtime_shutdown' });
+
+    const nowMs = vi.fn()
+      .mockReturnValueOnce(99)
+      .mockReturnValue(100);
+    const expiring = new AgentLoop({
+      streaming: false,
+      model: invokeModel(invoke),
+      clock: { nowMs },
+    });
+    const expired = await consume(expiring.run(loopInput({
+      context: { loadMessages: async () => [] },
+      limits: { maxIterations: 2, maxToolCalls: 2, deadlineMs: 100 },
+    })));
+    expect(expired.result).toMatchObject({ type: 'failed', code: 'deadline_exceeded' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('cancels an in-flight tool without recording an ordinary tool failure', async () => {
     const controller = new AbortController();
     let started!: () => void;
