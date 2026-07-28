@@ -95,6 +95,11 @@ describe('ModelInputBuilder', () => {
     ]);
     expect(input.inputManifest.purpose).toBe('task.react');
     expect(loadInputSnapshot).toHaveBeenCalledOnce();
+    expect(loadInputSnapshot).toHaveBeenCalledWith({
+      sessionId: 'session_1',
+      taskId: 'task_current',
+      goalMessageId: 'goal',
+    });
   });
 });
 

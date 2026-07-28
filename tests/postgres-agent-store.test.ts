@@ -69,29 +69,52 @@ describe('PostgresAgentStore converged model', () => {
   });
 
   it('loads all durable model-input sources through one context snapshot', async () => {
-    const { task } = await createTask();
-    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    const { task: firstTask } = await createTask();
+    const firstRun = await startRun(firstTask.id, firstTask.version, 'task_run_1', 'initial', 20);
+    await store.execution.completeTask({
+      sessionId: firstTask.sessionId,
+      taskId: firstTask.id,
+      taskRunId: firstRun.taskRun.id,
+      ownerId: 'worker_1',
+      outputId: 'first_output',
+      messageId: 'first_final',
+      content: 'Old completed answer',
+      nowMs: 21,
+    });
+    const retry = await store.tasks.createRetry({
+      sessionId: firstTask.sessionId,
+      taskId: 'task_retry',
+      retryOfTaskId: firstTask.id,
+      clientRequestId: 'context_retry',
+      nowMs: 22,
+    });
+    const started = await startRun(retry.task.id, retry.task.version, 'task_run_2', 'initial', 23);
     await store.plans.apply({
-      sessionId: task.sessionId,
-      taskId: task.id,
+      sessionId: retry.task.sessionId,
+      taskId: retry.task.id,
       taskRunId: started.taskRun.id,
       ownerId: 'worker_1',
       title: 'Context plan',
       steps: [{ step: 'Inspect', status: 'in_progress' }],
-      nowMs: 21,
+      nowMs: 24,
     });
     await store.context.replaceCompaction({
-      sessionId: task.sessionId,
-      throughMessageRowId: 1,
+      sessionId: retry.task.sessionId,
+      throughMessageRowId: 2,
       summary: 'Earlier work',
-      nowMs: 22,
+      nowMs: 25,
     });
 
-    await expect(store.context.loadInputSnapshot(task.sessionId)).resolves.toMatchObject({
-      messages: [{ id: 'message_goal', content: 'Inspect the code.' }],
-      activePlan: { taskId: task.id, title: 'Context plan' },
-      compaction: { throughMessageRowId: 1, summary: 'Earlier work' },
+    const snapshot = await store.context.loadInputSnapshot({
+      sessionId: retry.task.sessionId,
+      taskId: retry.task.id,
+      goalMessageId: retry.task.goalMessageId,
     });
+    expect(snapshot).toMatchObject({
+      activePlan: { taskId: retry.task.id, title: 'Context plan' },
+      compaction: { throughMessageRowId: 2, summary: 'Earlier work' },
+    });
+    expect(snapshot.messages.map(message => message.id)).toEqual(['message_goal']);
   });
 
   it('advances the Session revision when model usage becomes visible', async () => {

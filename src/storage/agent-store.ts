@@ -444,6 +444,12 @@ export interface AgentContextSnapshot {
   compaction?: AgentContextCompaction;
 }
 
+export interface LoadAgentContextSnapshotInput {
+  sessionId: string;
+  taskId: string;
+  goalMessageId: string;
+}
+
 export interface SessionStore {
   create(input: CreateSessionInput): Promise<AgentSession>;
   list(): Promise<AgentSession[]>;
@@ -506,7 +512,7 @@ export interface ModelStore {
 }
 
 export interface ContextStore {
-  loadInputSnapshot(sessionId: string): Promise<AgentContextSnapshot>;
+  loadInputSnapshot(input: LoadAgentContextSnapshotInput): Promise<AgentContextSnapshot>;
   getCompaction(sessionId: string): Promise<AgentContextCompaction | undefined>;
   replaceCompaction(input: ReplaceContextCompactionInput): Promise<AgentContextCompaction>;
 }

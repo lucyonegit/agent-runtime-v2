@@ -3,6 +3,7 @@ import type { AgentContextCompaction } from '../../../domain/index.js';
 import type {
   AgentContextSnapshot,
   ContextStore,
+  LoadAgentContextSnapshotInput,
   ReplaceContextCompactionInput,
 } from '../../agent-store.js';
 import { replaceContextCompactionCommand } from '../transaction-commands.js';
@@ -16,10 +17,10 @@ import { withPostgresClient } from './postgres-store.helper.js';
 export class PostgresContextStore implements ContextStore {
   constructor(private readonly pool: Pool) {}
 
-  async loadInputSnapshot(sessionId: string): Promise<AgentContextSnapshot> {
+  async loadInputSnapshot(input: LoadAgentContextSnapshotInput): Promise<AgentContextSnapshot> {
     return withPostgresClient(
       this.pool,
-      client => loadContextInputSnapshotQuery(client, sessionId)
+      client => loadContextInputSnapshotQuery(client, input)
     );
   }
 

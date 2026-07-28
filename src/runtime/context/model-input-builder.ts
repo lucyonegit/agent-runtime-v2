@@ -102,7 +102,11 @@ export class ModelInputBuilder {
     snapshot: AgentContextSnapshot;
   }> {
     const [snapshot, stableContext] = await Promise.all([
-      this.options.store.context.loadInputSnapshot(task.sessionId),
+      this.options.store.context.loadInputSnapshot({
+        sessionId: task.sessionId,
+        taskId: task.id,
+        goalMessageId: task.goalMessageId,
+      }),
       this.options.getStableContext(task.sessionId),
     ]);
     const eligible = filterContextMessages(snapshot.messages, task);
