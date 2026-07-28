@@ -8,6 +8,7 @@ import {
   AGENT_TOOL_RUN_STATUSES,
   isTerminalTaskStatus,
   resolveTaskGoalMessage,
+  validateAgentUserInputAnswer,
   type AgentMessage,
 } from '../src/domain/index.js';
 
@@ -44,6 +45,41 @@ describe('durable domain vocabulary', () => {
     ];
     expect(resolveTaskGoalMessage({ goalMessageId: 'message_goal' }, messages)?.content)
       .toBe('original goal');
+  });
+
+  it('validates HITL answers against the persisted input contract', () => {
+    expect(validateAgentUserInputAnswer(
+      { type: 'text', maxLength: 3 },
+      'four'
+    )).toMatchObject({ valid: false });
+    expect(validateAgentUserInputAnswer(
+      { type: 'single_choice', options: [{ label: 'One', value: 'one' }] },
+      'two'
+    )).toMatchObject({ valid: false });
+    expect(validateAgentUserInputAnswer(
+      {
+        type: 'multi_choice',
+        min: 1,
+        max: 2,
+        options: [
+          { label: 'One', value: 'one' },
+          { label: 'Two', value: 'two' },
+        ],
+      },
+      ['one', 'one']
+    )).toMatchObject({ valid: false });
+    expect(validateAgentUserInputAnswer(
+      {
+        type: 'multi_choice',
+        min: 1,
+        max: 2,
+        options: [
+          { label: 'One', value: 'one' },
+          { label: 'Two', value: 'two' },
+        ],
+      },
+      ['one', 'two']
+    )).toEqual({ valid: true });
   });
 });
 

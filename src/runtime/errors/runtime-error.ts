@@ -16,6 +16,7 @@ export type RuntimeErrorCode =
   | 'model_input_too_large'
   | 'invalid_session_state'
   | 'invalid_task_state'
+  | 'invalid_user_input'
   | 'invalid_plan_state'
   | 'idempotency_conflict'
   | 'concurrency_conflict'
@@ -61,6 +62,8 @@ export function mapStoreError(error: unknown): RuntimeError {
     case 'INVALID_USER_INPUT_STATE':
     case 'USER_INPUT_REQUEST_NOT_FOUND':
       return new RuntimeError('invalid_task_state', error.message, options);
+    case 'INVALID_USER_INPUT_ANSWER':
+      return new RuntimeError('invalid_user_input', error.message, { ...options, retryable: false });
     case 'ACTIVE_PLAN_NOT_FOUND':
       return new RuntimeError('invalid_plan_state', error.message, { ...options, retryable: false });
     case 'CLIENT_REQUEST_CONFLICT':

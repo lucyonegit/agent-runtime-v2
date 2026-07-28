@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { validateAgentUserInputAnswer } from '../../../domain/index.js';
 import {
   AgentStoreError,
   type ExpireUserInputRequestInput,
@@ -222,6 +223,15 @@ export async function answerUserInputCommand(
         'INVALID_USER_INPUT_STATE',
         'The Task or ToolCall is no longer waiting for this answer.',
         { taskId: task.id, taskStatus: task.status, toolCallStatus: call.status }
+      );
+    }
+    const mappedRequest = mapAgentUserInputRequestRow(request);
+    const answerValidation = validateAgentUserInputAnswer(mappedRequest.inputSchema, input.answer);
+    if (!answerValidation.valid) {
+      throw new AgentStoreError(
+        'INVALID_USER_INPUT_ANSWER',
+        answerValidation.reason,
+        { requestId: request.id, inputType: mappedRequest.inputSchema.type }
       );
     }
     const duplicateAnswer = await client.query<{ id: string }>(

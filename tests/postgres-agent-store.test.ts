@@ -289,6 +289,24 @@ describe('PostgresAgentStore converged model', () => {
       requests: [{ status: 'pending', toolCallId: 'tool_call_input_1' }],
     });
 
+    await expect(store.execution.answerUserInput({
+      requestId: 'input_1',
+      expectedVersion: 0,
+      clientAnswerId: 'invalid_answer',
+      answer: 42,
+      answerMessageId: 'invalid_answer_message',
+      taskRunId: 'invalid_answer_run',
+      ownerId: 'worker_1',
+      nowMs: 29,
+      ownershipExpiresAtMs: 1_000,
+    })).rejects.toMatchObject({ code: 'INVALID_USER_INPUT_ANSWER' });
+    await expect(store.sessions.listUserInputRequests(task.sessionId)).resolves.toMatchObject([
+      { id: 'input_1', status: 'pending', version: 0 },
+    ]);
+    await expect(store.tasks.getLatestRun(task.id)).resolves.toMatchObject({
+      id: 'task_run_1', status: 'paused', runNo: 1,
+    });
+
     const answered = await store.execution.answerUserInput({
       requestId: 'input_1',
       expectedVersion: 0,
