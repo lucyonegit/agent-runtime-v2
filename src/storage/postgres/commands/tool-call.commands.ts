@@ -27,7 +27,11 @@ import {
   type AgentToolCallRow,
   type AgentToolRunRow,
 } from '../row-mappers.js';
-import { lockAgentSession, withPostgresTransaction } from '../sql.js';
+import {
+  lockAgentSession,
+  lockAgentSessionForTask,
+  withPostgresTransaction,
+} from '../sql.js';
 import {
   appendTaskCheckpoint,
   assertTaskRunOwnership,
@@ -158,6 +162,7 @@ export async function startToolRunCommand(
   input: StartToolRunInput
 ): Promise<StartToolRunResult> {
   return withPostgresTransaction(client, async () => {
+    await lockAgentSessionForTask(client, input.taskId);
     const task = await selectTask(client, input.taskId, true);
     if (!task) throw taskNotFound(input.taskId);
     const taskRun = await selectTaskRun(client, input.taskRunId, true);
@@ -218,6 +223,7 @@ export async function prepareToolCallsForResumeCommand(
   input: PrepareToolCallsForResumeInput
 ): Promise<PrepareToolCallsForResumeResult> {
   return withPostgresTransaction(client, async () => {
+    await lockAgentSessionForTask(client, input.taskId);
     const task = await selectTask(client, input.taskId, true);
     if (!task) throw taskNotFound(input.taskId);
     const taskRun = await selectTaskRun(client, input.taskRunId, true);

@@ -6,12 +6,16 @@ import type {
   AgentToolRun,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
-import { AgentStoreError } from '../../agent-store.js';
+import { AgentStoreError, type FinishTaskResult } from '../../agent-store.js';
 import {
+  mapAgentTaskRow,
+  mapAgentTaskRunRow,
   mapAgentTaskCheckpointRow,
   mapAgentToolCallRow,
   mapAgentToolRunRow,
   mapAgentUserInputRequestRow,
+  type AgentTaskRow,
+  type AgentTaskRunRow,
   type AgentToolCallRow,
   type AgentToolRunRow,
   type AgentUserInputRequestRow,
@@ -159,4 +163,80 @@ export async function appendTerminalTaskCheckpoint(
     nowMs: input.nowMs,
   });
   return mapAgentTaskCheckpointRow(checkpoint);
+}
+
+export async function cancelLockedTask(
+  client: PoolClient,
+  input: {
+    task: AgentTaskRow;
+    nowMs: number;
+    checkpointMetadata?: Record<string, unknown>;
+  }
+): Promise<FinishTaskResult> {
+  if (['completed', 'failed', 'cancelled'].includes(input.task.status)) {
+    return {
+      task: mapAgentTaskRow(input.task),
+      toolCalls: [],
+      toolRuns: [],
+      userInputRequests: [],
+      planCleared: false,
+    };
+  }
+  const taskRunResult = await client.query<AgentTaskRunRow>(
+    `update agent_task_runs
+     set status = 'cancelled', owner_id = null, ownership_expires_at_ms = null,
+         updated_at_ms = $2, ended_at_ms = $2
+     where task_id = $1 and status in ('running', 'paused')
+     returning *`,
+    [input.task.id, input.nowMs]
+  );
+  const children = await terminalizeTaskChildren(client, {
+    taskId: input.task.id,
+    phase: 'cancelled',
+    nowMs: input.nowMs,
+  });
+  const taskResult = await client.query<AgentTaskRow>(
+    `update agent_tasks
+     set status = 'cancelled', version = version + 1,
+         updated_at_ms = $2, completed_at_ms = $2
+     where id = $1 returning *`,
+    [input.task.id, input.nowMs]
+  );
+  const latestRunResult = await client.query<AgentTaskRunRow>(
+    `select * from agent_task_runs
+     where task_id = $1
+     order by run_no desc
+     limit 1`,
+    [input.task.id]
+  );
+  const checkpoint = await appendTerminalTaskCheckpoint(client, {
+    sessionId: input.task.session_id,
+    taskId: input.task.id,
+    taskRunId: taskRunResult.rows[0]?.id ?? latestRunResult.rows[0]?.id,
+    phase: 'cancelled',
+    ...(input.checkpointMetadata ? { metadata: input.checkpointMetadata } : {}),
+    nowMs: input.nowMs,
+  });
+  const planResult = await client.query(
+    `delete from agent_active_plans where session_id = $1 and task_id = $2`,
+    [input.task.session_id, input.task.id]
+  );
+  return {
+    task: mapAgentTaskRow(requireTaskRow(taskResult.rows[0], input.task.id)),
+    ...(taskRunResult.rows[0] ? { taskRun: mapAgentTaskRunRow(taskRunResult.rows[0]) } : {}),
+    ...children,
+    ...(checkpoint ? { checkpoint } : {}),
+    planCleared: planResult.rowCount === 1,
+  };
+}
+
+function requireTaskRow(row: AgentTaskRow | undefined, taskId: string): AgentTaskRow {
+  if (!row) {
+    throw new AgentStoreError(
+      'TASK_NOT_FOUND',
+      `Agent task ${JSON.stringify(taskId)} was not found while cancelling it.`,
+      { taskId }
+    );
+  }
+  return row;
 }

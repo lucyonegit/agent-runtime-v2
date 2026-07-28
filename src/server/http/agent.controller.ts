@@ -9,7 +9,7 @@ import {
   Post,
   Sse,
 } from '@nestjs/common';
-import { interval, map, merge, type Observable } from 'rxjs';
+import { interval, Observable } from 'rxjs';
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
 import { RuntimeEventBus } from '../runtime/runtime-event-bus.js';
 
@@ -21,8 +21,10 @@ export class AgentController {
   ) {}
 
   @Post('sessions')
-  createSession(@Body() body: { title?: string }) {
-    return this.runtime.createSession(body ?? {});
+  async createSession(@Body() body: { title?: string }) {
+    const session = await this.runtime.createSession(body ?? {});
+    this.events.openSession(session.id);
+    return session;
   }
 
   @Get('sessions')
@@ -98,10 +100,17 @@ export class AgentController {
 
   @Sse('sessions/:sessionId/events')
   sessionEvents(@Param('sessionId') sessionId: string): Observable<MessageEvent> {
-    return merge(
-      this.events.events(sessionId),
-      interval(SSE_HEARTBEAT_INTERVAL_MS).pipe(map(() => ({ data: '' })))
-    );
+    const sessionEvents = this.events.events(sessionId);
+    return new Observable(subscriber => {
+      const eventSubscription = sessionEvents.subscribe(subscriber);
+      if (subscriber.closed) return eventSubscription;
+      const heartbeatSubscription = interval(SSE_HEARTBEAT_INTERVAL_MS)
+        .subscribe(() => subscriber.next({ data: '' }));
+      return () => {
+        eventSubscription.unsubscribe();
+        heartbeatSubscription.unsubscribe();
+      };
+    });
   }
 }
 

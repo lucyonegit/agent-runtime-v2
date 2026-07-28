@@ -12,6 +12,7 @@ export interface TaskExecutorPort {
   start(): Promise<void>;
   startExecution(taskId: string): Promise<void>;
   abortExecution(taskId: string): void;
+  abortSessionExecutions(sessionId: string): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -24,16 +25,22 @@ export interface TaskExecutorOptions {
   ownershipRefreshMs?: number;
   recoveryIntervalMs?: number;
   recoveryBatchSize?: number;
+  terminationGraceMs?: number;
   clock?: { nowMs(): number };
+}
+
+interface ActiveExecution {
+  taskId: string;
+  sessionId: string;
+  taskRunId: string;
+  controller: AbortController;
+  completion: Promise<void>;
 }
 
 /** Owns process-local scheduling; durable lifecycle changes stay in stores/flows. */
 export class TaskExecutor implements TaskExecutorPort {
-  readonly #activeExecutions = new Map<string, {
-    taskRunId: string;
-    controller: AbortController;
-    completion: Promise<void>;
-  }>();
+  readonly #activeExecutions = new Map<string, ActiveExecution>();
+  readonly #trackedExecutions = new Set<ActiveExecution>();
   readonly #options: Required<Omit<TaskExecutorOptions,
     'store' | 'reactExecution' | 'publisher' | 'workerId'>> & TaskExecutorOptions;
   readonly #executionOwnership: ExecutionOwnershipService;
@@ -46,11 +53,16 @@ export class TaskExecutor implements TaskExecutorPort {
       ownershipRefreshMs: DEFAULT_EXECUTION_CONFIG.ownershipRefreshMs,
       recoveryIntervalMs: DEFAULT_EXECUTION_CONFIG.recoveryScanIntervalMs,
       recoveryBatchSize: DEFAULT_EXECUTION_CONFIG.recoveryBatchSize,
+      terminationGraceMs: 5_000,
       clock: { nowMs: () => Date.now() },
       ...options,
     };
     if (this.#options.ownershipRefreshMs >= this.#options.ownershipTimeoutMs) {
       throw new RangeError('ownershipRefreshMs must be shorter than ownershipTimeoutMs.');
+    }
+    if (!Number.isInteger(this.#options.terminationGraceMs)
+      || this.#options.terminationGraceMs <= 0) {
+      throw new RangeError('terminationGraceMs must be a positive integer.');
     }
     this.#executionOwnership = new ExecutionOwnershipService({
       store: options.store,
@@ -83,30 +95,54 @@ export class TaskExecutor implements TaskExecutorPort {
     if (existing?.taskRunId === selected.taskRun.id) return existing.completion;
 
     const execution = {
+      taskId,
+      sessionId: selected.task.sessionId,
       taskRunId: selected.taskRun.id,
       controller: new AbortController(),
       completion: Promise.resolve(),
     };
     this.#activeExecutions.set(taskId, execution);
+    this.#trackedExecutions.add(execution);
     existing?.controller.abort('task_run_superseded');
     execution.completion = this.#runOwnedTask(
       taskId,
       selected.taskRun.id,
       execution.controller
     ).finally(() => {
+      this.#trackedExecutions.delete(execution);
       if (this.#activeExecutions.get(taskId) === execution) this.#activeExecutions.delete(taskId);
     });
     return execution.completion;
   }
 
   abortExecution(taskId: string): void {
-    this.#activeExecutions.get(taskId)?.controller.abort('task_cancelled');
+    for (const execution of this.#trackedExecutions) {
+      if (execution.taskId === taskId) execution.controller.abort('task_cancelled');
+    }
+  }
+
+  async abortSessionExecutions(sessionId: string): Promise<void> {
+    const active = [...this.#trackedExecutions]
+      .filter(execution => execution.sessionId === sessionId);
+    for (const execution of active) execution.controller.abort('session_deletion');
+    if (active.length === 0) return;
+    const stopped = await settleWithin(
+      active.map(execution => execution.completion),
+      this.#options.terminationGraceMs
+    );
+    if (!stopped) {
+      throw new RuntimeError(
+        'execution_stop_timeout',
+        `Session ${JSON.stringify(sessionId)} still has active execution after the deletion grace period.`,
+        { retryable: true, details: { sessionId, activeExecutions: active.length } }
+      );
+    }
   }
 
   async shutdown(): Promise<void> {
     this.#stopping = true;
     await this.#interruptedTaskScanner.stop();
-    const active = [...this.#activeExecutions.values()];
+    const active = [...this.#trackedExecutions];
     for (const execution of active) execution.controller.abort('runtime_shutdown');
     await Promise.allSettled(active.map(execution => execution.completion));
   }
@@ -186,5 +222,19 @@ export class TaskExecutor implements TaskExecutorPort {
 
   async #publish(event: Parameters<RuntimeEventPublisher['publish']>[0]): Promise<void> {
     try { await this.#options.publisher.publish(event); } catch { /* SessionView is authoritative. */ }
+  }
+}
+
+async function settleWithin(promises: Promise<void>[], timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>(resolve => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+    timer.unref?.();
+  });
+  const settled = Promise.allSettled(promises).then(() => true as const);
+  try {
+    return await Promise.race([settled, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

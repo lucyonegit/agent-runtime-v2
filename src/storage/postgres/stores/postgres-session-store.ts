@@ -9,8 +9,13 @@ import type {
   AgentToolRun,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
-import type { CreateSessionInput, SessionStore } from '../../agent-store.js';
-import { createSessionCommand } from '../transaction-commands.js';
+import type {
+  BeginSessionDeletionInput,
+  BeginSessionDeletionResult,
+  CreateSessionInput,
+  SessionStore,
+} from '../../agent-store.js';
+import { beginSessionDeletionCommand, createSessionCommand } from '../transaction-commands.js';
 import {
   mapAgentArtifactRow,
   mapAgentMessageRow,
@@ -45,8 +50,15 @@ export class PostgresSessionStore implements SessionStore {
     return result.rows.map(mapAgentSessionRow);
   }
 
-  async delete(sessionId: string): Promise<boolean> {
-    const result = await this.pool.query(`delete from agent_sessions where id = $1`, [sessionId]);
+  async beginDeletion(input: BeginSessionDeletionInput): Promise<BeginSessionDeletionResult> {
+    return withPostgresClient(this.pool, client => beginSessionDeletionCommand(client, input));
+  }
+
+  async finalizeDeletion(sessionId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `delete from agent_sessions where id = $1 and status = 'archived'`,
+      [sessionId]
+    );
     return result.rowCount === 1;
   }
 

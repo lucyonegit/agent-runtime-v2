@@ -612,6 +612,79 @@ describe('PostgresAgentStore converged model', () => {
     });
   });
 
+  it('tombstones a Session, fences active execution, and finalizes deletion idempotently', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await store.execution.saveToolCalls({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      outputId: 'output_delete_side_effect',
+      messageId: 'message_delete_side_effect',
+      content: '',
+      contextScope: 'task',
+      toolCalls: [{
+        id: 'tool_call_delete_side_effect',
+        call: {
+          id: 'model_delete_side_effect',
+          name: 'run_shell',
+          args: { command: 'deploy' },
+          type: 'tool_call',
+        },
+        argumentsChecksum: 'delete_side_effect_checksum',
+        sideEffectLevel: 'side_effecting',
+        idempotencyKey: 'delete_side_effect_key',
+      }],
+      nowMs: 21,
+    });
+    await store.execution.startToolRun({
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      modelToolCallId: 'model_delete_side_effect',
+      toolRunId: 'tool_run_delete_side_effect',
+      workerId: 'worker_1',
+      nowMs: 22,
+    });
+
+    const fenced = await store.sessions.beginDeletion({
+      sessionId: task.sessionId,
+      nowMs: 30,
+    });
+
+    expect(fenced).toMatchObject({
+      existed: true,
+      taskFinishes: [{
+        task: { id: task.id, status: 'cancelled' },
+        taskRun: { id: started.taskRun.id, status: 'cancelled' },
+        checkpoint: { phase: 'cancelled', metadata: { reason: 'session_deletion' } },
+        toolCalls: [{ id: 'tool_call_delete_side_effect', status: 'outcome_unknown' }],
+        toolRuns: [{ id: 'tool_run_delete_side_effect', status: 'outcome_unknown' }],
+      }],
+    });
+    await expect(store.sessions.get(task.sessionId)).resolves.toMatchObject({ status: 'archived' });
+    await expect(store.tasks.createWithUserMessage({
+      sessionId: task.sessionId,
+      taskId: 'task_after_delete',
+      userMessageId: 'message_after_delete',
+      content: 'Do not start.',
+      clientRequestId: 'request_after_delete',
+      nowMs: 31,
+    })).rejects.toMatchObject({ code: 'INVALID_SESSION_STATE' });
+
+    const repeatedFence = await store.sessions.beginDeletion({
+      sessionId: task.sessionId,
+      nowMs: 32,
+    });
+    expect(repeatedFence).toEqual({ existed: true, taskFinishes: [] });
+    await expect(store.sessions.finalizeDeletion(task.sessionId)).resolves.toBe(true);
+    await expect(store.sessions.finalizeDeletion(task.sessionId)).resolves.toBe(false);
+    await expect(store.sessions.beginDeletion({
+      sessionId: task.sessionId,
+      nowMs: 33,
+    })).resolves.toEqual({ existed: false, taskFinishes: [] });
+  });
+
   it('refuses to mark a Task completed while child execution is active', async () => {
     const { task } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);

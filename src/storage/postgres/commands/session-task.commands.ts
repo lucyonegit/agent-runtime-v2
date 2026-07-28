@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
 import type { AgentSession } from '../../../domain/index.js';
 import {
   AgentStoreError,
+  type BeginSessionDeletionInput,
+  type BeginSessionDeletionResult,
   type CancelTaskInput,
   type CreateRetryTaskInput,
   type CreateRetryTaskResult,
@@ -30,7 +32,7 @@ import {
   type AgentToolCallRow,
   type AgentToolRunRow,
 } from '../row-mappers.js';
-import { lockAgentSession, withPostgresTransaction } from '../sql.js';
+import { lockAgentSession, lockAgentSessionForTask, withPostgresTransaction } from '../sql.js';
 import {
   assertFutureOwnership,
   assertTaskRunOwnership,
@@ -43,6 +45,7 @@ import {
 } from './command-helpers.js';
 import {
   appendTerminalTaskCheckpoint,
+  cancelLockedTask,
   terminalizeTaskChildren,
 } from './task-terminalization.helper.js';
 
@@ -69,6 +72,46 @@ export async function createSessionCommand(
     }
     throw error;
   }
+}
+
+export async function beginSessionDeletionCommand(
+  client: PoolClient,
+  input: BeginSessionDeletionInput
+): Promise<BeginSessionDeletionResult> {
+  return withPostgresTransaction(client, async () => {
+    const sessionResult = await client.query<AgentSessionRow>(
+      `select * from agent_sessions where id = $1 for update`,
+      [input.sessionId]
+    );
+    const session = sessionResult.rows[0];
+    if (!session) return { existed: false, taskFinishes: [] };
+
+    if (session.status !== 'archived') {
+      await client.query(
+        `update agent_sessions
+         set status = 'archived', version = version + 1, updated_at_ms = $2
+         where id = $1`,
+        [input.sessionId, input.nowMs]
+      );
+    }
+    const taskResult = await client.query<AgentTaskRow>(
+      `select * from agent_tasks
+       where session_id = $1
+         and status in ('created', 'running', 'waiting_for_user', 'recovery_required')
+       order by created_at_ms, id
+       for update`,
+      [input.sessionId]
+    );
+    const taskFinishes: FinishTaskResult[] = [];
+    for (const task of taskResult.rows) {
+      taskFinishes.push(await cancelLockedTask(client, {
+        task,
+        nowMs: input.nowMs,
+        checkpointMetadata: { reason: 'session_deletion' },
+      }));
+    }
+    return { existed: true, taskFinishes };
+  });
 }
 
 export async function createTaskWithUserMessageCommand(
@@ -184,6 +227,7 @@ export async function startTaskRunCommand(
 ): Promise<StartTaskRunResult> {
   assertFutureOwnership(input.nowMs, input.ownershipExpiresAtMs);
   return withPostgresTransaction(client, async () => {
+    await lockAgentSessionForTask(client, input.taskId);
     const task = await selectTask(client, input.taskId, true);
     if (!task) throw taskNotFound(input.taskId);
     if (task.version !== input.expectedTaskVersion) {
@@ -274,6 +318,7 @@ export async function markTaskRecoveryRequiredCommand(
   input: MarkTaskRecoveryRequiredInput
 ): Promise<MarkTaskRecoveryRequiredResult> {
   return withPostgresTransaction(client, async () => {
+    await lockAgentSessionForTask(client, input.taskId);
     const task = await selectTask(client, input.taskId, true);
     if (!task) throw taskNotFound(input.taskId);
     if (task.version !== input.expectedTaskVersion) {
@@ -385,6 +430,7 @@ export async function failTaskCommand(
   input: FailTaskInput
 ): Promise<FinishTaskResult> {
   return withPostgresTransaction(client, async () => {
+    await lockAgentSessionForTask(client, input.taskId);
     const task = await selectTask(client, input.taskId, true);
     if (!task) throw taskNotFound(input.taskId);
     if (task.version !== input.expectedTaskVersion) {
@@ -449,63 +495,16 @@ export async function cancelTaskCommand(
   input: CancelTaskInput
 ): Promise<FinishTaskResult> {
   return withPostgresTransaction(client, async () => {
+    await lockAgentSessionForTask(client, input.taskId);
     const task = await selectTask(client, input.taskId, true);
     if (!task) throw taskNotFound(input.taskId);
     if (task.version !== input.expectedTaskVersion) {
       throw staleTaskVersion(task, input.expectedTaskVersion);
     }
-    if (['completed', 'failed', 'cancelled'].includes(task.status)) {
-      return {
-        task: mapAgentTaskRow(task),
-        toolCalls: [],
-        toolRuns: [],
-        userInputRequests: [],
-        planCleared: false,
-      };
-    }
-    const taskRunResult = await client.query<AgentTaskRunRow>(
-      `update agent_task_runs
-       set status = 'cancelled', owner_id = null, ownership_expires_at_ms = null,
-           updated_at_ms = $2, ended_at_ms = $2
-       where task_id = $1 and status in ('running', 'paused')
-       returning *`,
-      [task.id, input.nowMs]
-    );
-    const children = await terminalizeTaskChildren(client, {
-      taskId: task.id,
-      phase: 'cancelled',
-      nowMs: input.nowMs,
-    });
-    const taskResult = await client.query<AgentTaskRow>(
-      `update agent_tasks
-       set status = 'cancelled', version = version + 1,
-           updated_at_ms = $2, completed_at_ms = $2
-       where id = $1 returning *`,
-      [task.id, input.nowMs]
-    );
-    const latestRunResult = await client.query<AgentTaskRunRow>(
-      `select * from agent_task_runs
-       where task_id = $1
-       order by run_no desc
-       limit 1`,
-      [task.id]
-    );
-    const checkpoint = await appendTerminalTaskCheckpoint(client, {
-      sessionId: task.session_id,
-      taskId: task.id,
-      taskRunId: taskRunResult.rows[0]?.id ?? latestRunResult.rows[0]?.id,
-      phase: 'cancelled',
-      nowMs: input.nowMs,
-    });
-    const planCleared = await clearActivePlan(client, task.session_id, task.id);
-    await touchSession(client, task.session_id, input.nowMs);
-    return {
-      task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'cancel task')),
-      ...(taskRunResult.rows[0] ? { taskRun: mapAgentTaskRunRow(taskRunResult.rows[0]) } : {}),
-      ...children,
-      ...(checkpoint ? { checkpoint } : {}),
-      planCleared,
-    };
+    const wasTerminal = ['completed', 'failed', 'cancelled'].includes(task.status);
+    const result = await cancelLockedTask(client, { task, nowMs: input.nowMs });
+    if (!wasTerminal) await touchSession(client, task.session_id, input.nowMs);
+    return result;
   });
 }
 

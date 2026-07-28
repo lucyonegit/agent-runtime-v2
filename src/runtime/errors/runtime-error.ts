@@ -5,6 +5,7 @@ export type RuntimeErrorCode =
   | 'max_iterations'
   | 'max_tool_calls'
   | 'deadline_exceeded'
+  | 'execution_stop_timeout'
   | 'aborted'
   | 'model_error'
   | 'model_output_truncated'
@@ -13,6 +14,7 @@ export type RuntimeErrorCode =
   | 'tool_failed'
   | 'tool_state_unknown'
   | 'model_input_too_large'
+  | 'invalid_session_state'
   | 'invalid_task_state'
   | 'invalid_plan_state'
   | 'idempotency_conflict'
@@ -50,6 +52,8 @@ export function mapStoreError(error: unknown): RuntimeError {
       return new RuntimeError('concurrency_conflict', error.message, options);
     case 'TASK_OWNERSHIP_LOST':
       return new RuntimeError('ownership_lost', error.message, options);
+    case 'INVALID_SESSION_STATE':
+      return new RuntimeError('invalid_session_state', error.message, { ...options, retryable: false });
     case 'INVALID_TASK_STATE':
     case 'INVALID_TASK_RETRY':
     case 'TASK_NOT_FOUND':
@@ -68,5 +72,8 @@ export function mapStoreError(error: unknown): RuntimeError {
 }
 
 function defaultRetryable(code: RuntimeErrorCode): boolean {
-  return code === 'model_error' || code === 'model_output_truncated' || code === 'storage_error';
+  return code === 'model_error'
+    || code === 'model_output_truncated'
+    || code === 'execution_stop_timeout'
+    || code === 'storage_error';
 }

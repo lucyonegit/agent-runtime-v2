@@ -1,4 +1,5 @@
 import type { AgentTask } from '../../domain/index.js';
+import { mapStoreError } from '../../runtime/errors/runtime-error.js';
 import type {
   AgentStore,
   CreateRetryTaskResult,
@@ -31,6 +32,7 @@ export interface TaskManagerOptions {
 export interface TaskManagerPort {
   start(): Promise<void>;
   shutdown(): Promise<void>;
+  prepareSessionDeletion(sessionId: string): Promise<boolean>;
   createTask(input: CreateTaskInput): Promise<CreateTaskWithUserMessageResult>;
   cancelTask(taskId: string, expectedVersion: number): Promise<AgentTask>;
   retryTask(input: RetryTaskInput): Promise<CreateRetryTaskResult>;
@@ -41,6 +43,8 @@ export interface TaskManagerPort {
 
 /** Public command facade. Each lifecycle branch has a concrete Flow class. */
 export class TaskManager implements TaskManagerPort {
+  readonly #clock: TaskFlowClock;
+  readonly #events: TaskEventPublisher;
   readonly #create: CreateTaskFlow;
   readonly #retry: RetryTaskFlow;
   readonly #continueAsNew: ContinueAsNewTaskFlow;
@@ -50,8 +54,10 @@ export class TaskManager implements TaskManagerPort {
 
   constructor(private readonly options: TaskManagerOptions) {
     const clock = options.clock ?? { nowMs: () => Date.now() };
+    this.#clock = clock;
     const ids = options.ids ?? randomTaskFlowIds;
     const events = new TaskEventPublisher(options.publisher);
+    this.#events = events;
     const taskRuns = new TaskRunStarter(
       options.store,
       options.workerId,
@@ -82,6 +88,22 @@ export class TaskManager implements TaskManagerPort {
 
   start(): Promise<void> { return this.options.execution.start(); }
   shutdown(): Promise<void> { return this.options.execution.shutdown(); }
+  async prepareSessionDeletion(sessionId: string): Promise<boolean> {
+    try {
+      const fenced = await this.options.store.sessions.beginDeletion({
+        sessionId,
+        nowMs: this.#clock.nowMs(),
+      });
+      const stopping = this.options.execution.abortSessionExecutions(sessionId);
+      await Promise.all([
+        stopping,
+        ...fenced.taskFinishes.map(result => this.#events.publishTaskFinish(result)),
+      ]);
+      return fenced.existed;
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
   createTask(input: CreateTaskInput) { return this.#create.execute(input); }
   retryTask(input: RetryTaskInput) { return this.#retry.execute(input); }
   continueAsNewTask(input: ContinueAsNewTaskInput) { return this.#continueAsNew.execute(input); }

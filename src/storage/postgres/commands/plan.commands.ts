@@ -4,7 +4,7 @@ import {
   mapAgentActivePlanRow,
   type AgentActivePlanRow,
 } from '../row-mappers.js';
-import { withPostgresTransaction } from '../sql.js';
+import { lockAgentSession, withPostgresTransaction } from '../sql.js';
 import {
   assertTaskRunOwnership,
   requireRow,
@@ -20,6 +20,7 @@ export async function applyActivePlanCommand(
 ) {
   validatePlan(input);
   return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
     const task = await selectTask(client, input.taskId, true);
     if (!task || task.session_id !== input.sessionId) throw taskNotFound(input.taskId);
     const taskRun = await selectTaskRun(client, input.taskRunId, true);

@@ -15,7 +15,7 @@ import {
   type AgentModelCallRow,
   type AgentModelUsageStatsRow,
 } from '../row-mappers.js';
-import { withPostgresTransaction } from '../sql.js';
+import { lockAgentSession, withPostgresTransaction } from '../sql.js';
 import {
   assertTaskRunOwnership,
   requireRow,
@@ -28,47 +28,50 @@ export async function startModelCallCommand(
   client: PoolClient,
   input: StartModelCallInput
 ) {
-  const task = await selectTask(client, input.taskId);
-  if (!task || task.session_id !== input.sessionId) throw taskNotFound(input.taskId);
-  const taskRun = await selectTaskRun(client, input.taskRunId);
-  assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
-  const result = await client.query<AgentModelCallRow>(
-    `insert into agent_model_calls(
-       id, session_id, task_id, task_run_id,
-       logical_call_key, call_type, status,
-       provider, model, context_rules_version, input_manifest, input_messages, input_checksum,
-       max_context_tokens, reserved_output_tokens, estimated_input_tokens,
-       usage_source, output_id, output_disposition, metadata, created_at_ms
-     ) values (
-       $1, $2, $3, $4,
-       $5, $6, 'started',
-       $7, $8, $9, $10, $11, $12,
-       $13, $14, $15,
-       'estimated', $16, $17, $18, $19
-     ) returning *`,
-    [
-      input.id,
-      input.sessionId,
-      input.taskId,
-      input.taskRunId,
-      input.logicalCallKey,
-      input.callType,
-      input.provider,
-      input.model,
-      input.contextRulesVersion,
-      JSON.stringify(input.inputManifest),
-      JSON.stringify(input.inputMessages),
-      input.inputChecksum,
-      input.maxContextTokens,
-      input.reservedOutputTokens,
-      input.estimatedInputTokens,
-      input.outputId ?? null,
-      input.outputId ? 'pending' : null,
-      input.metadata ?? null,
-      input.nowMs,
-    ]
-  );
-  return mapAgentModelCallRow(requireRow(result.rows[0], 'start model call'));
+  return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
+    const task = await selectTask(client, input.taskId);
+    if (!task || task.session_id !== input.sessionId) throw taskNotFound(input.taskId);
+    const taskRun = await selectTaskRun(client, input.taskRunId);
+    assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
+    const result = await client.query<AgentModelCallRow>(
+      `insert into agent_model_calls(
+         id, session_id, task_id, task_run_id,
+         logical_call_key, call_type, status,
+         provider, model, context_rules_version, input_manifest, input_messages, input_checksum,
+         max_context_tokens, reserved_output_tokens, estimated_input_tokens,
+         usage_source, output_id, output_disposition, metadata, created_at_ms
+       ) values (
+         $1, $2, $3, $4,
+         $5, $6, 'started',
+         $7, $8, $9, $10, $11, $12,
+         $13, $14, $15,
+         'estimated', $16, $17, $18, $19
+       ) returning *`,
+      [
+        input.id,
+        input.sessionId,
+        input.taskId,
+        input.taskRunId,
+        input.logicalCallKey,
+        input.callType,
+        input.provider,
+        input.model,
+        input.contextRulesVersion,
+        JSON.stringify(input.inputManifest),
+        JSON.stringify(input.inputMessages),
+        input.inputChecksum,
+        input.maxContextTokens,
+        input.reservedOutputTokens,
+        input.estimatedInputTokens,
+        input.outputId ?? null,
+        input.outputId ? 'pending' : null,
+        input.metadata ?? null,
+        input.nowMs,
+      ]
+    );
+    return mapAgentModelCallRow(requireRow(result.rows[0], 'start model call'));
+  });
 }
 
 export async function setModelCallOutputDispositionCommand(
@@ -181,6 +184,7 @@ export async function replaceContextCompactionCommand(
   input: ReplaceContextCompactionInput
 ) {
   return withPostgresTransaction(client, async () => {
+    await lockAgentSession(client, input.sessionId);
     const existing = await client.query<AgentContextCompactionRow>(
       `select * from agent_context_compactions where session_id = $1 for update`,
       [input.sessionId]

@@ -29,6 +29,7 @@ import type {
 export type AgentStoreErrorCode =
   | 'SESSION_NOT_FOUND'
   | 'SESSION_ALREADY_EXISTS'
+  | 'INVALID_SESSION_STATE'
   | 'TASK_NOT_FOUND'
   | 'TASK_ALREADY_EXISTS'
   | 'ACTIVE_TASK_CONFLICT'
@@ -61,6 +62,16 @@ export interface CreateSessionInput {
   id: string;
   title?: string;
   nowMs: number;
+}
+
+export interface BeginSessionDeletionInput {
+  sessionId: string;
+  nowMs: number;
+}
+
+export interface BeginSessionDeletionResult {
+  existed: boolean;
+  taskFinishes: FinishTaskResult[];
 }
 
 export interface CreateTaskWithUserMessageInput {
@@ -416,7 +427,8 @@ export interface ReplaceContextCompactionInput {
 export interface SessionStore {
   create(input: CreateSessionInput): Promise<AgentSession>;
   list(): Promise<AgentSession[]>;
-  delete(sessionId: string): Promise<boolean>;
+  beginDeletion(input: BeginSessionDeletionInput): Promise<BeginSessionDeletionResult>;
+  finalizeDeletion(sessionId: string): Promise<boolean>;
   get(sessionId: string): Promise<AgentSession | undefined>;
   listMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
   listTasks(sessionId: string): Promise<AgentTask[]>;

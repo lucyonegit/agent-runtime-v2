@@ -59,10 +59,11 @@ export class AgentRuntime {
   }
 
   async deleteSession(sessionId: string) {
+    const existed = await this.#tasks.prepareSessionDeletion(sessionId);
     await this.#beforeDeleteSession?.(sessionId);
-    const deleted = await this.#store.sessions.delete(sessionId);
-    if (deleted) await this.#removeSessionWorkspace?.(sessionId);
-    return deleted;
+    await this.#removeSessionWorkspace?.(sessionId);
+    const deleted = await this.#store.sessions.finalizeDeletion(sessionId);
+    return existed || deleted;
   }
 
   async createTask(input: {

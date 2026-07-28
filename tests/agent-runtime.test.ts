@@ -26,6 +26,66 @@ describe('AgentRuntime application facade', () => {
 
     expect(tasks.cancelTask).toHaveBeenCalledWith('task_1', 1);
   });
+
+  it('fences execution and finishes external cleanup before deleting durable state', async () => {
+    const order: string[] = [];
+    const tasks = taskManager();
+    vi.mocked(tasks.prepareSessionDeletion).mockImplementation(async () => {
+      order.push('fence');
+      return true;
+    });
+    const finalizeDeletion = vi.fn(async () => {
+      order.push('database');
+      return true;
+    });
+    const runtime = new AgentRuntime({
+      store: { sessions: { finalizeDeletion } } as unknown as AgentStore,
+      tasks,
+      beforeDeleteSession: async () => { order.push('processes'); },
+      removeSessionWorkspace: async () => { order.push('workspace'); },
+      clock: { nowMs: () => 1_000 },
+      ids: { sessionId: () => 'session_generated' },
+    });
+
+    await expect(runtime.deleteSession('session_1')).resolves.toBe(true);
+
+    expect(order).toEqual(['fence', 'processes', 'workspace', 'database']);
+    expect(finalizeDeletion).toHaveBeenCalledWith('session_1');
+  });
+
+  it('retries idempotent external cleanup even when durable state is already absent', async () => {
+    const tasks = taskManager();
+    vi.mocked(tasks.prepareSessionDeletion).mockResolvedValue(false);
+    const removeSessionWorkspace = vi.fn(async () => undefined);
+    const finalizeDeletion = vi.fn(async () => false);
+    const runtime = new AgentRuntime({
+      store: { sessions: { finalizeDeletion } } as unknown as AgentStore,
+      tasks,
+      beforeDeleteSession: vi.fn(async () => undefined),
+      removeSessionWorkspace,
+    });
+
+    await expect(runtime.deleteSession('session_missing')).resolves.toBe(false);
+
+    expect(removeSessionWorkspace).toHaveBeenCalledWith('session_missing');
+    expect(finalizeDeletion).toHaveBeenCalledWith('session_missing');
+  });
+
+  it('keeps the durable tombstone when workspace cleanup fails', async () => {
+    const tasks = taskManager();
+    vi.mocked(tasks.prepareSessionDeletion).mockResolvedValue(true);
+    const finalizeDeletion = vi.fn(async () => true);
+    const runtime = new AgentRuntime({
+      store: { sessions: { finalizeDeletion } } as unknown as AgentStore,
+      tasks,
+      removeSessionWorkspace: vi.fn(async () => {
+        throw new Error('workspace busy');
+      }),
+    });
+
+    await expect(runtime.deleteSession('session_1')).rejects.toThrow('workspace busy');
+    expect(finalizeDeletion).not.toHaveBeenCalled();
+  });
 });
 
 function createRuntime(store: AgentStore, tasks: TaskManagerPort): AgentRuntime {
@@ -41,6 +101,7 @@ function taskManager(): TaskManagerPort {
   return {
     start: vi.fn(async () => undefined),
     shutdown: vi.fn(async () => undefined),
+    prepareSessionDeletion: vi.fn(async () => false),
     createTask: vi.fn<TaskManagerPort['createTask']>(),
     cancelTask: vi.fn<TaskManagerPort['cancelTask']>(),
     retryTask: vi.fn<TaskManagerPort['retryTask']>(),

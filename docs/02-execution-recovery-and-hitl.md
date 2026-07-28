@@ -89,3 +89,14 @@ Retry 创建新的 Task，并设置 `retryOfTaskId`。新 Task 直接复用原�
 5. 模型读取失败 ToolMessage，自行决定重新询问或结束。
 
 输入请求不承担危险操作审批语义；未来审批应使用独立业务实体。
+
+## 6. Session 删除
+
+Session 删除是可重试的两阶段生命周期，不直接级联删库：
+
+1. 在一个数据库事务中锁定 Session，将其标为 `archived` tombstone，并取消所有活动 Task 及其子执行状态。后续新的 Task、Tool、HITL、Plan、ModelCall 发起和 ContextCompaction 写入只允许 `active` Session；已经发出的模型调用只允许在 abort 收尾期间补记审计，最终随 Session 删除。
+2. 根据被 fence 的 Session 中止本进程 TaskExecutor，并在有限宽限期内等待协作式退出；若执行忽略 abort，删除返回可重试错误，数据库与工作区暂不移除。
+3. 幂等停止 Session 的 managed processes，并幂等删除整个 Session workspace。
+4. 只有以上步骤成功后，才删除 `archived` Session 并由外键级联清理数据库记录。
+
+任一步失败都会保留 tombstone；重复 DELETE 会重新执行进程与工作区清理，因此数据库已不存在时也不会跳过遗留 workspace。事件流只在整个删除流程成功后关闭，关闭后的迟到事件会被丢弃，不能重新创建已删除 Session 的 Subject。
