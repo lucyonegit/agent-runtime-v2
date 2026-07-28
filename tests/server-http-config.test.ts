@@ -28,6 +28,7 @@ describe('Agent HTTP CORS configuration', () => {
     expect(DEFAULT_SERVER_CONFIG.cors.credentials).toBe(false);
     expect(DEFAULT_SERVER_CONFIG.cors.allowedHeaders).toContain('authorization');
     expect(DEFAULT_SERVER_CONFIG.cors.allowedHeaders).toContain('content-type');
+    expect(DEFAULT_SERVER_CONFIG.bodyLimitBytes).toBe(1_048_576);
     expect(DEFAULT_SERVER_CONFIG.debugEndpointsEnabled).toBe(false);
     expect(DEFAULT_SERVER_CONFIG.toolCapabilities).toEqual(['artifacts', 'filesystem']);
   });

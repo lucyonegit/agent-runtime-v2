@@ -23,7 +23,7 @@ const app = await NestFactory.create<NestFastifyApplication>(
     config.server.debugEndpointsEnabled,
     httpRuntimeConfig.tools.enabled.managedProcesses
   ),
-  new FastifyAdapter(),
+  new FastifyAdapter({ bodyLimit: config.server.bodyLimitBytes }),
   { logger: config.server.logger }
 );
 app.useGlobalFilters(new RuntimeExceptionFilter());

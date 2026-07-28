@@ -32,6 +32,7 @@ export type ServerLogLevel = 'error' | 'warn' | 'log' | 'debug' | 'verbose';
 export interface ServerConfig {
   host: string;
   port: number;
+  bodyLimitBytes: number;
   authToken: string;
   debugEndpointsEnabled: boolean;
   toolCapabilities: HttpToolCapability[];

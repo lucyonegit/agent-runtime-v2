@@ -8,6 +8,7 @@ describe('runtime configuration', () => {
       DASHSCOPE_API_KEY: 'test-secret',
       AGENT_RUNTIME_WORKER_ID: 'worker_test',
       AGENT_SERVER_PORT: '3100',
+      AGENT_SERVER_BODY_LIMIT_BYTES: '524288',
       AGENT_SERVER_AUTH_TOKEN: 'test-runtime-auth-token-32-characters',
       AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS: 'true',
       AGENT_SERVER_TOOL_CAPABILITIES: 'filesystem,shell',
@@ -24,6 +25,7 @@ describe('runtime configuration', () => {
       workerId: 'worker_test',
       server: {
         port: 3_100,
+        bodyLimitBytes: 524_288,
         authToken: 'test-runtime-auth-token-32-characters',
         debugEndpointsEnabled: true,
         toolCapabilities: ['filesystem', 'shell'],

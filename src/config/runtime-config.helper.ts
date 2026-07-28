@@ -64,6 +64,9 @@ function applyEnvironmentOverrides(
   assignString(env, 'AGENT_SANDBOX_ROOT', value => { config.runtime.sandboxRoot = value; });
   assignString(env, 'AGENT_SERVER_HOST', value => { config.server.host = value; });
   assignPositiveInteger(env, 'AGENT_SERVER_PORT', value => { config.server.port = value; });
+  assignPositiveInteger(env, 'AGENT_SERVER_BODY_LIMIT_BYTES', value => {
+    config.server.bodyLimitBytes = value;
+  });
   assignString(env, 'AGENT_SERVER_AUTH_TOKEN', value => { config.server.authToken = value; });
   assignBoolean(env, 'AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS', value => {
     config.server.debugEndpointsEnabled = value;
@@ -121,6 +124,7 @@ function validateConfig(config: RuntimeConfigFile): void {
   nonEmptyString(config.server.host, 'server.host');
   positiveInteger(config.server.port, 'server.port');
   if (config.server.port > 65_535) throw new RangeError('server.port must be at most 65535.');
+  positiveInteger(config.server.bodyLimitBytes, 'server.bodyLimitBytes');
   if (typeof config.server.authToken !== 'string') {
     throw new TypeError('server.authToken must be a string.');
   }
