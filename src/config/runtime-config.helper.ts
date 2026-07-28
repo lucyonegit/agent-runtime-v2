@@ -7,6 +7,7 @@ import type {
 import { DASHSCOPE_OPENAI_BASE_URL } from '../runtime/model/model-profiles.js';
 import { HTTP_TOOL_CAPABILITIES } from './runtime-capabilities.js';
 import type { HttpToolCapability } from './runtime-capabilities.js';
+import { isSensitiveHostEnvironmentKey } from './process-environment-policy.js';
 
 const BUNDLED_CONFIG_FILE = fileURLToPath(new URL('./runtime.json', import.meta.url));
 
@@ -69,6 +70,9 @@ function applyEnvironmentOverrides(
   });
   assignCommaSeparatedList(env, 'AGENT_SERVER_TOOL_CAPABILITIES', value => {
     config.server.toolCapabilities = value as HttpToolCapability[];
+  });
+  assignCommaSeparatedList(env, 'AGENT_TOOL_INHERITED_ENV_KEYS', value => {
+    config.tools.environment.inheritedKeys = value;
   });
   assignString(env, 'DATABASE_URL', value => { config.postgres.url = value; });
 
@@ -222,6 +226,27 @@ function validateTools(config: ToolsConfig): void {
     positiveInteger(value as number, `tools.browser.${name}`);
   }
   booleanValue(config.browser.allowProxyFakeIps, 'tools.browser.allowProxyFakeIps');
+  validateInheritedEnvironmentKeys(config.environment.inheritedKeys);
+}
+
+function validateInheritedEnvironmentKeys(value: unknown): void {
+  if (!Array.isArray(value)) {
+    throw new TypeError('tools.environment.inheritedKeys must be an array.');
+  }
+  const seen = new Set<string>();
+  for (const key of value) {
+    nonEmptyString(key, 'tools.environment.inheritedKeys[]');
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new TypeError(`Invalid inherited environment key: ${key}`);
+    }
+    if (isSensitiveHostEnvironmentKey(key)) {
+      throw new TypeError(`Sensitive environment key cannot be inherited: ${key}`);
+    }
+    if (seen.has(key)) {
+      throw new TypeError(`Duplicate inherited environment key: ${key}`);
+    }
+    seen.add(key);
+  }
 }
 
 function assignString(

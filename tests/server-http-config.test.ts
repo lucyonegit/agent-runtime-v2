@@ -100,7 +100,7 @@ describe('Agent HTTP CORS configuration', () => {
     expect(buildWorkspaceProcessEnv({}, {
       PATH: '/test/bin',
       AGENT_SERVER_AUTH_TOKEN: 'test-runtime-auth-token-32-characters',
-    })).toEqual({ PATH: '/test/bin' });
+    }, ['PATH', 'AGENT_SERVER_AUTH_TOKEN'])).toEqual({ PATH: '/test/bin' });
   });
 });
 

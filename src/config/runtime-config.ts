@@ -13,6 +13,7 @@ import {
   readBundledRuntimeConfigFile,
 } from './runtime-config.helper.js';
 import type { HttpToolCapability } from './runtime-capabilities.js';
+import { selectInheritedHostEnvironment } from './process-environment-policy.js';
 
 export {
   DASHSCOPE_OPENAI_BASE_URL,
@@ -107,6 +108,9 @@ export interface ToolsConfig {
     requestTimeoutMs: number;
     allowProxyFakeIps: boolean;
   };
+  environment: {
+    inheritedKeys: string[];
+  };
   hostEnvironment?: NodeJS.ProcessEnv;
 }
 
@@ -184,7 +188,10 @@ export function loadRuntimeConfig(
     context: config.context,
     tools: {
       ...config.tools,
-      hostEnvironment: { ...env },
+      hostEnvironment: selectInheritedHostEnvironment(
+        env,
+        config.tools.environment.inheritedKeys
+      ),
     },
   });
 }

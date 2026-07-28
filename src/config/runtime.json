@@ -81,6 +81,23 @@
     "browser": {
       "requestTimeoutMs": 30000,
       "allowProxyFakeIps": false
+    },
+    "environment": {
+      "inheritedKeys": [
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "COLORTERM"
+      ]
     }
   }
 }

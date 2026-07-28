@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isToolMessage } from '@langchain/core/messages';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_TOOLS_CONFIG } from '../src/config/runtime-config.js';
 import type {
   RuntimeTool,
   RuntimeToolContext,
@@ -419,13 +420,22 @@ describe('LangChain runtime tools', () => {
     });
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Test HTTP server has no TCP port.');
-    const previous = process.env.AGENT_RUNTIME_SHELL_TEST_SECRET;
-    process.env.AGENT_RUNTIME_SHELL_TEST_SECRET = 'inherited-value';
+    const toolsConfig = {
+      ...structuredClone(DEFAULT_TOOLS_CONFIG),
+      hostEnvironment: {
+        PATH: process.env.PATH,
+        LANG: 'C',
+        AGENT_RUNTIME_SHELL_TEST_SECRET: 'runtime-secret',
+        GITHUB_TOKEN: 'github-secret',
+        AWS_ACCESS_KEY_ID: 'aws-secret',
+      },
+    };
+    tools = createRuntimeTools({ config: toolsConfig });
     try {
       await expect(invoke('run_shell', {
         command: [
           `printf 'after' > '${outsideFile}'`,
-          `printf '%s|' "$AGENT_RUNTIME_SHELL_TEST_SECRET"`,
+          `printf '%s|%s|%s|%s|' "$LANG" "$AGENT_RUNTIME_SHELL_TEST_SECRET" "$GITHUB_TOKEN" "$AWS_ACCESS_KEY_ID"`,
           `cat '${outsideFile}'`,
           `printf '|'`,
           `/usr/bin/curl --fail --silent 'http://127.0.0.1:${address.port}/'`,
@@ -434,13 +444,11 @@ describe('LangChain runtime tools', () => {
         env: { WORKSPACE_EXPLICIT_VALUE: 'explicit-value' },
       })).resolves.toMatchObject({
         exitCode: 0,
-        stdout: '|after|network-ok|explicit-value',
+        stdout: 'C||||after|network-ok|explicit-value',
         stderr: '',
       });
       await expect(readFile(outsideFile, 'utf8')).resolves.toBe('after');
     } finally {
-      if (previous === undefined) delete process.env.AGENT_RUNTIME_SHELL_TEST_SECRET;
-      else process.env.AGENT_RUNTIME_SHELL_TEST_SECRET = previous;
       await new Promise<void>(resolve => server.close(() => resolve()));
       await rm(outsideDirectory, { recursive: true, force: true });
     }

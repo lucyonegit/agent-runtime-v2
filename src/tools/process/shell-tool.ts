@@ -150,7 +150,11 @@ export async function executeHostShell(input: {
     input.command,
   ], {
     cwd,
-    env: buildWorkspaceProcessEnv(input.env, toolsConfig.hostEnvironment),
+    env: buildWorkspaceProcessEnv(
+      input.env,
+      toolsConfig.hostEnvironment ?? {},
+      toolsConfig.environment.inheritedKeys
+    ),
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });

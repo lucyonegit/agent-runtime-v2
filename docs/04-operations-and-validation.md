@@ -10,6 +10,8 @@ Context Preview 可能包含敏感答案、工具参数和模型输入，三个 
 
 standalone HTTP 默认 capability 只有 `artifacts,filesystem`，因此不能调用宿主 Shell、启动长驻进程或访问网络。需要时通过完整列表显式设置，例如 `AGENT_SERVER_TOOL_CAPABILITIES=artifacts,filesystem,shell,managedProcesses,browser`；全局 `tools.enabled` 仍是上限，HTTP capability 不能重新开启全局已关闭的工具。未授权 `managedProcesses` 时，对应 HTTP 管理路由也不注册。Electron 受控 IPC 不套用这层 HTTP capability 收缩。
 
+Shell 和 Managed Process 子进程不再继承完整 `process.env`，只继承 `tools.environment.inheritedKeys` 中的非敏感键；默认列表仅包含 PATH、用户目录、临时目录、locale 和终端基础信息。部署可用 `AGENT_TOOL_INHERITED_ENV_KEYS` 覆盖完整 allowlist，但 API key、token、credential、password、认证 socket 及 Runtime/HTTP 内部变量会被拒绝。需要凭据的工具应后续接入按工具、按 Task 注入的 secret broker，不应重新放宽为宿主环境 blocklist。
+
 ## 2. 破坏式重建数据库
 
 开发环境执行：

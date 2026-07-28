@@ -1,33 +1,14 @@
-const BLOCKED_ENVIRONMENT_KEYS = [
-  'DATABASE_URL',
-  'DASHSCOPE_API_KEY',
-  'OPENAI_API_KEY',
-  'OPENAI_BASE_URL',
-];
-const BLOCKED_ENVIRONMENT_PREFIXES = [
-  'AGENT_RUNTIME_',
-  'AGENT_SERVER_',
-];
+import { selectInheritedHostEnvironment } from '../../../config/process-environment-policy.js';
 
 export function buildWorkspaceProcessEnv(
   overrides: Record<string, string> = {},
-  hostEnvironment: NodeJS.ProcessEnv = {}
+  hostEnvironment: NodeJS.ProcessEnv,
+  inheritedKeys: readonly string[]
 ): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...hostEnvironment };
-
-  // HOST and PORT configure many application frameworks. They belong to the
-  // child application, not to the Agent Runtime HTTP server.
-  delete environment.HOST;
-  delete environment.PORT;
-
-  for (const key of BLOCKED_ENVIRONMENT_KEYS) delete environment[key];
-  for (const key of Object.keys(environment)) {
-    if (BLOCKED_ENVIRONMENT_PREFIXES.some(prefix => key.startsWith(prefix))) {
-      delete environment[key];
-    }
-  }
-
-  return { ...environment, ...overrides };
+  return {
+    ...selectInheritedHostEnvironment(hostEnvironment, inheritedKeys),
+    ...overrides,
+  };
 }
 
 export function stringRecord(value: unknown, fieldName: string): Record<string, string> {

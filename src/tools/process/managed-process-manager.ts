@@ -242,7 +242,8 @@ export class ManagedProcessManager {
         cwd,
         env: buildWorkspaceProcessEnv(
           environmentOverrides,
-          this.toolsConfig.hostEnvironment
+          this.toolsConfig.hostEnvironment ?? {},
+          this.toolsConfig.environment.inheritedKeys
         ),
         detached: true,
         stdio: 'ignore',

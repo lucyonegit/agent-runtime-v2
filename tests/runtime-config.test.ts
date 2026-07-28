@@ -14,6 +14,9 @@ describe('runtime configuration', () => {
       TASK_OWNERSHIP_TIMEOUT_MS: '45000',
       TASK_OWNERSHIP_REFRESH_MS: '15000',
       AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS: 'true',
+      AWS_ACCESS_KEY_ID: 'aws-access-key',
+      GITHUB_TOKEN: 'github-token',
+      SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
       PATH: '/test/bin',
     } });
 
@@ -35,10 +38,7 @@ describe('runtime configuration', () => {
       execution: { ownershipTimeoutMs: 45_000, ownershipRefreshMs: 15_000 },
       tools: { browser: { allowProxyFakeIps: true } },
     });
-    expect(config.tools.hostEnvironment).toMatchObject({
-      PATH: '/test/bin',
-      DASHSCOPE_API_KEY: 'test-secret',
-    });
+    expect(config.tools.hostEnvironment).toEqual({ PATH: '/test/bin' });
     expect(Object.isFrozen(config)).toBe(true);
   });
 
@@ -76,5 +76,28 @@ describe('runtime configuration', () => {
       DATABASE_URL: 'postgres://runtime',
       AGENT_SERVER_TOOL_CAPABILITIES: 'filesystem,host-root',
     } })).toThrow('Unsupported HTTP tool capability');
+  });
+
+  it('inherits only explicitly allowed non-sensitive host environment keys', () => {
+    const config = loadRuntimeConfig({ env: {
+      DATABASE_URL: 'postgres://runtime',
+      AGENT_TOOL_INHERITED_ENV_KEYS: 'PATH,JAVA_HOME,LANG',
+      PATH: '/test/bin',
+      JAVA_HOME: '/test/java',
+      LANG: 'en_US.UTF-8',
+      AWS_ACCESS_KEY_ID: 'aws-access-key',
+    } });
+    expect(config.tools.hostEnvironment).toEqual({
+      PATH: '/test/bin',
+      JAVA_HOME: '/test/java',
+      LANG: 'en_US.UTF-8',
+    });
+  });
+
+  it('rejects sensitive keys in the inherited environment allowlist', () => {
+    expect(() => loadRuntimeConfig({ env: {
+      DATABASE_URL: 'postgres://runtime',
+      AGENT_TOOL_INHERITED_ENV_KEYS: 'PATH,GITHUB_TOKEN',
+    } })).toThrow('Sensitive environment key cannot be inherited');
   });
 });
