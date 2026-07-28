@@ -1,9 +1,16 @@
 import { AIMessageChunk } from '@langchain/core/messages';
+import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentMessage, AgentTask, AgentTaskRun } from '../src/domain/index.js';
+import type {
+  AgentContextInputManifest,
+  AgentMessage,
+  AgentTask,
+  AgentTaskRun,
+} from '../src/domain/index.js';
 import { MessageCompactor } from '../src/runtime/context/message-compactor.js';
 import type { ModelMessageGroup } from '../src/runtime/context/types/model-input.types.js';
 import type { AuditedModelFactory } from '../src/runtime/model/audited-model.factory.js';
+import { projectModelInput } from '../src/runtime/model/model-input-accounting.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
 describe('MessageCompactor lifecycle', () => {
@@ -19,10 +26,11 @@ describe('MessageCompactor lifecycle', () => {
       version: 0,
       updatedAtMs: 10,
     }));
+    const create = vi.fn((_input: { manifest: AgentContextInputManifest }) => ({ invoke }));
     const compactor = new MessageCompactor({
       store: { context: { replaceCompaction } } as unknown as AgentStore,
       modelFactory: {
-        create: vi.fn(() => ({ invoke })),
+        create,
       } as unknown as AuditedModelFactory,
       config: {
         keepRecentInputTokens: 1,
@@ -45,6 +53,13 @@ describe('MessageCompactor lifecycle', () => {
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke.mock.calls[0]![1]).toMatchObject({ signal: controller.signal });
     expect(replaceCompaction).toHaveBeenCalledOnce();
+    const manifest = create.mock.calls[0]![0].manifest;
+    const breakdown = manifest.estimatedBreakdown;
+    expect(breakdown.system + breakdown.tools + breakdown.summaries + breakdown.messages).toBe(
+      projectModelInput(invoke.mock.calls[0]![0] as BaseLanguageModelInput).estimatedTokens
+    );
+    expect(breakdown.reservedOutput).toBe(100);
+    expect(manifest.fixedPrefixChecksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('compacts only the oldest prefix that fits the model input budget', async () => {
@@ -59,7 +74,7 @@ describe('MessageCompactor lifecycle', () => {
       version: 0,
       updatedAtMs: 10,
     }));
-    const inputTokenLimit = 178;
+    const inputTokenLimit = 500;
     const compactor = new MessageCompactor({
       store: { context: { replaceCompaction } } as unknown as AgentStore,
       modelFactory: {
@@ -79,9 +94,9 @@ describe('MessageCompactor lifecycle', () => {
       task: task(),
       taskRun: taskRun(),
       groups: [
-        group('old_1', 1, 'a'.repeat(120)),
-        group('old_2', 2, 'b'.repeat(120)),
-        group('old_3', 3, 'c'.repeat(120)),
+        group('old_1', 1, 'a'.repeat(1_000)),
+        group('old_2', 2, 'b'.repeat(1_000)),
+        group('old_3', 3, 'c'.repeat(1_000)),
         group('goal', 4),
       ],
     });

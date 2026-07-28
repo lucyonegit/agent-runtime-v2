@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type {
   AgentContextCompaction,
@@ -9,6 +10,7 @@ import type { ContextConfig } from '../../config/runtime-config.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import type { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { RuntimeError } from '../errors/runtime-error.js';
+import { projectModelInput } from '../model/model-input-accounting.js';
 import { estimateTextTokens } from './helpers/token-budget.helper.js';
 import type { ModelMessageGroup } from './types/model-input.types.js';
 
@@ -71,19 +73,13 @@ export class MessageCompactor {
     }
     const throughMessageRowId = Math.max(...candidates.map(group => group.maxRowId));
     const transcript = candidates.map(formatGroup).join('\n\n');
-    const messages = [
-      new SystemMessage(prompt),
-      new HumanMessage([
-        input.current?.summary
-          ? `Previous summary:\n${input.current.summary}`
-          : 'Previous summary: (none)',
-        `New transcript:\n${transcript}`,
-      ].join('\n\n')),
-    ];
+    const messages = buildCompactionMessages(prompt, input.current?.summary, transcript);
     const manifest = compressionManifest(
       input.current,
       candidates,
-      messages.map(message => message.text).join('\n'),
+      messages,
+      prompt,
+      this.options.config.summaryMaxTokens,
       this.options.systemPromptVersion
     );
     const model = this.options.modelFactory.create({
@@ -114,23 +110,37 @@ function selectCompactionBatch(input: {
   previousSummary?: string;
   inputTokenLimit: number;
 }): ModelMessageGroup[] {
-  const previous = input.previousSummary
-    ? `Previous summary:\n${input.previousSummary}`
-    : 'Previous summary: (none)';
   let transcript = '';
   const selected: ModelMessageGroup[] = [];
   for (const group of input.groups) {
     const formatted = formatGroup(group);
     const nextTranscript = transcript ? `${transcript}\n\n${formatted}` : formatted;
-    const serialized = [
+    const messages = buildCompactionMessages(
       input.prompt,
-      [previous, `New transcript:\n${nextTranscript}`].join('\n\n'),
-    ].join('\n');
-    if (estimateTextTokens(serialized) > input.inputTokenLimit) break;
+      input.previousSummary,
+      nextTranscript
+    );
+    if (projectModelInput(messages).estimatedTokens > input.inputTokenLimit) break;
     transcript = nextTranscript;
     selected.push(group);
   }
   return selected;
+}
+
+function buildCompactionMessages(
+  prompt: string,
+  previousSummary: string | undefined,
+  transcript: string
+) {
+  return [
+    new SystemMessage(prompt),
+    new HumanMessage([
+      previousSummary
+        ? `Previous summary:\n${previousSummary}`
+        : 'Previous summary: (none)',
+      `New transcript:\n${transcript}`,
+    ].join('\n\n')),
+  ];
 }
 
 function selectOldConversationGroups(
@@ -170,23 +180,27 @@ function formatGroup(group: ModelMessageGroup): string {
 function compressionManifest(
   current: AgentContextCompaction | undefined,
   groups: ModelMessageGroup[],
-  text: string,
+  messages: ReturnType<typeof buildCompactionMessages>,
+  prompt: string,
+  reservedOutputTokens: number,
   systemPromptVersion: string
 ): AgentContextInputManifest {
-  const tokens = estimateTextTokens(text);
+  const totalTokens = projectModelInput(messages).estimatedTokens;
+  const systemTokens = estimateTextTokens(prompt);
+  const summaryTokens = current ? estimateTextTokens(current.summary) : 0;
   return {
     purpose: 'context.compress',
     contextRulesVersion: 'model-input-v1',
     systemPromptVersion,
     messageGroupIds: groups.map(group => group.id),
     summaryIds: current ? [`context_compaction:${current.version}`] : [],
-    fixedPrefixChecksum: 'context-compress-v1',
+    fixedPrefixChecksum: createHash('sha256').update(prompt).digest('hex'),
     estimatedBreakdown: {
-      system: estimateTextTokens('context compaction'),
+      system: systemTokens,
       tools: 0,
-      summaries: current ? estimateTextTokens(current.summary) : 0,
-      messages: tokens,
-      reservedOutput: 0,
+      summaries: summaryTokens,
+      messages: Math.max(0, totalTokens - systemTokens - summaryTokens),
+      reservedOutput: reservedOutputTokens,
     },
   };
 }
