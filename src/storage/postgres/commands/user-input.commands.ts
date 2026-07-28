@@ -1,6 +1,9 @@
 import type { PoolClient } from 'pg';
 import { isDeepStrictEqual } from 'node:util';
-import { validateAgentUserInputAnswer } from '../../../domain/index.js';
+import {
+  validateAgentUserInputAnswer,
+  validateAgentUserInputSchema,
+} from '../../../domain/index.js';
 import {
   AgentStoreError,
   type ExpireUserInputRequestInput,
@@ -53,6 +56,10 @@ export async function waitForUserInputCommand(
   }
   if (new Set(input.requests.map(request => request.modelToolCallId)).size !== input.requests.length) {
     throw new TypeError('Only one UserInputRequest may be created for each ToolCall.');
+  }
+  for (const request of input.requests) {
+    const validation = validateAgentUserInputSchema(request.inputSchema);
+    if (!validation.valid) throw new TypeError(validation.reason);
   }
   return withPostgresTransaction(client, async () => {
     await lockAgentSession(client, input.sessionId);

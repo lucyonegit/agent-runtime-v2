@@ -107,6 +107,28 @@ describe('LangChain runtime tools', () => {
     });
   });
 
+  it('rejects HITL schemas with impossible bounds or duplicate values', async () => {
+    await expect(invoke('request_user_input', {
+      prompt: 'Select values',
+      input: {
+        type: 'multi_choice',
+        min: 2,
+        max: 1,
+        options: [{ label: 'One', value: 'one' }],
+      },
+    })).rejects.toThrow('selection bounds are invalid');
+    await expect(invoke('request_user_input', {
+      prompt: 'Select one',
+      input: {
+        type: 'single_choice',
+        options: [
+          { label: 'One', value: 'same' },
+          { label: 'Again', value: 'same' },
+        ],
+      },
+    })).rejects.toThrow('values must be unique');
+  });
+
   it('writes artifacts inside the session artifact sandbox', async () => {
     const result = await invoke('write_article', {
       title: 'Hello/World',

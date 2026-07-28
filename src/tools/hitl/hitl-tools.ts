@@ -2,6 +2,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import type {
   AgentUserInputSchema,
 } from '../../domain/index.js';
+import { validateAgentUserInputSchema } from '../../domain/index.js';
 import {
   type RuntimeTool,
   type RuntimeUserInputArtifact,
@@ -18,7 +19,11 @@ export function createHitlTools(): RuntimeTool[] {
         title: { type: 'string', description: 'Short title shown in the UI.' },
         prompt: { type: 'string', description: 'Question or instruction shown to the user.' },
         sensitive: { type: 'boolean', description: 'Hide the answer from normal views.' },
-        expiresInMs: { type: 'number', description: 'Optional positive wait duration in milliseconds.' },
+        expiresInMs: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Optional positive wait duration in milliseconds.',
+        },
         input: {
           oneOf: [
             {
@@ -27,7 +32,7 @@ export function createHitlTools(): RuntimeTool[] {
                 type: { const: 'text' },
                 placeholder: { type: 'string' },
                 defaultValue: { type: 'string' },
-                maxLength: { type: 'number' },
+                maxLength: { type: 'integer', minimum: 0 },
               },
               required: ['type'],
               additionalProperties: false,
@@ -36,7 +41,7 @@ export function createHitlTools(): RuntimeTool[] {
               type: 'object',
               properties: {
                 type: { const: 'single_choice' },
-                options: { type: 'array', items: optionSchema },
+                options: { type: 'array', minItems: 1, items: optionSchema },
               },
               required: ['type', 'options'],
               additionalProperties: false,
@@ -45,9 +50,9 @@ export function createHitlTools(): RuntimeTool[] {
               type: 'object',
               properties: {
                 type: { const: 'multi_choice' },
-                min: { type: 'number' },
-                max: { type: 'number' },
-                options: { type: 'array', items: optionSchema },
+                min: { type: 'integer', minimum: 0 },
+                max: { type: 'integer', minimum: 0 },
+                options: { type: 'array', minItems: 1, items: optionSchema },
               },
               required: ['type', 'options'],
               additionalProperties: false,
@@ -85,7 +90,10 @@ export function createHitlTools(): RuntimeTool[] {
 
 const optionSchema = {
   type: 'object',
-  properties: { label: { type: 'string' }, value: { type: 'string' } },
+  properties: {
+    label: { type: 'string', minLength: 1 },
+    value: { type: 'string', minLength: 1 },
+  },
   required: ['label', 'value'],
   additionalProperties: false,
 } as const;
@@ -94,26 +102,32 @@ function parseInputSchema(value: unknown): AgentUserInputSchema {
   if (!value || typeof value !== 'object') return { type: 'text' };
   const input = value as Record<string, unknown>;
   if (input.type === 'text') {
-    return {
+    return validated({
       type: 'text',
       ...(typeof input.placeholder === 'string' ? { placeholder: input.placeholder } : {}),
       ...(typeof input.defaultValue === 'string' ? { defaultValue: input.defaultValue } : {}),
       ...(typeof input.maxLength === 'number' ? { maxLength: input.maxLength } : {}),
-    };
+    });
   }
   if (input.type === 'single_choice' || input.type === 'multi_choice') {
     const options = parseOptions(input.options);
     if (options.length === 0) throw new Error(`${input.type} requires at least one option.`);
-    return input.type === 'single_choice'
+    return validated(input.type === 'single_choice'
       ? { type: input.type, options }
       : {
           type: input.type,
           options,
           ...(typeof input.min === 'number' ? { min: input.min } : {}),
           ...(typeof input.max === 'number' ? { max: input.max } : {}),
-        };
+        });
   }
   throw new Error('request_user_input received an invalid input schema.');
+}
+
+function validated(schema: AgentUserInputSchema): AgentUserInputSchema {
+  const validation = validateAgentUserInputSchema(schema);
+  if (!validation.valid) throw new Error(validation.reason);
+  return schema;
 }
 
 function parseOptions(value: unknown): Array<{ label: string; value: string }> {

@@ -9,6 +9,7 @@ import {
   isTerminalTaskStatus,
   resolveTaskGoalMessage,
   validateAgentUserInputAnswer,
+  validateAgentUserInputSchema,
   type AgentMessage,
 } from '../src/domain/index.js';
 
@@ -80,6 +81,27 @@ describe('durable domain vocabulary', () => {
       },
       ['one', 'two']
     )).toEqual({ valid: true });
+  });
+
+  it('rejects HITL schemas that cannot produce a valid answer', () => {
+    expect(validateAgentUserInputSchema({
+      type: 'text',
+      defaultValue: 'long',
+      maxLength: 3,
+    })).toMatchObject({ valid: false });
+    expect(validateAgentUserInputSchema({
+      type: 'single_choice',
+      options: [
+        { label: 'One', value: 'same' },
+        { label: 'Again', value: 'same' },
+      ],
+    })).toMatchObject({ valid: false });
+    expect(validateAgentUserInputSchema({
+      type: 'multi_choice',
+      min: 2,
+      max: 1,
+      options: [{ label: 'One', value: 'one' }],
+    })).toMatchObject({ valid: false });
   });
 });
 
