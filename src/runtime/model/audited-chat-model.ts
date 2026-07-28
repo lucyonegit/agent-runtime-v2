@@ -2,10 +2,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import {
   AIMessageChunk,
-  coerceMessageLikeToMessage,
-  mapChatMessagesToStoredMessages,
-  type BaseMessage,
-  type StoredMessage,
   type UsageMetadata,
 } from '@langchain/core/messages';
 import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
@@ -15,8 +11,7 @@ import type {
   AgentRealtimeEvent,
 } from '../../domain/index.js';
 import type { AgentStore } from '../../storage/agent-store.js';
-import { stableStringify } from '../helpers/stable-json.helper.js';
-import { estimateTextTokens } from '../context/helpers/token-budget.helper.js';
+import { projectModelInput } from './model-input-accounting.js';
 
 export interface AuditedChatModelOptions {
   delegate: Runnable<BaseLanguageModelInput, AIMessageChunk>;
@@ -122,8 +117,9 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
   async #start(input: BaseLanguageModelInput, outputId: string | undefined): Promise<string> {
     this.#logicalCallNo += 1;
     const id = this.#ids.modelCallId();
-    const inputMessages = storeModelInput(input);
-    const serialized = stableStringify(inputMessages);
+    const projectedInput = projectModelInput(input);
+    const inputMessages = projectedInput.storedMessages;
+    const serialized = projectedInput.serialized;
     const manifest = typeof this.#options.baseManifest === 'function'
       ? this.#options.baseManifest()
       : this.#options.baseManifest;
@@ -144,7 +140,7 @@ export class AuditedChatModel extends Runnable<BaseLanguageModelInput, AIMessage
       maxContextTokens: this.#options.maxContextTokens,
       reservedOutputTokens: this.#options.reservedOutputTokens,
       estimatedInputTokens: Math.max(
-        estimateTextTokens(serialized),
+        projectedInput.estimatedTokens,
         manifestInputTokens(manifest)
       ),
       outputId,
@@ -249,18 +245,6 @@ function usageFields(usage: UsageMetadata | undefined) {
     cacheReadInputTokens: usage.input_token_details?.cache_read,
     cacheWriteInputTokens: usage.input_token_details?.cache_creation,
   } : {};
-}
-
-function storeModelInput(input: BaseLanguageModelInput): StoredMessage[] {
-  let messages: BaseMessage[];
-  if (typeof input === 'string') {
-    messages = [coerceMessageLikeToMessage(['human', input])];
-  } else if (Array.isArray(input)) {
-    messages = input.map(coerceMessageLikeToMessage);
-  } else {
-    messages = input.toChatMessages();
-  }
-  return mapChatMessagesToStoredMessages(messages);
 }
 
 function sha256(value: string): string {

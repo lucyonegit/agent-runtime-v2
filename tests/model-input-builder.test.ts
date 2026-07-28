@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentMessage, AgentTask } from '../src/domain/index.js';
+import type { AgentMessage, AgentTask, AgentTaskRun } from '../src/domain/index.js';
 import { ModelInputBuilder } from '../src/runtime/context/model-input-builder.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
@@ -94,11 +94,72 @@ describe('ModelInputBuilder', () => {
       'system', 'system', 'human', 'ai', 'human', 'ai', 'tool', 'system',
     ]);
     expect(input.inputManifest.purpose).toBe('task.react');
+    expect(input.estimatedTokens).toBe(
+      input.inputManifest.estimatedBreakdown.system
+      + input.inputManifest.estimatedBreakdown.tools
+      + input.inputManifest.estimatedBreakdown.summaries
+      + input.inputManifest.estimatedBreakdown.messages
+    );
     expect(loadInputSnapshot).toHaveBeenCalledOnce();
     expect(loadInputSnapshot).toHaveBeenCalledWith({
       sessionId: 'session_1',
       taskId: 'task_current',
       goalMessageId: 'goal',
+    });
+  });
+
+  it('counts assistant tool-call arguments in the model input budget', async () => {
+    const messages: AgentMessage[] = [
+      message({
+        rowId: 1,
+        id: 'goal',
+        role: 'user',
+        messageType: 'user_message',
+        content: 'Use the tool result',
+      }),
+      message({
+        rowId: 2,
+        id: 'call',
+        messageType: 'tool_call',
+        contextScope: 'task',
+        toolCalls: [{
+          id: 'model_call',
+          name: 'write_file',
+          args: { content: 'x'.repeat(20_000) },
+          type: 'tool_call',
+        }],
+      }),
+      message({
+        rowId: 3,
+        id: 'result',
+        role: 'tool',
+        messageType: 'tool_result',
+        contextScope: 'task',
+        modelToolCallId: 'model_call',
+        content: 'written',
+      }),
+    ];
+    const builder = new ModelInputBuilder({
+      store: {
+        context: { loadInputSnapshot: vi.fn(async () => ({ messages })) },
+      } as unknown as AgentStore,
+      systemPrompt: 'system policy',
+      systemPromptVersion: 'task-agent-v1',
+      promptId: 'task-agent',
+      promptVersion: 1,
+      inputTokenLimit: 1_000,
+      reservedOutputTokens: 100,
+      contextConfig: {
+        keepRecentInputTokens: 8_000,
+        maxToolResultTokens: 1_000,
+        summaryMaxTokens: 1_000,
+      },
+      toolSchemas: [],
+      getStableContext: async () => 'stable environment',
+    });
+
+    await expect(builder.buildForTask(task(), taskRun())).rejects.toMatchObject({
+      code: 'model_input_too_large',
     });
   });
 });
@@ -112,6 +173,20 @@ function task(): AgentTask {
     version: 1,
     createdAtMs: 5,
     updatedAtMs: 5,
+  };
+}
+
+function taskRun(): AgentTaskRun {
+  return {
+    id: 'task_run_current',
+    taskId: 'task_current',
+    runNo: 1,
+    trigger: 'initial',
+    status: 'running',
+    ownerId: 'worker_1',
+    ownershipExpiresAtMs: 1_000,
+    startedAtMs: 1,
+    updatedAtMs: 1,
   };
 }
 

@@ -24,6 +24,7 @@ import { estimateTextTokens } from './helpers/token-budget.helper.js';
 import { buildCompleteMessageGroups } from './helpers/message-group.helper.js';
 import { MessageCompactor } from './message-compactor.js';
 import type { ModelInput, ModelMessageGroup } from './types/model-input.types.js';
+import { projectModelInput } from '../model/model-input-accounting.js';
 
 export interface ModelInputBuilderOptions {
   store: AgentStore;
@@ -149,8 +150,7 @@ export class ModelInputBuilder {
         })}`
       )] : []),
     ];
-    const serialized = messages.map(message => `${message.getType()}:${message.text}`).join('\n');
-    const estimatedTokens = estimateTextTokens(serialized)
+    const estimatedTokens = projectModelInput(messages).estimatedTokens
       + estimateTextTokens(stableStringify(this.options.toolSchemas.map(toolSchemaProjection)));
     const includedMessages = projectedGroups.flatMap(group => group.messages);
     const inputManifest = this.#manifest({
