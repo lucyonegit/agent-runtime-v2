@@ -22,6 +22,8 @@ sequenceDiagram
 
 TaskExecutor 只接收 taskId。它重新读取数据库中的 Task、活动 TaskRun 和目标 Message，避免后台闭包携带陈旧状态。
 
+进程内执行按 `(taskId, taskRunId)` 判定身份：同一 TaskRun 的重复 dispatch 复用已有 completion；恢复创建了更新的 TaskRun 时，新运行立即替换旧 Map 项并用 `task_run_superseded` 中止旧 loop。旧 finally 只有在 Map 仍指向自身时才能清理，不能删除新运行。
+
 ## 2. Checkpoint
 
 Checkpoint 记录 `sequenceNo/phase/callMessageId/iterationNo/executedToolCalls`。主要 phase：

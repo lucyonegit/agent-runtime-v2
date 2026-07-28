@@ -29,6 +29,7 @@ export interface TaskExecutorOptions {
 /** Owns process-local scheduling; durable lifecycle changes stay in stores/flows. */
 export class TaskExecutor implements TaskExecutorPort {
   readonly #activeExecutions = new Map<string, {
+    taskRunId: string;
     controller: AbortController;
     completion: Promise<void>;
   }>();
@@ -76,12 +77,22 @@ export class TaskExecutor implements TaskExecutorPort {
 
   async startExecution(taskId: string): Promise<void> {
     if (this.#stopping) return;
+    const selected = await this.#loadRunnableTask(taskId);
     const existing = this.#activeExecutions.get(taskId);
-    if (existing) return existing.completion;
+    if (existing?.taskRunId === selected.taskRun.id) return existing.completion;
 
-    const execution = { controller: new AbortController(), completion: Promise.resolve() };
+    const execution = {
+      taskRunId: selected.taskRun.id,
+      controller: new AbortController(),
+      completion: Promise.resolve(),
+    };
     this.#activeExecutions.set(taskId, execution);
-    execution.completion = this.#runOwnedTask(taskId, execution.controller.signal).finally(() => {
+    existing?.controller.abort('task_run_superseded');
+    execution.completion = this.#runOwnedTask(
+      taskId,
+      selected.taskRun.id,
+      execution.controller.signal
+    ).finally(() => {
       if (this.#activeExecutions.get(taskId) === execution) this.#activeExecutions.delete(taskId);
     });
     return execution.completion;
@@ -99,11 +110,15 @@ export class TaskExecutor implements TaskExecutorPort {
     await Promise.allSettled(active.map(execution => execution.completion));
   }
 
-  async #runOwnedTask(taskId: string, signal: AbortSignal): Promise<void> {
+  async #runOwnedTask(
+    taskId: string,
+    expectedTaskRunId: string,
+    signal: AbortSignal
+  ): Promise<void> {
     let runnable: { task: AgentTask; taskRun: AgentTaskRun } | undefined;
     let stopRefreshing: () => void = () => undefined;
     try {
-      runnable = await this.#loadRunnableTask(taskId);
+      runnable = await this.#loadRunnableTask(taskId, expectedTaskRunId);
       stopRefreshing = this.#executionOwnership.startRefreshing(taskId, runnable.taskRun.id);
       await this.#options.reactExecution.runTask({ ...runnable, signal });
     } catch (error) {
@@ -115,13 +130,17 @@ export class TaskExecutor implements TaskExecutorPort {
     }
   }
 
-  async #loadRunnableTask(taskId: string): Promise<{ task: AgentTask; taskRun: AgentTaskRun }> {
+  async #loadRunnableTask(
+    taskId: string,
+    expectedTaskRunId?: string
+  ): Promise<{ task: AgentTask; taskRun: AgentTaskRun }> {
     const [task, taskRun] = await Promise.all([
       this.#options.store.tasks.get(taskId),
       this.#options.store.tasks.getLatestRun(taskId),
     ]);
     const nowMs = this.#options.clock.nowMs();
     if (!task || task.status !== 'running' || !taskRun || taskRun.status !== 'running'
+      || expectedTaskRunId !== undefined && taskRun.id !== expectedTaskRunId
       || taskRun.ownerId !== this.#options.workerId
       || !taskRun.ownershipExpiresAtMs
       || taskRun.ownershipExpiresAtMs <= nowMs) {
