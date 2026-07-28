@@ -5,7 +5,7 @@ import type {
   AgentUserInputRequest,
 } from '../domain/index.js';
 import { ACTIVE_TASK_STATUSES } from '../domain/index.js';
-import { AgentStoreError, type AgentStore } from '../storage/agent-store.js';
+import type { AgentStore } from '../storage/agent-store.js';
 import { TimelineBuilder } from './timeline-builder.js';
 import type { AgentSessionView } from './view-contract.js';
 
@@ -23,60 +23,38 @@ export class SessionView {
   ) {}
 
   async load(sessionId: string): Promise<AgentSessionView> {
-    const session = await this.store.sessions.get(sessionId);
-    if (!session) {
-      throw new AgentStoreError(
-        'SESSION_NOT_FOUND',
-        `Agent session ${JSON.stringify(sessionId)} was not found.`
-      );
-    }
-    const [
-      tasks,
-      taskRuns,
-      activePlan,
-      allMessages,
-      toolCalls,
-      toolRuns,
-      artifacts,
-      managedProcesses,
-      userInputRequests,
-      modelUsage,
-    ] = await Promise.all([
-      this.store.sessions.listTasks(sessionId),
-      this.store.sessions.listTaskRuns(sessionId),
-      this.store.plans.getActive(sessionId),
-      this.store.sessions.listMessages(sessionId),
-      this.store.sessions.listToolCalls(sessionId),
-      this.store.sessions.listToolRuns(sessionId),
-      this.store.sessions.listArtifacts(sessionId),
+    const [snapshot, managedProcesses] = await Promise.all([
+      this.store.sessions.loadSnapshot(sessionId),
       this.processReader?.listSessionProcesses(sessionId) ?? Promise.resolve([]),
-      this.store.sessions.listUserInputRequests(sessionId),
-      this.store.models.getUsageStats(sessionId),
     ]);
-    const visibleMessages = allMessages.filter(message => message.visibility === 'ui');
-    const projected = projectSensitiveAnswers(visibleMessages, toolCalls, userInputRequests);
+    const visibleMessages = snapshot.messages.filter(message => message.visibility === 'ui');
+    const projected = projectSensitiveAnswers(
+      visibleMessages,
+      snapshot.toolCalls,
+      snapshot.userInputRequests
+    );
     const timeline = this.#timeline.build({
       messages: projected.messages,
       toolCalls: projected.toolCalls,
-      artifacts,
+      artifacts: snapshot.artifacts,
     });
     const activeStatuses = new Set<string>(ACTIVE_TASK_STATUSES);
-    const activeTask = tasks.find(task => activeStatuses.has(task.status));
+    const activeTask = snapshot.tasks.find(task => activeStatuses.has(task.status));
     return {
       schemaVersion: 5,
       generatedAtMs: this.clock.nowMs(),
-      session,
-      tasks,
+      session: snapshot.session,
+      tasks: snapshot.tasks,
       ...(activeTask ? { activeTask } : {}),
-      taskRuns,
-      ...(activePlan ? { activePlan } : {}),
+      taskRuns: snapshot.taskRuns,
+      ...(snapshot.activePlan ? { activePlan: snapshot.activePlan } : {}),
       messages: projected.messages,
       toolCalls: projected.toolCalls,
-      toolRuns,
-      artifacts,
+      toolRuns: snapshot.toolRuns,
+      artifacts: snapshot.artifacts,
       managedProcesses,
       userInputRequests: projected.requests,
-      ...(modelUsage ? { modelUsage } : {}),
+      ...(snapshot.modelUsage ? { modelUsage: snapshot.modelUsage } : {}),
       timeline,
       cursor: {
         latestMessageRowId: projected.messages.length > 0

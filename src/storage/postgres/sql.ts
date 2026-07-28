@@ -16,6 +16,21 @@ export async function withPostgresTransaction<T>(
   }
 }
 
+export async function withPostgresReadSnapshot<T>(
+  client: PoolClient,
+  operation: () => Promise<T>
+): Promise<T> {
+  await client.query('begin transaction isolation level repeatable read read only');
+  try {
+    const result = await operation();
+    await client.query('commit');
+    return result;
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  }
+}
+
 export async function lockAgentSession(
   client: PoolClient,
   sessionId: string

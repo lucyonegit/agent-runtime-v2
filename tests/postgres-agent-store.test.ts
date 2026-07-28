@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { resetAgentRuntimeSchema } from '../src/storage/postgres/schema-management.js';
+import { withPostgresReadSnapshot } from '../src/storage/postgres/sql.js';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL
@@ -17,6 +18,55 @@ describe('PostgresAgentStore converged model', () => {
   });
 
   afterAll(async () => { await pool.end(); });
+
+  it('keeps all reads in one repeatable-read snapshot', async () => {
+    await store.sessions.create({ id: 'session_1', title: 'Test', nowMs: 1 });
+    const client = await pool.connect();
+    try {
+      const versions = await withPostgresReadSnapshot(client, async () => {
+        const first = await client.query<{ version: number }>(
+          `select version from agent_sessions where id = 'session_1'`
+        );
+        await pool.query(
+          `update agent_sessions set version = version + 1 where id = 'session_1'`
+        );
+        const second = await client.query<{ version: number }>(
+          `select version from agent_sessions where id = 'session_1'`
+        );
+        return [first.rows[0]!.version, second.rows[0]!.version];
+      });
+      expect(versions).toEqual([0, 0]);
+    } finally {
+      client.release();
+    }
+    await expect(store.sessions.get('session_1')).resolves.toMatchObject({ version: 1 });
+  });
+
+  it('loads the complete durable Session projection through one snapshot query', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await store.plans.apply({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      title: 'Snapshot',
+      steps: [{ step: 'Read', status: 'in_progress' }],
+      nowMs: 21,
+    });
+
+    await expect(store.sessions.loadSnapshot(task.sessionId)).resolves.toMatchObject({
+      session: { id: task.sessionId, status: 'active' },
+      tasks: [{ id: task.id, status: 'running' }],
+      taskRuns: [{ id: started.taskRun.id, status: 'running' }],
+      activePlan: { taskId: task.id, title: 'Snapshot' },
+      messages: [{ id: 'message_goal', role: 'user' }],
+      toolCalls: [],
+      toolRuns: [],
+      artifacts: [],
+      userInputRequests: [],
+    });
+  });
 
   it('persists Task, TaskRun, ToolCall and ToolRun while Message owns the result fact', async () => {
     const { task, message: goal } = await createTask();

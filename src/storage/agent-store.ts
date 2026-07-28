@@ -424,11 +424,25 @@ export interface ReplaceContextCompactionInput {
   nowMs: number;
 }
 
+export interface AgentSessionSnapshot {
+  session: AgentSession;
+  tasks: AgentTask[];
+  taskRuns: AgentTaskRun[];
+  activePlan?: AgentActivePlan;
+  messages: AgentMessage[];
+  toolCalls: AgentToolCall[];
+  toolRuns: AgentToolRun[];
+  artifacts: AgentArtifact[];
+  userInputRequests: AgentUserInputRequest[];
+  modelUsage?: AgentModelUsageStats;
+}
+
 export interface SessionStore {
   create(input: CreateSessionInput): Promise<AgentSession>;
   list(): Promise<AgentSession[]>;
   beginDeletion(input: BeginSessionDeletionInput): Promise<BeginSessionDeletionResult>;
   finalizeDeletion(sessionId: string): Promise<boolean>;
+  loadSnapshot(sessionId: string): Promise<AgentSessionSnapshot>;
   get(sessionId: string): Promise<AgentSession | undefined>;
   listMessages(sessionId: string, afterRowId?: number): Promise<AgentMessage[]>;
   listTasks(sessionId: string): Promise<AgentTask[]>;

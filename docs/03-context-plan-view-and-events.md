@@ -73,7 +73,7 @@ Plan 不作为 Task 能否结束的门禁。Task 进入 `completed/failed/cancel
 
 ## 4. View 与事件一致性
 
-刷新时 `SessionView` 从数据库构建权威快照：Task、TaskRun、ActivePlan、Message、ToolCall、ToolRun、Artifact、UserInputRequest 和 Token 聚合。ToolMessage 不单独铺在时间线中，而是依据 ToolCall.resultMessageId 合并到对应 tool exchange。
+刷新时 `SessionView` 从数据库构建权威快照：Task、TaskRun、ActivePlan、Message、ToolCall、ToolRun、Artifact、UserInputRequest 和 Token 聚合。全部耐久 projection 使用同一连接上的只读 `REPEATABLE READ` 事务读取，不能混入多个提交时点；managed process 属于操作系统实时状态，在事务外单独采样。ToolMessage 不单独铺在时间线中，而是依据 ToolCall.resultMessageId 合并到对应 tool exchange。
 
 流式期间前端 reducer 按相同规则维护本地 View：
 
@@ -86,4 +86,3 @@ Plan 不作为 Task 能否结束的门禁。Task 进入 `completed/failed/cancel
 - 收到对应 Task 终态时也清除 Plan，抵抗事件乱序。
 
 Web 使用 SSE；Electron 使用 Utility Process + MessagePort IPC。二者消费相同 `AgentRealtimeEvent`，刷新后都以 SessionView 为准。
-

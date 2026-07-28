@@ -12,10 +12,12 @@ import type {
 import type {
   BeginSessionDeletionInput,
   BeginSessionDeletionResult,
+  AgentSessionSnapshot,
   CreateSessionInput,
   SessionStore,
 } from '../../agent-store.js';
 import { beginSessionDeletionCommand, createSessionCommand } from '../transaction-commands.js';
+import { loadSessionSnapshotQuery } from '../queries/session-snapshot.query.js';
 import {
   mapAgentArtifactRow,
   mapAgentMessageRow,
@@ -60,6 +62,10 @@ export class PostgresSessionStore implements SessionStore {
       [sessionId]
     );
     return result.rowCount === 1;
+  }
+
+  async loadSnapshot(sessionId: string): Promise<AgentSessionSnapshot> {
+    return withPostgresClient(this.pool, client => loadSessionSnapshotQuery(client, sessionId));
   }
 
   async get(sessionId: string): Promise<AgentSession | undefined> {
