@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { randomUUID } from 'node:crypto';
 import {
   DASHSCOPE_OPENAI_BASE_URL,
   resolveModelTokenLimits,
@@ -145,6 +146,7 @@ export interface LoadRuntimeConfigOptions {
 }
 
 const bundledDefaults = readBundledRuntimeConfigFile();
+const autoWorkerId = `worker_${process.pid}_${randomUUID()}`;
 
 export const DEFAULT_SERVER_CONFIG =
   deepFreeze(structuredClone(bundledDefaults.server));
@@ -175,7 +177,7 @@ export function loadRuntimeConfig(
     ?? bundledRuntimeConfigPath();
   const config = loadRuntimeConfigFile(configFile, env);
   const workerId = config.runtime.workerId === 'auto'
-    ? `worker_${process.pid}`
+    ? autoWorkerId
     : config.runtime.workerId;
   return deepFreeze({
     workerId,

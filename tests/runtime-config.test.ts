@@ -56,6 +56,16 @@ describe('runtime configuration', () => {
     });
   });
 
+  it('adds a stable process-boot identity to automatic worker ids', () => {
+    const first = loadRuntimeConfig({ env: { DATABASE_URL: 'postgres://runtime' } });
+    const second = loadRuntimeConfig({ env: { DATABASE_URL: 'postgres://runtime' } });
+
+    expect(first.workerId).toBe(second.workerId);
+    expect(first.workerId).toMatch(
+      new RegExp(`^worker_${process.pid}_[0-9a-f]{8}-[0-9a-f-]{27}$`)
+    );
+  });
+
   it('rejects inconsistent execution ownership timing', () => {
     expect(() => loadRuntimeConfig({ env: {
       DATABASE_URL: 'postgres://runtime',
