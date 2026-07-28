@@ -81,6 +81,7 @@
     },
     "browser": {
       "requestTimeoutMs": 30000,
+      "maximumResponseBytes": 1048576,
       "allowProxyFakeIps": false
     },
     "environment": {

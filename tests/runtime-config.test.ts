@@ -15,6 +15,7 @@ describe('runtime configuration', () => {
       TASK_OWNERSHIP_TIMEOUT_MS: '45000',
       TASK_OWNERSHIP_REFRESH_MS: '15000',
       AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS: 'true',
+      AGENT_BROWSER_MAX_RESPONSE_BYTES: '262144',
       AWS_ACCESS_KEY_ID: 'aws-access-key',
       GITHUB_TOKEN: 'github-token',
       SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
@@ -38,7 +39,12 @@ describe('runtime configuration', () => {
         inputTokenLimit: 995_904,
       },
       execution: { ownershipTimeoutMs: 45_000, ownershipRefreshMs: 15_000 },
-      tools: { browser: { allowProxyFakeIps: true } },
+      tools: {
+        browser: {
+          allowProxyFakeIps: true,
+          maximumResponseBytes: 262_144,
+        },
+      },
     });
     expect(config.tools.hostEnvironment).toEqual({ PATH: '/test/bin' });
     expect(Object.isFrozen(config)).toBe(true);

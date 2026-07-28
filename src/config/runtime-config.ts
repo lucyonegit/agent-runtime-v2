@@ -108,6 +108,7 @@ export interface ToolsConfig {
   };
   browser: {
     requestTimeoutMs: number;
+    maximumResponseBytes: number;
     allowProxyFakeIps: boolean;
   };
   environment: {

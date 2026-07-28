@@ -531,6 +531,39 @@ describe('LangChain runtime tools', () => {
     expect(text).not.toHaveBeenCalled();
   });
 
+  it('cancels textual browser responses that exceed the configured byte limit', async () => {
+    const cancelled = vi.fn();
+    const chunks = [
+      new TextEncoder().encode('123456'),
+      new TextEncoder().encode('789012'),
+    ];
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (chunk) controller.enqueue(chunk);
+      },
+      cancel: cancelled,
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    })));
+    tools = createRuntimeTools({
+      config: {
+        ...DEFAULT_TOOLS_CONFIG,
+        browser: {
+          ...DEFAULT_TOOLS_CONFIG.browser,
+          maximumResponseBytes: 8,
+        },
+      },
+    });
+
+    await expect(invoke('browse_url', {
+      url: 'https://93.184.216.34/large',
+    })).rejects.toThrow('configured 8 byte limit');
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
+
   it('accepts only explicit textual browser response media types', () => {
     expect(isTextMediaType('text/html; charset=utf-8')).toBe(true);
     expect(isTextMediaType('application/json')).toBe(true);

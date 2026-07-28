@@ -72,7 +72,10 @@ export function createBrowserTools(
           + 'Use a dedicated file or PDF tool instead.'
         );
       }
-      const html = await response.text();
+      const html = await readBoundedResponseText(
+        response,
+        browserConfig.maximumResponseBytes
+      );
       return jsonToolOutput({
         success: true,
         url: response.url,
@@ -100,7 +103,11 @@ export function createBrowserTools(
         browserConfig
       );
       if (!response.ok) throw new Error(`Search failed with status ${response.status}.`);
-      const results = extractDuckDuckGoResults(await response.text())
+      const html = await readBoundedResponseText(
+        response,
+        browserConfig.maximumResponseBytes
+      );
+      const results = extractDuckDuckGoResults(html)
         .slice(0, browserConfig.searchResultLimit);
       return jsonToolOutput({ query, resultsCount: results.length, results });
     },
@@ -126,10 +133,61 @@ async function safeFetch(
     });
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get('location');
-    if (!location) throw new Error('Redirect response is missing a location header.');
+    if (!location) {
+      await cancelResponseBody(response);
+      throw new Error('Redirect response is missing a location header.');
+    }
+    await cancelResponseBody(response);
     url = new URL(location, url);
   }
   throw new Error('Too many redirects.');
+}
+
+export async function readBoundedResponseText(
+  response: Response,
+  maximumBytes: number
+): Promise<string> {
+  if (!Number.isInteger(maximumBytes) || maximumBytes <= 0) {
+    throw new RangeError('maximumBytes must be a positive integer.');
+  }
+  const contentLength = response.headers.get('content-length');
+  if (contentLength !== null) {
+    const declaredBytes = Number(contentLength);
+    if (Number.isFinite(declaredBytes) && declaredBytes > maximumBytes) {
+      await cancelResponseBody(response);
+      throw responseTooLarge(maximumBytes);
+    }
+  }
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let receivedBytes = 0;
+  const textChunks: string[] = [];
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      receivedBytes += chunk.value.byteLength;
+      if (receivedBytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw responseTooLarge(maximumBytes);
+      }
+      textChunks.push(decoder.decode(chunk.value, { stream: true }));
+    }
+    textChunks.push(decoder.decode());
+    return textChunks.join('');
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
+function responseTooLarge(maximumBytes: number): Error {
+  return new Error(`Browser response exceeds the configured ${maximumBytes} byte limit.`);
 }
 
 async function assertPublicUrl(url: URL, allowProxyFakeIps: boolean): Promise<void> {

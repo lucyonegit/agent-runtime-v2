@@ -116,6 +116,9 @@ function applyEnvironmentOverrides(
   assignBoolean(env, 'AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS', value => {
     config.tools.browser.allowProxyFakeIps = value;
   });
+  assignPositiveInteger(env, 'AGENT_BROWSER_MAX_RESPONSE_BYTES', value => {
+    config.tools.browser.maximumResponseBytes = value;
+  });
 }
 
 function validateConfig(config: RuntimeConfigFile): void {
