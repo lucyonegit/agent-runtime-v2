@@ -82,6 +82,7 @@ export class TaskExecutor implements TaskExecutorPort {
     };
     this.#activeExecutions.set(command.taskId, execution);
     this.#trackedExecutions.add(execution);
+    // 新任务运行终止旧任务runner
     existing?.controller.abort('task_run_superseded');
     execution.completion = this.#runOwnedTask(
       command,
