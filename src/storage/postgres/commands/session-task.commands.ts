@@ -22,13 +22,11 @@ import {
   mapAgentTaskRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
-  mapAgentUserInputRequestRow,
   type AgentMessageRow,
   type AgentSessionRow,
   type AgentTaskRow,
   type AgentTaskRunRow,
   type AgentToolCallRow,
-  type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import { lockAgentSession, lockAgentSessionForTask, withPostgresTransaction } from '../sql.js';
 import {
@@ -267,18 +265,10 @@ export async function reconcileInterruptedTaskCommand(
     if (task.version !== input.expectedTaskVersion) {
       throw staleTaskVersion(task, input.expectedTaskVersion);
     }
-    const confirmations = new Map(
-      input.confirmationRequests.map(item => [item.toolCallId, item])
-    );
-    if (confirmations.size !== input.confirmationRequests.length) {
-      throw new TypeError('Side-effect confirmation ToolCall IDs must be unique.');
-    }
-
     let taskRun: AgentTaskRunRow | undefined;
     let updatedTask: AgentTaskRow;
     let planCleared = false;
     const toolCallRows: AgentToolCallRow[] = [];
-    const requestRows: AgentUserInputRequestRow[] = [];
     let terminalized: Awaited<ReturnType<typeof terminalizeTaskChildren>> = {
       toolCalls: [],
       userInputRequests: [],
@@ -331,7 +321,7 @@ export async function reconcileInterruptedTaskCommand(
          for update`,
         [task.id]
       );
-      const unknownCalls: AgentToolCallRow[] = [];
+      let hasUnknownSideEffect = false;
       for (const call of runningCallsResult.rows) {
         const sideEffectUnknown = call.side_effect_level === 'side_effecting';
         const errorCode = sideEffectUnknown
@@ -356,8 +346,7 @@ export async function reconcileInterruptedTaskCommand(
           ]
         );
         toolCallRows.push(requireRow(callResult.rows[0], 'reconcile interrupted tool call'));
-        if (!sideEffectUnknown) continue;
-        unknownCalls.push(call);
+        hasUnknownSideEffect ||= sideEffectUnknown;
       }
 
       terminalized = await terminalizeTaskChildren(client, {
@@ -365,64 +354,22 @@ export async function reconcileInterruptedTaskCommand(
         phase: 'failed',
         nowMs: input.nowMs,
       });
-      for (const call of unknownCalls) {
-        const confirmation = confirmations.get(call.id);
-        if (!confirmation) {
-          throw new AgentStoreError(
-            'CONCURRENCY_CONFLICT',
-            `No confirmation request ID was allocated for ToolCall ${JSON.stringify(call.id)}.`,
-            { taskId: task.id, toolCallId: call.id }
-          );
-        }
-        const requestResult = await client.query<AgentUserInputRequestRow>(
-          `insert into agent_user_input_requests(
-             id, session_id, task_id, tool_call_id, kind, status,
-             title, prompt, input_schema,
-             version, metadata, created_at_ms, updated_at_ms
-           ) values (
-             $1, $2, $3, $4, 'side_effect_confirmation', 'pending',
-             $5, $6, $7,
-             0, $8, $9, $9
-           ) returning *`,
-          [
-            confirmation.requestId,
-            task.session_id,
-            task.id,
-            call.id,
-            confirmation.title,
-            confirmation.prompt,
-            JSON.stringify(confirmation.inputSchema),
-            confirmation.metadata ?? null,
-            input.nowMs,
-          ]
-        );
-        requestRows.push(requireRow(requestResult.rows[0], 'create side-effect confirmation'));
-      }
-      if (requestRows.length > 0) {
-        const taskResult = await client.query<AgentTaskRow>(
-          `update agent_tasks
-           set status = 'waiting_for_user',
-               error_code = 'side_effect_outcome_unknown',
-               error_message = 'A side-effecting tool outcome requires user confirmation.',
-               error_details = null, version = version + 1, updated_at_ms = $2
-           where id = $1 returning *`,
-          [task.id, input.nowMs]
-        );
-        updatedTask = requireRow(taskResult.rows[0], 'wait for side-effect confirmation');
-      } else {
-        const taskResult = await client.query<AgentTaskRow>(
-          `update agent_tasks
-           set status = 'failed',
-               error_code = 'execution_interrupted',
-               error_message = 'The service restarted before this Task completed.',
-               error_details = null, version = version + 1,
-               updated_at_ms = $2, completed_at_ms = $2
-           where id = $1 returning *`,
-          [task.id, input.nowMs]
-        );
-        updatedTask = requireRow(taskResult.rows[0], 'fail interrupted task');
-        planCleared = await clearActivePlan(client, task.session_id, task.id);
-      }
+      const taskErrorCode = hasUnknownSideEffect
+        ? 'side_effect_outcome_unknown'
+        : 'execution_interrupted';
+      const taskErrorMessage = hasUnknownSideEffect
+        ? 'The service restarted after a side-effecting tool began; its outcome is unknown.'
+        : 'The service restarted before this Task completed.';
+      const taskResult = await client.query<AgentTaskRow>(
+        `update agent_tasks
+         set status = 'failed', error_code = $2, error_message = $3,
+             error_details = null, version = version + 1,
+             updated_at_ms = $4, completed_at_ms = $4
+         where id = $1 returning *`,
+        [task.id, taskErrorCode, taskErrorMessage, input.nowMs]
+      );
+      updatedTask = requireRow(taskResult.rows[0], 'fail interrupted task');
+      planCleared = await clearActivePlan(client, task.session_id, task.id);
     } else {
       throw new AgentStoreError(
         'INVALID_TASK_STATE',
@@ -440,7 +387,6 @@ export async function reconcileInterruptedTaskCommand(
         ...terminalized.toolCalls,
       ],
       userInputRequests: [
-        ...requestRows.map(mapAgentUserInputRequestRow),
         ...terminalized.userInputRequests,
       ],
       planCleared,

@@ -44,11 +44,10 @@ describe('executeDurableAgentLoop event boundary', () => {
     expect(result).toEqual({ type: 'completed', task: completedTask, message });
   });
 
-  it('stops the loop when the handler reports a side-effect confirmation request', async () => {
+  it('fails the Task when the handler reports an unknown side-effect outcome', async () => {
     const activeTask = task('running');
     const activeRun = taskRun();
-    const waitingTask = task('waiting_for_user');
-    const request = { id: 'input_1' } as never;
+    const failedTask = task('failed');
     const event = {
       type: LOOP_EVENT_TYPES.ToolResultFailed,
       modelToolCallId: 'model_tool_call_1',
@@ -60,13 +59,25 @@ describe('executeDurableAgentLoop event boundary', () => {
     } satisfies LoopEvent;
     const iterator = asyncIterator([{ done: false as const, value: event }]);
     const handle = vi.fn(async () => ({
-      waitingForUser: { task: waitingTask, requests: [request] },
+      stopTask: {
+        code: 'tool_state_unknown' as const,
+        message: 'Outcome unknown.',
+        details: { toolCallId: 'tool_call_1' },
+      },
     }));
+    const fail = vi.fn(async () => ({
+      task: failedTask,
+      taskRun: activeRun,
+      toolCalls: [],
+      userInputRequests: [],
+      planCleared: false,
+    }));
+    const publishTaskFinish = vi.fn(async () => undefined);
 
     const result = await executeDurableAgentLoop({
       loop: { run: vi.fn(() => iterator) } as never,
-      eventHandler: { handle } as never,
-      store: {} as AgentStore,
+      eventHandler: { handle, publishTaskFinish } as never,
+      store: { tasks: { fail } } as unknown as AgentStore,
       ownerId: 'worker_1',
       clock: { nowMs: () => 100 },
       input: { task: activeTask, taskRun: activeRun, loopInput: {} as never },
@@ -75,14 +86,23 @@ describe('executeDurableAgentLoop event boundary', () => {
     expect(iterator.return).toHaveBeenCalledWith({
       type: 'failed',
       code: 'tool_state_unknown',
-      message: 'A side-effecting tool outcome is unknown and requires user confirmation.',
+      message: 'Outcome unknown.',
+      details: { toolCallId: 'tool_call_1' },
     });
     expect(iterator.next).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      type: 'waiting_for_user',
-      task: waitingTask,
-      requests: [request],
+    expect(fail).toHaveBeenCalledWith({
+      taskId: activeTask.id,
+      expectedTaskVersion: activeTask.version,
+      taskRunId: activeRun.id,
+      ownerId: 'worker_1',
+      error: {
+        code: 'tool_state_unknown',
+        message: 'Outcome unknown.',
+        details: { toolCallId: 'tool_call_1' },
+      },
+      nowMs: 100,
     });
+    expect(result).toEqual({ type: 'failed', task: failedTask });
   });
 });
 

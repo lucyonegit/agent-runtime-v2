@@ -33,9 +33,7 @@ describe('durable domain vocabulary', () => {
       'pending', 'running', 'waiting_for_user', 'completed', 'failed',
       'outcome_unknown', 'cancelled',
     ]);
-    expect(AGENT_USER_INPUT_REQUEST_KINDS).toEqual([
-      'tool_input', 'side_effect_confirmation',
-    ]);
+    expect(AGENT_USER_INPUT_REQUEST_KINDS).toEqual(['tool_input']);
     expect(isTerminalTaskStatus('completed')).toBe(true);
     expect(isTerminalTaskStatus('waiting_for_user')).toBe(false);
   });

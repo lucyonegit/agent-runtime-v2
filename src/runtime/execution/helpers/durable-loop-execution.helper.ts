@@ -49,17 +49,12 @@ export async function executeDurableAgentLoop(
       } else if (event.type === LOOP_EVENT_TYPES.ToolInputRequired) {
         inputRequiredEvents.push(event);
       }
-      if (feedback?.waitingForUser) {
+      if (feedback?.stopTask) {
         await iterator.return({
           type: 'failed',
-          code: 'tool_state_unknown',
-          message: 'A side-effecting tool outcome is unknown and requires user confirmation.',
+          ...feedback.stopTask,
         });
-        return {
-          type: 'waiting_for_user',
-          task: feedback.waitingForUser.task,
-          requests: feedback.waitingForUser.requests,
-        };
+        return failTask(options, input, feedback.stopTask);
       }
       continue;
     }

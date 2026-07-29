@@ -51,16 +51,17 @@ describe('LoopEventHandler', () => {
       .toBeLessThan(publish.mock.invocationCallOrder[0]!);
   });
 
-  it('returns waiting feedback when a side-effect outcome requires confirmation', async () => {
+  it('requests Task termination when a committed side-effect outcome is unknown', async () => {
     const publish = vi.fn(async (_event: AgentRealtimeEvent) => undefined);
-    const toolCall = { id: 'tool_call_1', sessionId: 'session_1', status: 'outcome_unknown' };
-    const task = { id: 'task_1', sessionId: 'session_1', status: 'waiting_for_user' };
-    const taskRun = { id: 'task_run_1', taskId: 'task_1', status: 'paused' };
-    const request = { id: 'request_1', taskId: 'task_1', kind: 'side_effect_confirmation' };
+    const toolCall = {
+      id: 'tool_call_1',
+      sessionId: 'session_1',
+      status: 'outcome_unknown',
+      error: { code: 'side_effect_outcome_unknown', message: 'Outcome unknown.' },
+    };
     const completeToolCall = vi.fn(async () => ({
       toolCall,
       artifacts: [],
-      confirmationRequired: { task, taskRun, request },
     }) as never);
     const handler = new LoopEventHandler({
       store: {
@@ -89,12 +90,13 @@ describe('LoopEventHandler', () => {
       sessionId: 'session_1', taskId: 'task_1', taskRunId: 'task_run_1',
     });
 
-    expect(feedback).toEqual({ waitingForUser: { task, requests: [request] } });
-    expect(publish.mock.calls.map(([event]) => event.type)).toEqual([
-      'tool_call.upserted',
-      'user_input.upserted',
-      'task_run.upserted',
-      'task.upserted',
-    ]);
+    expect(feedback).toEqual({
+      stopTask: {
+        code: 'tool_state_unknown',
+        message: 'Outcome unknown.',
+        details: { toolCallId: 'tool_call_1' },
+      },
+    });
+    expect(publish.mock.calls.map(([event]) => event.type)).toEqual(['tool_call.upserted']);
   });
 });

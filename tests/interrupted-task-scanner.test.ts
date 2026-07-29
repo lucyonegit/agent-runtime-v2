@@ -11,7 +11,7 @@ describe('InterruptedTaskScanner startup reconciliation', () => {
     const abandoned = task({ status: 'created', version: 1 });
     const failed = task({ status: 'failed', version: 2 });
     const listInterrupted = vi.fn()
-      .mockResolvedValueOnce([{ task: abandoned, sideEffectingToolCalls: [] }])
+      .mockResolvedValueOnce([{ task: abandoned }])
       .mockResolvedValueOnce([]);
     const reconcileInterrupted = vi.fn(async () => ({
       task: failed,
@@ -19,7 +19,7 @@ describe('InterruptedTaskScanner startup reconciliation', () => {
       userInputRequests: [],
       planCleared: false,
     }));
-    const publish = vi.fn(async () => undefined);
+    const publish = vi.fn(async (_event: { type: string }) => undefined);
     const scanner = new InterruptedTaskScanner({
       store: {
         models: { abandonStartedCalls: vi.fn(async () => []) },
@@ -43,7 +43,6 @@ describe('InterruptedTaskScanner startup reconciliation', () => {
     expect(reconcileInterrupted).toHaveBeenCalledWith({
       taskId: abandoned.id,
       expectedTaskVersion: abandoned.version,
-      confirmationRequests: [],
       nowMs: 10_000,
     });
     expect(publish).toHaveBeenCalledWith({
@@ -54,33 +53,26 @@ describe('InterruptedTaskScanner startup reconciliation', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('allocates a complete side-effect confirmation request before persistence', async () => {
+  it('never allocates user input while reconciling an interrupted Task', async () => {
     const interrupted = task({ status: 'running', version: 1 });
-    const waiting = task({ status: 'waiting_for_user', version: 2 });
+    const failed = task({ status: 'failed', version: 2 });
     const listInterrupted = vi.fn()
-      .mockResolvedValueOnce([{
-        task: interrupted,
-        sideEffectingToolCalls: [{ id: 'tool_call_1', toolName: 'run_shell' }],
-      }])
+      .mockResolvedValueOnce([{ task: interrupted }])
       .mockResolvedValueOnce([]);
-    const reconcileInterrupted = vi.fn(async (input: {
-      confirmationRequests: Array<{ requestId: string }>;
-    }) => ({
-      task: waiting,
+    const reconcileInterrupted = vi.fn(async () => ({
+      task: failed,
       toolCalls: [],
-      userInputRequests: [{
-        id: input.confirmationRequests[0]!.requestId,
-        kind: 'side_effect_confirmation',
-      }],
-      planCleared: false,
+      userInputRequests: [],
+      planCleared: true,
     }));
+    const publish = vi.fn(async (_event: { type: string }) => undefined);
     const scanner = new InterruptedTaskScanner({
       store: {
         models: { abandonStartedCalls: vi.fn(async () => []) },
         execution: { listExpiredUserInputRequests: vi.fn(async () => []) },
         tasks: { listInterrupted, reconcileInterrupted },
       } as unknown as AgentStore,
-      publisher: { publish: vi.fn(async () => undefined) },
+      publisher: { publish },
       createdTaskGraceMs: 5_000,
       batchSize: 1,
       clock: { nowMs: () => 10_000 },
@@ -88,16 +80,12 @@ describe('InterruptedTaskScanner startup reconciliation', () => {
 
     await scanner.scanOnce();
 
-    expect(reconcileInterrupted).toHaveBeenCalledWith(expect.objectContaining({
+    expect(reconcileInterrupted).toHaveBeenCalledWith({
       taskId: interrupted.id,
-      confirmationRequests: [expect.objectContaining({
-        toolCallId: 'tool_call_1',
-        requestId: expect.stringMatching(/^input_/),
-        title: 'Confirm operation outcome',
-        prompt: expect.stringContaining('run_shell'),
-        inputSchema: expect.objectContaining({ type: 'single_choice' }),
-      })],
-    }));
+      expectedTaskVersion: interrupted.version,
+      nowMs: 10_000,
+    });
+    expect(publish.mock.calls.some(([event]) => event.type === 'user_input.upserted')).toBe(false);
   });
 
   it('terminalizes expired input without dispatching another TaskRun', async () => {

@@ -32,7 +32,7 @@ describe('Task ReAct prompt', () => {
       promptVersion: TASK_AGENT_PROMPT_VERSION,
       stableContext: stable,
     });
-    expect(TASK_AGENT_PROMPT_VERSION).toBe(8);
+    expect(TASK_AGENT_PROMPT_VERSION).toBe(9);
     expect(manifest.components.map(component => component.cacheScope)).toEqual(['stable', 'stable']);
   });
 });

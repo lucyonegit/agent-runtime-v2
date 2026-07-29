@@ -16,13 +16,11 @@ import {
   mapAgentTaskRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
-  mapAgentUserInputRequestRow,
   type AgentArtifactRow,
   type AgentMessageRow,
   type AgentTaskRow,
   type AgentTaskRunRow,
   type AgentToolCallRow,
-  type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import {
   lockAgentSession,
@@ -205,22 +203,10 @@ export async function completeToolCallCommand(
         artifacts: artifacts.rows.map(mapAgentArtifactRow),
       };
     }
-    if (call.status === 'outcome_unknown' && task.status === 'waiting_for_user') {
-      const request = await client.query<AgentUserInputRequestRow>(
-        `select * from agent_user_input_requests
-         where tool_call_id = $1 and kind = 'side_effect_confirmation' and status = 'pending'`,
-        [call.id]
-      );
+    if (call.status === 'outcome_unknown') {
       return {
         toolCall: mapAgentToolCallRow(call),
         artifacts: [],
-        confirmationRequired: {
-          task: mapAgentTaskRow(task),
-          taskRun: mapAgentTaskRunRow(requireRow(taskRun, 'load paused task run')),
-          request: mapAgentUserInputRequestRow(
-            requireRow(request.rows[0], 'load side-effect confirmation')
-          ),
-        },
       };
     }
     assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
@@ -368,59 +354,11 @@ export async function completeToolCallCommand(
         artifactRows.push(requireRow(result.rows[0], 'save artifact'));
       }
     }
-    let confirmationRequired: CompleteToolCallResult['confirmationRequired'];
-    if (outcomeUnknown) {
-      const pausedRun = await client.query<AgentTaskRunRow>(
-        `update agent_task_runs
-         set status = 'paused', owner_id = null, ownership_expires_at_ms = null,
-             error_code = $2, error_message = $3, error_details = $4,
-             updated_at_ms = $5, ended_at_ms = $5
-         where id = $1 returning *`,
-        [taskRun.id, errorCode, errorMessage, JSON.stringify(errorDetails), input.nowMs]
-      );
-      const waitingTask = await client.query<AgentTaskRow>(
-        `update agent_tasks
-         set status = 'waiting_for_user', error_code = $2, error_message = $3, error_details = $4,
-             version = version + 1, updated_at_ms = $5
-         where id = $1 returning *`,
-        [task.id, errorCode, errorMessage, JSON.stringify(errorDetails), input.nowMs]
-      );
-      const requestResult = await client.query<AgentUserInputRequestRow>(
-        `insert into agent_user_input_requests(
-           id, session_id, task_id, tool_call_id, kind, status,
-           title, prompt, input_schema,
-           version, metadata, created_at_ms, updated_at_ms
-         ) values (
-           $1, $2, $3, $4, 'side_effect_confirmation', 'pending',
-           $5, $6, $7,
-           0, $8, $9, $9
-         ) returning *`,
-        [
-          input.confirmationRequest.requestId,
-          input.sessionId,
-          input.taskId,
-          call.id,
-          input.confirmationRequest.title,
-          input.confirmationRequest.prompt,
-          JSON.stringify(input.confirmationRequest.inputSchema),
-          input.confirmationRequest.metadata ?? null,
-          input.nowMs,
-        ]
-      );
-      confirmationRequired = {
-        task: mapAgentTaskRow(requireRow(waitingTask.rows[0], 'wait for outcome confirmation')),
-        taskRun: mapAgentTaskRunRow(requireRow(pausedRun.rows[0], 'pause unknown tool run')),
-        request: mapAgentUserInputRequestRow(
-          requireRow(requestResult.rows[0], 'create side-effect confirmation')
-        ),
-      };
-    }
     await touchSession(client, input.sessionId, input.nowMs);
     return {
       ...(messageRow ? { message: mapAgentMessageRow(messageRow) } : {}),
       toolCall: mapAgentToolCallRow(requireRow(callResult.rows[0], 'complete tool call')),
       artifacts: artifactRows.map(mapAgentArtifactRow),
-      ...(confirmationRequired ? { confirmationRequired } : {}),
     };
   });
 }

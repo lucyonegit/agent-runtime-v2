@@ -3,7 +3,6 @@ import { Pool } from 'pg';
 import { PostgresAgentStore } from '../src/storage/postgres/postgres-agent-store.js';
 import { resetAgentRuntimeSchema } from '../src/storage/postgres/schema-management.js';
 import { withPostgresReadSnapshot } from '../src/storage/postgres/sql.js';
-import { createSideEffectConfirmationRequest } from '../src/runtime/hitl/side-effect-confirmation.js';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL
@@ -406,11 +405,6 @@ describe('PostgresAgentStore converged model', () => {
       ownerId: 'worker_1',
       modelToolCallId: 'model_tool_call_1',
       messageId: 'message_tool_result',
-      confirmationRequest: createSideEffectConfirmationRequest({
-        requestId: 'input_tool_result_confirmation',
-        toolName: 'read_file',
-        reason: 'runtime_failure',
-      }),
       outcome: {
         status: 'completed',
         content: '{"content":"export const a = 1"}',
@@ -638,25 +632,13 @@ describe('PostgresAgentStore converged model', () => {
     const reconciliation = await store.tasks.reconcileInterrupted({
       taskId: task.id,
       expectedTaskVersion: started.task.version,
-      confirmationRequests: [{
-        toolCallId: 'tool_call_side_effect',
-        ...createSideEffectConfirmationRequest({
-          requestId: 'input_side_effect_confirmation',
-          toolName: 'run_shell',
-          reason: 'service_restart',
-        }),
-      }],
       nowMs: 21,
     });
     expect(reconciliation).toMatchObject({
-      task: { status: 'waiting_for_user' },
+      task: { status: 'failed', error: { code: 'side_effect_outcome_unknown' } },
       taskRun: { status: 'interrupted' },
       toolCalls: [{ status: 'outcome_unknown' }],
-      userInputRequests: [{
-        id: 'input_side_effect_confirmation',
-        kind: 'side_effect_confirmation',
-        status: 'pending',
-      }],
+      userInputRequests: [],
     });
     await expect(store.tasks.startRun({
       taskId: task.id,
@@ -670,10 +652,31 @@ describe('PostgresAgentStore converged model', () => {
       code: 'INVALID_TASK_STATE',
     });
     await expect(store.tasks.get(task.id)).resolves.toMatchObject({
-      status: 'waiting_for_user',
+      status: 'failed',
       version: reconciliation.task.version,
     });
     await expect(store.tasks.getRun('task_run_2')).resolves.toBeUndefined();
+
+    const followUp = await store.tasks.createWithUserMessage({
+      sessionId: task.sessionId,
+      taskId: 'task_continue',
+      userMessageId: 'message_continue',
+      content: 'Continue.',
+      clientRequestId: 'request_continue',
+      nowMs: 23,
+    });
+    const context = await store.context.loadInputSnapshot({
+      sessionId: task.sessionId,
+      taskId: followUp.task.id,
+      goalMessageId: followUp.task.goalMessageId,
+    });
+    expect(context.outcomeUnknownToolCalls).toEqual([
+      expect.objectContaining({
+        id: 'tool_call_side_effect',
+        status: 'outcome_unknown',
+        toolName: 'run_shell',
+      }),
+    ]);
   });
 
   it('does not resume interrupted read-only work without a new user message', async () => {
@@ -696,7 +699,6 @@ describe('PostgresAgentStore converged model', () => {
     const reconciliation = await store.tasks.reconcileInterrupted({
       taskId: task.id,
       expectedTaskVersion: started.task.version,
-      confirmationRequests: [],
       nowMs: 21,
     });
     expect(reconciliation).toMatchObject({
@@ -717,7 +719,7 @@ describe('PostgresAgentStore converged model', () => {
     await expect(store.tasks.getRun('task_run_2')).resolves.toBeUndefined();
   });
 
-  it('requires user confirmation when a side-effecting tool fails after execution starts', async () => {
+  it('records an unknown side-effect outcome without creating user input', async () => {
     const { task } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
     await store.execution.saveToolCalls({
@@ -753,11 +755,6 @@ describe('PostgresAgentStore converged model', () => {
       ownerId: 'worker_1',
       modelToolCallId: 'model_side_effect',
       messageId: 'message_side_effect_result',
-      confirmationRequest: createSideEffectConfirmationRequest({
-        requestId: 'input_side_effect_confirmation',
-        toolName: 'run_shell',
-        reason: 'runtime_failure',
-      }),
       outcome: {
         status: 'failed' as const,
         executionStarted: true,
@@ -774,21 +771,13 @@ describe('PostgresAgentStore converged model', () => {
         status: 'outcome_unknown',
         error: { code: 'side_effect_outcome_unknown' },
       },
-      confirmationRequired: {
-        task: { status: 'waiting_for_user' },
-        taskRun: { status: 'paused' },
-        request: {
-          id: 'input_side_effect_confirmation',
-          kind: 'side_effect_confirmation',
-          status: 'pending',
-        },
-      },
     });
     expect(unknown.message).toBeUndefined();
     await expect(store.execution.completeToolCall(input)).resolves.toMatchObject({
       toolCall: { status: 'outcome_unknown' },
-      confirmationRequired: { task: { status: 'waiting_for_user' } },
     });
+    await expect(store.sessions.listUserInputRequests(task.sessionId)).resolves.toEqual([]);
+    await expect(store.tasks.get(task.id)).resolves.toMatchObject({ status: 'running' });
   });
 
   it('keeps pre-execution side-effect failures replay-safe', async () => {
@@ -827,11 +816,6 @@ describe('PostgresAgentStore converged model', () => {
       ownerId: 'worker_1',
       modelToolCallId: 'model_side_effect',
       messageId: 'message_side_effect_result',
-      confirmationRequest: createSideEffectConfirmationRequest({
-        requestId: 'input_side_effect_confirmation',
-        toolName: 'run_shell',
-        reason: 'runtime_failure',
-      }),
       outcome: {
         status: 'failed',
         executionStarted: false,
@@ -845,114 +829,7 @@ describe('PostgresAgentStore converged model', () => {
     expect(failed).toMatchObject({
       toolCall: { status: 'failed', error: { code: 'invalid_tool_arguments' } },
     });
-    expect(failed.confirmationRequired).toBeUndefined();
     await expect(store.tasks.get(task.id)).resolves.toMatchObject({ status: 'running' });
-  });
-
-  it.each([
-    ['confirmed_succeeded', 'completed', true, 'running', undefined],
-    [
-      'confirmed_not_applied',
-      'failed',
-      true,
-      'running',
-      'side_effect_confirmed_not_applied',
-    ],
-    [
-      'cannot_confirm_and_stop',
-      'failed',
-      false,
-      'failed',
-      'side_effect_outcome_unconfirmed',
-    ],
-  ] as const)(
-    'closes side-effect confirmation with %s',
-    async (answer, callStatus, shouldResume, taskStatus, errorCode) => {
-      const { task } = await createRuntimeSideEffectConfirmation();
-
-      const result = await store.execution.answerUserInput({
-        requestId: 'input_side_effect_confirmation',
-        expectedVersion: 0,
-        clientAnswerId: `answer_${answer}`,
-        answer,
-        answerMessageId: `message_${answer}`,
-        taskRunId: 'task_run_2',
-        ownerId: 'worker_1',
-        nowMs: 30,
-        ownershipExpiresAtMs: 1_000,
-      });
-
-      expect(result).toMatchObject({
-        shouldResume,
-        task: { status: taskStatus },
-        request: { kind: 'side_effect_confirmation', status: 'answered' },
-        toolCall: {
-          status: callStatus,
-          ...(errorCode ? { error: { code: errorCode } } : {}),
-        },
-        answerMessage: {
-          toolResult: {
-            status: callStatus,
-            result: {
-              confirmation: answer,
-              originalToolResultUnavailable: true,
-            },
-          },
-        },
-      });
-      if (shouldResume) {
-        expect(result.taskRun).toMatchObject({
-          id: 'task_run_2',
-          trigger: 'user_input_answered',
-          status: 'running',
-        });
-        expect(result.taskFinish).toBeUndefined();
-      } else {
-        expect(result.taskRun).toBeUndefined();
-        expect(result.taskFinish).toMatchObject({
-          task: { status: 'failed' },
-          planCleared: false,
-        });
-        await expect(store.tasks.getRun('task_run_2')).resolves.toBeUndefined();
-      }
-      await expect(store.tasks.get(task.id)).resolves.toMatchObject({ status: taskStatus });
-    }
-  );
-
-  it('stops a Task when side-effect confirmation expires', async () => {
-    const { task } = await createRuntimeSideEffectConfirmation();
-    await pool.query(
-      `update agent_user_input_requests set expires_at_ms = 28
-       where id = 'input_side_effect_confirmation'`
-    );
-
-    const result = await store.execution.expireUserInput({
-      requestId: 'input_side_effect_confirmation',
-      expectedVersion: 0,
-      resultMessageId: 'message_side_effect_confirmation_expired',
-      nowMs: 29,
-    });
-
-    expect(result).toMatchObject({
-      task: { status: 'failed', error: { code: 'side_effect_outcome_unconfirmed' } },
-      taskRun: { id: 'task_run_1', status: 'failed' },
-      request: { kind: 'side_effect_confirmation', status: 'expired' },
-      toolCall: {
-        status: 'failed',
-        error: { code: 'side_effect_outcome_unconfirmed' },
-      },
-      resultMessage: {
-        toolResult: {
-          status: 'failed',
-          code: 'side_effect_outcome_unconfirmed',
-          result: {
-            confirmation: 'expired',
-            originalToolResultUnavailable: true,
-          },
-        },
-      },
-    });
-    await expect(store.tasks.get(task.id)).resolves.toMatchObject({ status: 'failed' });
   });
 
   it('keeps an in-flight side effect outcome unknown when the Task is cancelled', async () => {
@@ -1238,63 +1115,6 @@ async function createTask() {
     clientRequestId: 'request_1',
     nowMs: 2,
   });
-}
-
-async function createRuntimeSideEffectConfirmation() {
-  const { task } = await createTask();
-  const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
-  await store.execution.saveToolCalls({
-    sessionId: task.sessionId,
-    taskId: task.id,
-    taskRunId: started.taskRun.id,
-    ownerId: 'worker_1',
-    outputId: 'output_side_effect',
-    messageId: 'message_side_effect',
-    content: '',
-    contextScope: 'task',
-    toolCalls: [{
-      id: 'tool_call_side_effect',
-      call: {
-        id: 'model_side_effect',
-        name: 'run_shell',
-        args: { command: 'deploy' },
-        type: 'tool_call',
-      },
-      argumentsChecksum: 'side_effect_checksum',
-      sideEffectLevel: 'side_effecting',
-      idempotencyKey: 'side_effect_key',
-    }],
-    nowMs: 21,
-  });
-  await store.execution.startToolCall({
-    taskId: task.id,
-    taskRunId: started.taskRun.id,
-    modelToolCallId: 'model_side_effect',
-    ownerId: 'worker_1',
-    nowMs: 22,
-  });
-  const completion = await store.execution.completeToolCall({
-    sessionId: task.sessionId,
-    taskId: task.id,
-    taskRunId: started.taskRun.id,
-    ownerId: 'worker_1',
-    modelToolCallId: 'model_side_effect',
-    messageId: 'message_side_effect_result',
-    confirmationRequest: createSideEffectConfirmationRequest({
-      requestId: 'input_side_effect_confirmation',
-      toolName: 'run_shell',
-      reason: 'runtime_failure',
-    }),
-    outcome: {
-      status: 'failed',
-      executionStarted: true,
-      code: 'shell_exit_nonzero',
-      message: 'The command exited with status 1.',
-      durationMs: 5,
-    },
-    nowMs: 27,
-  });
-  return { task, started, completion };
 }
 
 async function createPendingToolCall(input: {

@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { mapStoreError, RuntimeError } from '../../../runtime/errors/runtime-error.js';
 import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-publisher.js';
 import { taskFinishEvents } from '../../../runtime/events/helpers/task-finish-events.js';
-import { createSideEffectConfirmationRequest } from '../../../runtime/hitl/side-effect-confirmation.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
 
 export interface InterruptedTaskScannerOptions {
@@ -40,14 +39,6 @@ export class InterruptedTaskScanner {
         const result = await this.options.store.tasks.reconcileInterrupted({
           taskId: candidate.task.id,
           expectedTaskVersion: candidate.task.version,
-          confirmationRequests: candidate.sideEffectingToolCalls.map(toolCall => ({
-            toolCallId: toolCall.id,
-            ...createSideEffectConfirmationRequest({
-              requestId: `input_${randomUUID()}`,
-              toolName: toolCall.toolName,
-              reason: 'service_restart',
-            }),
-          })),
           nowMs: this.options.clock.nowMs(),
         });
         const events = [

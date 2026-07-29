@@ -109,32 +109,8 @@ export class PostgresTaskStore implements TaskStore {
        limit $3`,
       [input.nowMs, input.createdBeforeMs, input.limit]
     );
-    const runningTaskIds = result.rows
-      .filter(row => row.run_id !== null)
-      .map(row => row.id);
-    const sideEffectResult = runningTaskIds.length === 0
-      ? { rows: [] as Array<{ task_id: string; id: string; tool_name: string }> }
-      : await this.pool.query<{ task_id: string; id: string; tool_name: string }>(
-          `select call.task_id, call.id, call.tool_name
-           from agent_tool_calls call
-           where call.task_id = any($1::text[])
-             and call.status = 'running'
-             and call.side_effect_level = 'side_effecting'
-           order by call.task_id, call.id`,
-          [runningTaskIds]
-        );
-    const sideEffectsByTask = new Map<
-      string,
-      Array<{ id: string; toolName: string }>
-    >();
-    for (const call of sideEffectResult.rows) {
-      const calls = sideEffectsByTask.get(call.task_id) ?? [];
-      calls.push({ id: call.id, toolName: call.tool_name });
-      sideEffectsByTask.set(call.task_id, calls);
-    }
     return result.rows.map(row => ({
       task: mapAgentTaskRow(row),
-      sideEffectingToolCalls: sideEffectsByTask.get(row.id) ?? [],
       ...(row.run_id
         ? {
             taskRun: mapAgentTaskRunRow({

@@ -236,7 +236,7 @@ create table agent_user_input_requests (
   session_id text not null references agent_sessions(id) on delete cascade,
   task_id text not null references agent_tasks(id) on delete cascade,
   tool_call_id text not null unique references agent_tool_calls(id) on delete restrict,
-  kind text not null check (kind in ('tool_input', 'side_effect_confirmation')),
+  kind text not null check (kind = 'tool_input'),
   status text not null check (status in ('pending', 'answered', 'expired', 'cancelled')),
   title text,
   prompt text not null,

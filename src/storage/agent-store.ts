@@ -122,23 +122,11 @@ export interface ListInterruptedTasksInput {
 export interface InterruptedTaskCandidate {
   task: AgentTask;
   taskRun?: AgentTaskRun;
-  sideEffectingToolCalls: Array<{ id: string; toolName: string }>;
-}
-
-export interface SideEffectConfirmationRequestDraft {
-  requestId: string;
-  title: string;
-  prompt: string;
-  inputSchema: AgentUserInputSchema;
-  metadata?: Record<string, unknown>;
 }
 
 export interface ReconcileInterruptedTaskInput {
   taskId: string;
   expectedTaskVersion: number;
-  confirmationRequests: Array<
-    SideEffectConfirmationRequestDraft & { toolCallId: string }
-  >;
   nowMs: number;
 }
 
@@ -242,7 +230,6 @@ export interface CompleteToolCallInput {
   ownerId: string;
   modelToolCallId: string;
   messageId: string;
-  confirmationRequest: SideEffectConfirmationRequestDraft;
   outcome: CompletedToolOutcome;
   nowMs: number;
 }
@@ -251,11 +238,6 @@ export interface CompleteToolCallResult {
   message?: AgentMessage;
   toolCall: AgentToolCall;
   artifacts: AgentArtifact[];
-  confirmationRequired?: {
-    task: AgentTask;
-    taskRun: AgentTaskRun;
-    request: AgentUserInputRequest;
-  };
 }
 
 export interface CompleteTaskWithFinalMessageInput {
@@ -319,7 +301,6 @@ export interface SaveUserInputAnswerResult {
   taskRun?: AgentTaskRun;
   toolCall: AgentToolCall;
   shouldResume: boolean;
-  taskFinish?: FinishTaskResult;
 }
 
 export interface ExpireUserInputRequestInput {
