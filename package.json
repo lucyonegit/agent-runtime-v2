@@ -2,6 +2,9 @@
   "name": "agent-runtime-v2",
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "scripts": {
@@ -30,10 +33,10 @@
     "undici": "7.28.0"
   },
   "devDependencies": {
-    "@types/node": "file:../agent/node_modules/@types/node",
+    "@types/node": "^20.19.27",
     "@types/pg": "^8.20.0",
     "ts-node": "^10.9.2",
-    "typescript": "file:../agent/node_modules/typescript",
-    "vitest": "file:../agent/node_modules/vitest"
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.8"
   }
 }
