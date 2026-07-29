@@ -583,7 +583,7 @@ describe('PostgresAgentStore converged model', () => {
     });
   });
 
-  it('converts an expired request into a failed ToolMessage and an input_expired TaskRun', async () => {
+  it('fails the current Task when a user input request expires', async () => {
     const { task } = await createTask();
     await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
     await createWaitingToolCall(task.id, 'task_run_1', 21);
@@ -606,15 +606,11 @@ describe('PostgresAgentStore converged model', () => {
       requestId: 'input_1',
       expectedVersion: 0,
       resultMessageId: 'message_input_expired',
-      taskRunId: 'task_run_2',
-      ownerId: 'worker_1',
       nowMs: 51,
-      ownershipExpiresAtMs: 1_000,
     });
     expect(expired).toMatchObject({
-      shouldResume: true,
-      task: { status: 'running' },
-      taskRun: { trigger: 'input_expired', status: 'running' },
+      task: { status: 'failed', error: { code: 'user_input_expired' } },
+      taskRun: { id: 'task_run_1', status: 'failed' },
       request: { status: 'expired' },
       toolCall: { status: 'failed', error: { code: 'user_input_expired' } },
       resultMessage: {
@@ -622,6 +618,7 @@ describe('PostgresAgentStore converged model', () => {
         toolResult: { status: 'failed', code: 'user_input_expired' },
       },
     });
+    await expect(store.tasks.getRun('task_run_2')).resolves.toBeUndefined();
   });
 
   it('marks abandoned side effects outcome_unknown and exposes no generic resume path', async () => {

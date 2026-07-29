@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { mapStoreError, RuntimeError } from '../../../runtime/errors/runtime-error.js';
 import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-publisher.js';
+import { taskFinishEvents } from '../../../runtime/events/helpers/task-finish-events.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
-import type { ExecuteTaskRunCommand } from '../task-executor.js';
 
 export interface InterruptedTaskScannerOptions {
   store: AgentStore;
@@ -10,9 +10,6 @@ export interface InterruptedTaskScannerOptions {
   createdTaskGraceMs: number;
   batchSize: number;
   clock: { nowMs(): number };
-  ownerId: string;
-  ownershipTimeoutMs: number;
-  onTaskReady(command: ExecuteTaskRunCommand): void;
 }
 
 /** Runs startup reconciliation in bounded batches and never schedules itself. */
@@ -87,51 +84,14 @@ export class InterruptedTaskScanner {
           requestId: request.id,
           expectedVersion: request.version,
           resultMessageId: `message_${randomUUID()}`,
-          taskRunId: `task_run_${randomUUID()}`,
-          ownerId: this.options.ownerId,
           nowMs: this.options.clock.nowMs(),
-          ownershipExpiresAtMs:
-            this.options.clock.nowMs() + this.options.ownershipTimeoutMs,
         });
         await this.#publish({
           type: 'message.upserted',
           sessionId: result.task.sessionId,
           message: result.resultMessage,
         });
-        await this.#publish({
-          type: 'tool_call.upserted',
-          sessionId: result.task.sessionId,
-          toolCall: result.toolCall,
-        });
-        await this.#publish({
-          type: 'user_input.upserted',
-          sessionId: result.task.sessionId,
-          request: result.request,
-        });
-        await this.#publish({
-          type: 'task.upserted',
-          sessionId: result.task.sessionId,
-          task: result.task,
-        });
-        if (result.taskRun) {
-          await this.#publish({
-            type: 'task_run.upserted',
-            sessionId: result.task.sessionId,
-            taskRun: result.taskRun,
-          });
-        }
-        if (result.shouldResume) {
-          if (!result.taskRun) {
-            throw new RuntimeError(
-              'storage_error',
-              'Input expiration committed a resumed Task without a TaskRun.'
-            );
-          }
-          this.options.onTaskReady({
-            taskId: result.task.id,
-            taskRunId: result.taskRun.id,
-          });
-        }
+        for (const event of taskFinishEvents(result)) await this.#publish(event);
         expired += 1;
       } catch (error) {
         const mapped = mapStoreError(error);

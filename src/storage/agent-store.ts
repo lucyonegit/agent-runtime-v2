@@ -311,19 +311,13 @@ export interface ExpireUserInputRequestInput {
   requestId: string;
   expectedVersion: number;
   resultMessageId: string;
-  taskRunId: string;
-  ownerId: string;
   nowMs: number;
-  ownershipExpiresAtMs: number;
 }
 
-export interface ExpireUserInputRequestResult {
+export interface ExpireUserInputRequestResult extends FinishTaskResult {
   request: AgentUserInputRequest;
   resultMessage: AgentMessage;
-  task: AgentTask;
-  taskRun?: AgentTaskRun;
   toolCall: AgentToolCall;
-  shouldResume: boolean;
 }
 
 export interface ApplyActivePlanInput {

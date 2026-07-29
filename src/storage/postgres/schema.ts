@@ -69,7 +69,7 @@ create table agent_task_runs (
   task_id text not null references agent_tasks(id) on delete cascade,
   run_no integer not null check (run_no > 0),
   trigger text not null check (
-    trigger in ('initial', 'user_input_answered', 'input_expired')
+    trigger in ('initial', 'user_input_answered')
   ),
   status text not null check (
     status in ('running', 'paused', 'completed', 'failed', 'interrupted', 'cancelled')

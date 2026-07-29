@@ -45,6 +45,10 @@ import {
   touchSession,
   userInputNotFound,
 } from './command-helpers.js';
+import {
+  appendTerminalTaskCheckpoint,
+  terminalizeTaskChildren,
+} from './task-terminalization.helper.js';
 
 export async function waitForUserInputCommand(
   client: PoolClient,
@@ -376,7 +380,6 @@ export async function expireUserInputCommand(
   client: PoolClient,
   input: ExpireUserInputRequestInput
 ): Promise<ExpireUserInputRequestResult> {
-  assertFutureOwnership(input.nowMs, input.ownershipExpiresAtMs);
   const initial = await selectUserInputRequest(client, input.requestId);
   if (!initial) throw userInputNotFound(input.requestId);
   return withPostgresTransaction(client, async () => {
@@ -413,17 +416,18 @@ export async function expireUserInputCommand(
     const failureMessage = 'User input request expired before an answer was provided.';
     const messageResult = await client.query<AgentMessageRow>(
       `insert into agent_messages(
-         id, session_id, task_id, role, message_type, context_scope,
+         id, session_id, task_id, task_run_id, role, message_type, context_scope,
          visibility, channel, content, model_tool_call_id, tool_name,
          tool_result, created_at_ms
        ) values (
-         $1, $2, $3, 'tool', 'tool_result', $4,
-         'ui', 'normal', $5, $6, $7, $8, $9
+         $1, $2, $3, $4, 'tool', 'tool_result', $5,
+         'ui', 'normal', $6, $7, $8, $9, $10
        ) returning *`,
       [
         input.resultMessageId,
         request.session_id,
         task.id,
+        call.created_in_task_run_id,
         await toolCallContextScope(client, call.call_message_id),
         failureMessage,
         call.model_tool_call_id,
@@ -451,82 +455,60 @@ export async function expireUserInputCommand(
        where id = $1 returning *`,
       [request.id, input.nowMs]
     );
-    const remainingResult = await client.query<{ count: number }>(
-      `select count(*)::integer as count
-       from agent_user_input_requests
-       where task_id = $1 and status = 'pending'`,
-      [task.id]
+    const children = await terminalizeTaskChildren(client, {
+      taskId: task.id,
+      phase: 'failed',
+      nowMs: input.nowMs,
+    });
+    const runResult = await client.query<AgentTaskRunRow>(
+      `update agent_task_runs
+       set status = 'failed',
+           error_code = 'user_input_expired', error_message = $2, error_details = null,
+           updated_at_ms = $3, ended_at_ms = $3
+       where id = $1 and status = 'paused'
+       returning *`,
+      [call.created_in_task_run_id, failureMessage, input.nowMs]
     );
-    const shouldResume = requireRow(
-      remainingResult.rows[0],
-      'count pending input requests after expiration'
-    ).count === 0;
-    let resumedTask = task;
-    let newTaskRun: AgentTaskRunRow | undefined;
-    if (shouldResume) {
-      const runNoResult = await client.query<{ run_no: number }>(
-        `select coalesce(max(run_no), 0)::integer + 1 as run_no
-         from agent_task_runs where task_id = $1`,
-        [task.id]
-      );
-      const runNo = requireRow(runNoResult.rows[0], 'select expiration task run number').run_no;
-      const runResult = await client.query<AgentTaskRunRow>(
-        `insert into agent_task_runs(
-           id, task_id, run_no, trigger, status, owner_id, ownership_expires_at_ms,
-           started_at_ms, updated_at_ms
-         ) values ($1, $2, $3, 'input_expired', 'running', $4, $5, $6, $6)
-         returning *`,
-        [
-          input.taskRunId,
-          task.id,
-          runNo,
-          input.ownerId,
-          input.ownershipExpiresAtMs,
-          input.nowMs,
-        ]
-      );
-      newTaskRun = requireRow(runResult.rows[0], 'create expiration task run');
-      const taskResult = await client.query<AgentTaskRow>(
-        `update agent_tasks
-         set status = 'running', version = version + 1, updated_at_ms = $2
-         where id = $1 returning *`,
-        [task.id, input.nowMs]
-      );
-      resumedTask = requireRow(taskResult.rows[0], 'resume task after input expiration');
-      await client.query(
-        `update agent_messages message
-         set task_run_id = $2
-         from agent_tool_calls tool_call
-         where tool_call.task_id = $1
-           and tool_call.result_message_id = message.id
-           and message.task_run_id is null`,
-        [task.id, newTaskRun.id]
-      );
-      const previous = await selectLatestTaskCheckpoint(client, task.id);
-      await appendTaskCheckpoint(client, {
-        sessionId: task.session_id,
-        taskId: task.id,
-        taskRunId: newTaskRun.id,
-        phase: 'ready_for_model',
-        iterationNo: (previous?.iteration_no ?? -1) + 1,
-        executedToolCalls: previous?.executed_tool_calls ?? 0,
-        metadata: { resumedAfterInputExpiration: true },
-        nowMs: input.nowMs,
-      });
-    }
+    const taskResult = await client.query<AgentTaskRow>(
+      `update agent_tasks
+       set status = 'failed',
+           error_code = 'user_input_expired', error_message = $2, error_details = null,
+           version = version + 1, updated_at_ms = $3, completed_at_ms = $3
+       where id = $1 returning *`,
+      [task.id, failureMessage, input.nowMs]
+    );
+    const checkpoint = await appendTerminalTaskCheckpoint(client, {
+      sessionId: task.session_id,
+      taskId: task.id,
+      taskRunId: call.created_in_task_run_id,
+      phase: 'failed',
+      metadata: { errorCode: 'user_input_expired', requestId: request.id },
+      nowMs: input.nowMs,
+    });
+    const planResult = await client.query(
+      `delete from agent_active_plans where session_id = $1 and task_id = $2`,
+      [task.session_id, task.id]
+    );
     await touchSession(client, task.session_id, input.nowMs);
-    const returnedMessage = shouldResume
-      ? await selectMessageById(client, input.resultMessageId)
-      : messageResult.rows[0];
+    const expiredRequest = mapAgentUserInputRequestRow(
+      requireRow(requestUpdate.rows[0], 'expire request')
+    );
+    const failedCall = mapAgentToolCallRow(
+      requireRow(callUpdate.rows[0], 'fail expired input tool call')
+    );
     return {
-      request: mapAgentUserInputRequestRow(requireRow(requestUpdate.rows[0], 'expire request')),
-      resultMessage: mapAgentMessageRow(requireRow(returnedMessage, 'save expiration message')),
-      task: mapAgentTaskRow(resumedTask),
-      ...(newTaskRun ? { taskRun: mapAgentTaskRunRow(newTaskRun) } : {}),
-      toolCall: mapAgentToolCallRow(
-        requireRow(callUpdate.rows[0], 'fail expired input tool call')
+      request: expiredRequest,
+      resultMessage: mapAgentMessageRow(
+        requireRow(messageResult.rows[0], 'save expiration message')
       ),
-      shouldResume,
+      task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'fail task after input expiration')),
+      ...(runResult.rows[0] ? { taskRun: mapAgentTaskRunRow(runResult.rows[0]) } : {}),
+      toolCall: failedCall,
+      toolCalls: [failedCall, ...children.toolCalls],
+      toolRuns: children.toolRuns,
+      userInputRequests: [expiredRequest, ...children.userInputRequests],
+      ...(checkpoint ? { checkpoint } : {}),
+      planCleared: planResult.rowCount === 1,
     };
   });
 }

@@ -136,13 +136,6 @@ export async function createAgentApplication(
       createdTaskGraceMs: config.execution.startupRecoveryGraceMs,
       batchSize: config.execution.recoveryBatchSize,
       clock,
-      ownerId: config.workerId,
-      ownershipTimeoutMs: config.execution.ownershipTimeoutMs,
-      onTaskReady: command => {
-        void taskExecutor.execute(command).catch(() => {
-          // Ownership checks or another committed transition may win the startup race.
-        });
-      },
     });
     const tasks = new TaskManager({
       store,

@@ -29,9 +29,6 @@ describe('InterruptedTaskScanner startup recovery', () => {
       createdTaskGraceMs: 5_000,
       batchSize: 1,
       clock: { nowMs: () => 10_000 },
-      ownerId: 'worker_1',
-      ownershipTimeoutMs: 30_000,
-      onTaskReady: vi.fn(),
     });
 
     await scanner.scanOnce();
@@ -55,39 +52,46 @@ describe('InterruptedTaskScanner startup recovery', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('hands an expired-input resume to execution with its committed TaskRun id', async () => {
-    const resumed = task({ status: 'running', version: 2 });
-    const onTaskReady = vi.fn();
+  it('terminalizes expired input without dispatching another TaskRun', async () => {
+    const failed = task({ status: 'failed', version: 2 });
+    const expireUserInput = vi.fn(async () => ({
+      request: { id: 'input_1' },
+      resultMessage: { id: 'message_expired' },
+      task: failed,
+      taskRun: { id: 'task_run_1' },
+      toolCall: { id: 'tool_call_1' },
+      toolCalls: [{ id: 'tool_call_1' }],
+      toolRuns: [],
+      userInputRequests: [{ id: 'input_1' }],
+      planCleared: false,
+    }));
+    const publish = vi.fn(async () => undefined);
     const scanner = new InterruptedTaskScanner({
       store: {
         models: { abandonStartedCalls: vi.fn(async () => []) },
         execution: {
           listExpiredUserInputRequests: vi.fn(async () => [{ id: 'input_1', version: 0 }]),
-          expireUserInput: vi.fn(async () => ({
-            request: { id: 'input_1' },
-            resultMessage: { id: 'message_expired' },
-            task: resumed,
-            taskRun: { id: 'task_run_resumed' },
-            toolCall: { id: 'tool_call_1' },
-            shouldResume: true,
-          })),
+          expireUserInput,
         },
         tasks: { listNeedingRecovery: vi.fn(async () => []) },
       } as unknown as AgentStore,
-      publisher: { publish: vi.fn(async () => undefined) },
+      publisher: { publish },
       createdTaskGraceMs: 5_000,
       batchSize: 2,
       clock: { nowMs: () => 10_000 },
-      ownerId: 'worker_1',
-      ownershipTimeoutMs: 30_000,
-      onTaskReady,
     });
 
     await scanner.scanOnce();
 
-    expect(onTaskReady).toHaveBeenCalledWith({
-      taskId: resumed.id,
-      taskRunId: 'task_run_resumed',
+    expect(expireUserInput).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: 'input_1',
+      expectedVersion: 0,
+      nowMs: 10_000,
+    }));
+    expect(publish).toHaveBeenCalledWith({
+      type: 'task.upserted',
+      sessionId: failed.sessionId,
+      task: failed,
     });
   });
 });
