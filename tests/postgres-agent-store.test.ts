@@ -624,7 +624,7 @@ describe('PostgresAgentStore converged model', () => {
     });
   });
 
-  it('marks abandoned side effects outcome_unknown and never turns them into replayable pending work', async () => {
+  it('marks abandoned side effects outcome_unknown and exposes no generic resume path', async () => {
     const { task } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 10, 20);
     await store.execution.saveToolCalls({
@@ -669,20 +669,12 @@ describe('PostgresAgentStore converged model', () => {
       taskId: task.id,
       expectedTaskVersion: recovery.task.version,
       taskRunId: 'task_run_2',
-      trigger: 'manual_resume',
+      trigger: 'initial',
       ownerId: 'worker_1',
       nowMs: 22,
       ownershipExpiresAtMs: 1_000,
     })).rejects.toMatchObject({
-      code: 'UNSAFE_TOOL_RECOVERY',
-      details: {
-        blockedToolCalls: [
-          expect.objectContaining({
-            toolCallId: 'tool_call_side_effect',
-            status: 'outcome_unknown',
-          }),
-        ],
-      },
+      code: 'INVALID_TASK_STATE',
     });
     await expect(store.tasks.get(task.id)).resolves.toMatchObject({
       status: 'recovery_required',
@@ -691,7 +683,7 @@ describe('PostgresAgentStore converged model', () => {
     await expect(store.tasks.getRun('task_run_2')).resolves.toBeUndefined();
   });
 
-  it('atomically starts manual resume when the checkpoint contains only replay-safe work', async () => {
+  it('does not resume interrupted read-only work without a new user message', async () => {
     const { task } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 10, 20);
     await createPendingToolCall({
@@ -724,14 +716,12 @@ describe('PostgresAgentStore converged model', () => {
       taskId: task.id,
       expectedTaskVersion: recovery.task.version,
       taskRunId: 'task_run_2',
-      trigger: 'manual_resume',
+      trigger: 'initial',
       ownerId: 'worker_1',
       nowMs: 22,
       ownershipExpiresAtMs: 1_000,
-    })).resolves.toMatchObject({
-      task: { status: 'running' },
-      taskRun: { id: 'task_run_2', trigger: 'manual_resume', status: 'running' },
-    });
+    })).rejects.toMatchObject({ code: 'INVALID_TASK_STATE' });
+    await expect(store.tasks.getRun('task_run_2')).resolves.toBeUndefined();
   });
 
   it('requires recovery when a side-effecting tool fails after execution starts', async () => {
@@ -1208,7 +1198,7 @@ function startRun(
   taskId: string,
   expectedTaskVersion: number,
   taskRunId: string,
-  trigger: 'initial' | 'manual_resume',
+  trigger: 'initial',
   nowMs: number,
   ownershipExpiresAtMs = 1_000
 ) {

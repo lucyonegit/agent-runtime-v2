@@ -53,8 +53,6 @@ export function mapStoreError(error: unknown): RuntimeError {
       return new RuntimeError('concurrency_conflict', error.message, options);
     case 'TASK_OWNERSHIP_LOST':
       return new RuntimeError('ownership_lost', error.message, options);
-    case 'UNSAFE_TOOL_RECOVERY':
-      return new RuntimeError('tool_state_unknown', error.message, { ...options, retryable: false });
     case 'INVALID_SESSION_STATE':
       return new RuntimeError('invalid_session_state', error.message, { ...options, retryable: false });
     case 'INVALID_TASK_STATE':

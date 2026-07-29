@@ -24,7 +24,7 @@ describe('durable domain vocabulary', () => {
       'created', 'running', 'waiting_for_user', 'recovery_required',
     ]);
     expect(AGENT_TASK_RUN_TRIGGERS).toEqual([
-      'initial', 'user_input_answered', 'input_expired', 'manual_resume',
+      'initial', 'user_input_answered', 'input_expired',
     ]);
     expect(AGENT_TASK_RUN_STATUSES).toEqual([
       'running', 'paused', 'completed', 'failed', 'interrupted', 'cancelled',

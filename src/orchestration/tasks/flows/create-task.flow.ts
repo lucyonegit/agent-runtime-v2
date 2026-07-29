@@ -58,7 +58,7 @@ export class CreateTaskFlow {
     ]);
     if (created.task.status !== 'created') return created;
 
-    const started = await this.taskRuns.start(created.task, 'initial');
+    const started = await this.taskRuns.start(created.task);
     this.execution.dispatch({ taskId: started.task.id, taskRunId: started.taskRun.id });
     return { ...created, task: started.task };
   }

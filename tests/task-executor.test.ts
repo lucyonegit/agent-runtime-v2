@@ -336,7 +336,7 @@ function taskRun(id: string, runNo: number): AgentTaskRun {
     id,
     taskId: 'task_1',
     runNo,
-    trigger: runNo === 1 ? 'initial' : 'manual_resume',
+    trigger: runNo === 1 ? 'initial' : 'user_input_answered',
     status: 'running',
     ownerId: 'worker_1',
     ownershipExpiresAtMs: 1_000,

@@ -4,7 +4,6 @@ export const AGENT_TASK_RUN_TRIGGERS = [
   'initial',
   'user_input_answered',
   'input_expired',
-  'manual_resume',
 ] as const;
 
 export type AgentTaskRunTrigger = typeof AGENT_TASK_RUN_TRIGGERS[number];

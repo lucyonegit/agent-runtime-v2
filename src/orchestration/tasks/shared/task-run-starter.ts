@@ -1,4 +1,4 @@
-import type { AgentTask, AgentTaskRunTrigger } from '../../../domain/index.js';
+import type { AgentTask } from '../../../domain/index.js';
 import type { AgentStore, StartTaskRunResult } from '../../../storage/agent-store.js';
 import { mapStoreError } from '../../../runtime/errors/runtime-error.js';
 import { TaskEventPublisher } from './task-event-publisher.js';
@@ -15,7 +15,7 @@ export class TaskRunStarter {
     private readonly events: TaskEventPublisher
   ) {}
 
-  async start(task: AgentTask, trigger: Extract<AgentTaskRunTrigger, 'initial' | 'manual_resume'>): Promise<StartTaskRunResult> {
+  async start(task: AgentTask): Promise<StartTaskRunResult> {
     const nowMs = this.clock.nowMs();
     let result: StartTaskRunResult;
     try {
@@ -23,7 +23,7 @@ export class TaskRunStarter {
         taskId: task.id,
         expectedTaskVersion: task.version,
         taskRunId: this.nextTaskRunId(),
-        trigger,
+        trigger: 'initial',
         ownerId: this.ownerId,
         nowMs,
         ownershipExpiresAtMs: nowMs + this.ownershipTimeoutMs,
