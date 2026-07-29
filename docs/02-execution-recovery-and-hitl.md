@@ -11,7 +11,8 @@ sequenceDiagram
     participant R as ReActExecution
 
     U->>M: createTask(sessionId, message)
-    M->>S: 同一事务写 HumanMessage + Task + TaskRun(initial) + Checkpoint
+    M->>S: 事务 1 写 HumanMessage + Task(created)
+    M->>S: 事务 2 写 TaskRun(initial) + Task(running)
     M->>E: 后台调度 taskId
     E->>S: 校验活动 TaskRun 的执行权
     E->>R: runTask(Task, TaskRun)
@@ -19,6 +20,8 @@ sequenceDiagram
     R->>S: 记录 Message / ToolCall / ToolRun / Checkpoint
     R->>S: 最终回复 + TaskRun completed + Task completed + 清理 Plan
 ```
+
+创建事实与取得执行权是两个独立事务。若事务 1 已提交而事务 2 失败，客户端以同一 `clientRequestId` 重放时会解析出既有 Task，并从 `created` 状态重新尝试启动，不会重复写用户消息。首次启动不预写 `ready_for_model` Checkpoint；第一个 Checkpoint 在首个 ToolCall 批次、等待输入或 Task 终态落库时产生。
 
 TaskExecutor 只接收 taskId。它重新读取数据库中的 Task、活动 TaskRun 和目标 Message，避免后台闭包携带陈旧状态。
 
