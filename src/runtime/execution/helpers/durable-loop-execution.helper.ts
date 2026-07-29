@@ -23,10 +23,10 @@ export async function executeDurableAgentLoop(
     taskId: input.task.id,
     taskRunId: input.taskRun.id,
   };
-  const finalCandidates = new Map<string, Extract<LoopEvent, {
+  let finalEvent: Extract<LoopEvent, {
     type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted;
-  }>>();
-  const inputEvents: Array<Extract<LoopEvent, {
+  }> | undefined;
+  const inputRequiredEvents: Array<Extract<LoopEvent, {
     type: typeof LOOP_EVENT_TYPES.ToolInputRequired;
   }>> = [];
   const iterator = loop.run({ ...input.loopInput, target });
@@ -44,9 +44,10 @@ export async function executeDurableAgentLoop(
       const event = next.value;
       const feedback = await eventHandler.handle(event, target);
       if (event.type === LOOP_EVENT_TYPES.ModelOutputCompleted && event.toolCalls.length === 0) {
-        finalCandidates.set(event.outputId, event);
+        // AgentLoop emits one final model event immediately before returning completed.
+        finalEvent = event;
       } else if (event.type === LOOP_EVENT_TYPES.ToolInputRequired) {
-        inputEvents.push(event);
+        inputRequiredEvents.push(event);
       }
       if (feedback?.waitingForUser) {
         await iterator.return({
@@ -65,8 +66,7 @@ export async function executeDurableAgentLoop(
 
     const result = next.value;
     if (result.type === 'completed') {
-      const finalEvent = finalCandidates.get(result.outputId);
-      if (!finalEvent || finalEvent.content !== result.content) {
+      if (!finalEvent || finalEvent.outputId !== result.outputId || finalEvent.content !== result.content) {
         return failTask(options, input, {
           code: 'model_protocol_error',
           message: 'AgentLoop completed without a matching final model event.',
@@ -76,7 +76,7 @@ export async function executeDurableAgentLoop(
       return { type: 'completed', ...committed };
     }
     if (result.type === 'waiting_for_user') {
-      const receivedIds = inputEvents.map(event => event.modelToolCallId).sort();
+      const receivedIds = inputRequiredEvents.map(event => event.modelToolCallId).sort();
       const resultIds = [...result.modelToolCallIds].sort();
       if (JSON.stringify(receivedIds) !== JSON.stringify(resultIds)) {
         return failTask(options, input, {
@@ -84,7 +84,7 @@ export async function executeDurableAgentLoop(
           message: 'AgentLoop input events do not match its waiting result.',
         });
       }
-      const waiting = await eventHandler.markWaitingForInput(inputEvents, target);
+      const waiting = await eventHandler.markWaitingForInput(inputRequiredEvents, target);
       return { type: 'waiting_for_user', task: waiting.task, requests: waiting.requests };
     }
     if (result.type === 'cancelled') return completeCancellation(input, result.reason, options);
