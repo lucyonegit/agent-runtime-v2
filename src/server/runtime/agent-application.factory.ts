@@ -126,7 +126,6 @@ export async function createAgentApplication(
       store,
       reactExecution,
       workerId: config.workerId,
-      publisher: events,
       ownershipTimeoutMs: config.execution.ownershipTimeoutMs,
       ownershipRefreshMs: config.execution.ownershipRefreshMs,
       clock,

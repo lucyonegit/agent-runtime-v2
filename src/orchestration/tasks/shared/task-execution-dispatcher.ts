@@ -6,7 +6,7 @@ export class TaskExecutionDispatcher {
 
   dispatch(command: ExecuteTaskRunCommand): void {
     void this.execution.execute(command).catch(() => {
-      // TaskExecutor persists terminal failure while it still owns the Task.
+      // The in-process adapter leaves retry to durable startup recovery.
     });
   }
 }

@@ -2,8 +2,6 @@ import { DEFAULT_EXECUTION_CONFIG } from '../../config/runtime-config.js';
 import type { AgentTask, AgentTaskRun } from '../../domain/index.js';
 import type { ReActExecution } from '../../runtime/execution/react-execution.js';
 import { RuntimeError } from '../../runtime/errors/runtime-error.js';
-import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
-import { taskFinishEvents } from '../../runtime/events/helpers/task-finish-events.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { ExecutionOwnershipService } from './shared/execution-ownership.service.js';
 
@@ -22,7 +20,6 @@ export interface TaskExecutorOptions {
   store: AgentStore;
   reactExecution: Pick<ReActExecution, 'runTask'>;
   workerId: string;
-  publisher: RuntimeEventPublisher;
   ownershipTimeoutMs?: number;
   ownershipRefreshMs?: number;
   terminationGraceMs?: number;
@@ -42,7 +39,7 @@ export class TaskExecutor implements TaskExecutorPort {
   readonly #activeExecutions = new Map<string, ActiveExecution>();
   readonly #trackedExecutions = new Set<ActiveExecution>();
   readonly #options: Required<Omit<TaskExecutorOptions,
-    'store' | 'reactExecution' | 'publisher' | 'workerId'>> & TaskExecutorOptions;
+    'store' | 'reactExecution' | 'workerId'>> & TaskExecutorOptions;
   readonly #executionOwnership: ExecutionOwnershipService;
   #stopping = false;
 
@@ -136,11 +133,10 @@ export class TaskExecutor implements TaskExecutorPort {
     command: ExecuteTaskRunCommand,
     controller: AbortController
   ): Promise<void> {
-    let runnable: { task: AgentTask; taskRun: AgentTaskRun } | undefined;
     let stopRefreshing: () => void = () => undefined;
     let stopRefreshingOnAbort: (() => void) | undefined;
     try {
-      runnable = await this.#loadRunnableTask(command);
+      const runnable = await this.#loadRunnableTask(command);
       stopRefreshing = this.#executionOwnership.startRefreshing({
         taskId: command.taskId,
         taskRunId: runnable.taskRun.id,
@@ -152,9 +148,8 @@ export class TaskExecutor implements TaskExecutorPort {
       if (controller.signal.aborted) stopRefreshingOnAbort();
       await this.#options.reactExecution.runTask({ ...runnable, signal: controller.signal });
     } catch (error) {
-      if (!(error instanceof RuntimeError && ['ownership_lost', 'aborted'].includes(error.code))) {
-        await this.#failTaskIfStillOwned(runnable, error);
-      }
+      if (!(error instanceof RuntimeError
+        && ['ownership_lost', 'aborted'].includes(error.code))) throw error;
     } finally {
       if (stopRefreshingOnAbort) {
         controller.signal.removeEventListener('abort', stopRefreshingOnAbort);
@@ -183,39 +178,6 @@ export class TaskExecutor implements TaskExecutorPort {
       );
     }
     return { task, taskRun };
-  }
-
-  async #failTaskIfStillOwned(
-    runnable: { task: AgentTask; taskRun: AgentTaskRun } | undefined,
-    error: unknown
-  ): Promise<void> {
-    if (!runnable) return;
-    const [task, taskRun] = await Promise.all([
-      this.#options.store.tasks.get(runnable.task.id),
-      this.#options.store.tasks.getRun(runnable.taskRun.id),
-    ]);
-    if (!task || task.status !== 'running' || !taskRun || taskRun.id !== runnable.taskRun.id
-      || taskRun.status !== 'running' || taskRun.ownerId !== this.#options.workerId) return;
-    try {
-      const failed = await this.#options.store.tasks.fail({
-        taskId: task.id,
-        expectedTaskVersion: task.version,
-        taskRunId: taskRun.id,
-        ownerId: this.#options.workerId,
-        error: {
-          code: error instanceof RuntimeError ? error.code : 'runtime_error',
-          message: error instanceof Error ? error.message : 'Runtime execution failed.',
-        },
-        nowMs: this.#options.clock.nowMs(),
-      });
-      for (const event of taskFinishEvents(failed)) await this.#publish(event);
-    } catch {
-      // A terminal transaction or newer owner won the race.
-    }
-  }
-
-  async #publish(event: Parameters<RuntimeEventPublisher['publish']>[0]): Promise<void> {
-    try { await this.#options.publisher.publish(event); } catch { /* SessionView is authoritative. */ }
   }
 }
 

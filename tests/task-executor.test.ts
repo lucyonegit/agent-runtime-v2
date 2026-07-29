@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTask, AgentTaskRun } from '../src/domain/index.js';
 import { TaskExecutor } from '../src/orchestration/tasks/task-executor.js';
+import { RuntimeError } from '../src/runtime/errors/runtime-error.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
 describe('TaskExecutor TaskRun identity', () => {
@@ -37,7 +38,6 @@ describe('TaskExecutor TaskRun identity', () => {
       store,
       reactExecution: { runTask } as never,
       workerId: 'worker_1',
-      publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 30_000,
       ownershipRefreshMs: 10_000,
       clock: { nowMs: () => 100 },
@@ -80,7 +80,6 @@ describe('TaskExecutor TaskRun identity', () => {
       } as unknown as AgentStore,
       reactExecution: { runTask } as never,
       workerId: 'worker_1',
-      publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 30_000,
       ownershipRefreshMs: 10_000,
       clock: { nowMs: () => 100 },
@@ -93,6 +92,65 @@ describe('TaskExecutor TaskRun identity', () => {
 
     expect(getRun).toHaveBeenCalledWith(mismatchedRun.id);
     expect(runTask).not.toHaveBeenCalled();
+  });
+
+  it('propagates infrastructure failures without terminalizing durable Task state', async () => {
+    const activeTask = task('task_1', 'session_1');
+    const activeRun = taskRunFor('task_run_1', activeTask.id);
+    const failure = new Error('model transport unavailable');
+    const fail = vi.fn();
+    const executor = new TaskExecutor({
+      store: {
+        tasks: {
+          get: vi.fn(async () => activeTask),
+          getRun: vi.fn(async () => activeRun),
+          fail,
+        },
+      } as unknown as AgentStore,
+      reactExecution: { runTask: vi.fn(async () => { throw failure; }) } as never,
+      workerId: 'worker_1',
+      ownershipTimeoutMs: 30_000,
+      ownershipRefreshMs: 10_000,
+      clock: { nowMs: () => 100 },
+    });
+
+    await expect(executor.execute({
+      taskId: activeTask.id,
+      taskRunId: activeRun.id,
+    })).rejects.toBe(failure);
+
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  it('treats ownership loss as local execution termination rather than Task failure', async () => {
+    const activeTask = task('task_1', 'session_1');
+    const activeRun = taskRunFor('task_run_1', activeTask.id);
+    const fail = vi.fn();
+    const executor = new TaskExecutor({
+      store: {
+        tasks: {
+          get: vi.fn(async () => activeTask),
+          getRun: vi.fn(async () => activeRun),
+          fail,
+        },
+      } as unknown as AgentStore,
+      reactExecution: {
+        runTask: vi.fn(async () => {
+          throw new RuntimeError('ownership_lost', 'lease expired');
+        }),
+      } as never,
+      workerId: 'worker_1',
+      ownershipTimeoutMs: 30_000,
+      ownershipRefreshMs: 10_000,
+      clock: { nowMs: () => 100 },
+    });
+
+    await expect(executor.execute({
+      taskId: activeTask.id,
+      taskRunId: activeRun.id,
+    })).resolves.toBeUndefined();
+
+    expect(fail).not.toHaveBeenCalled();
   });
 
   it('aborts and joins only executions owned by the deleted Session', async () => {
@@ -122,7 +180,6 @@ describe('TaskExecutor TaskRun identity', () => {
         )),
       } as never,
       workerId: 'worker_1',
-      publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 30_000,
       ownershipRefreshMs: 10_000,
       terminationGraceMs: 100,
@@ -163,7 +220,6 @@ describe('TaskExecutor TaskRun identity', () => {
         })),
       } as never,
       workerId: 'worker_1',
-      publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 30_000,
       ownershipRefreshMs: 10_000,
       terminationGraceMs: 10,
@@ -203,7 +259,6 @@ describe('TaskExecutor TaskRun identity', () => {
         })),
       } as never,
       workerId: 'worker_1',
-      publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 1_000,
       ownershipRefreshMs: 20,
       terminationGraceMs: 10,
@@ -247,7 +302,6 @@ describe('TaskExecutor TaskRun identity', () => {
         )),
       } as never,
       workerId: 'worker_1',
-      publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 30_000,
       ownershipRefreshMs: 10_000,
       terminationGraceMs: 10,
