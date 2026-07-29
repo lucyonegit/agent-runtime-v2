@@ -37,7 +37,6 @@ export class CancelTaskFlow {
         return {
           task: latest,
           toolCalls: [],
-          toolRuns: [],
           userInputRequests: [],
           planCleared: false,
         };

@@ -6,7 +6,6 @@ import type {
   AgentTask,
   AgentTaskRun,
   AgentToolCall,
-  AgentToolRun,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
 import type {
@@ -25,7 +24,6 @@ import {
   mapAgentTaskRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
-  mapAgentToolRunRow,
   mapAgentUserInputRequestRow,
   type AgentArtifactRow,
   type AgentMessageRow,
@@ -33,7 +31,6 @@ import {
   type AgentTaskRow,
   type AgentTaskRunRow,
   type AgentToolCallRow,
-  type AgentToolRunRow,
   type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import { withPostgresClient } from './postgres-store.helper.js';
@@ -114,18 +111,6 @@ export class PostgresSessionStore implements SessionStore {
       [sessionId]
     );
     return result.rows.map(mapAgentToolCallRow);
-  }
-
-  async listToolRuns(sessionId: string): Promise<AgentToolRun[]> {
-    const result = await this.pool.query<AgentToolRunRow>(
-      `select run.*
-       from agent_tool_runs run
-       join agent_tasks task on task.id = run.task_id
-       where task.session_id = $1
-       order by run.started_at_ms, run.id`,
-      [sessionId]
-    );
-    return result.rows.map(mapAgentToolRunRow);
   }
 
   async listArtifacts(sessionId: string): Promise<AgentArtifact[]> {

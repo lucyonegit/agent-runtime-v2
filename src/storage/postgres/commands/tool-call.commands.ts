@@ -7,8 +7,8 @@ import {
   type CompleteToolCallResult,
   type SaveToolCallsInput,
   type SaveToolCallsResult,
-  type StartToolRunInput,
-  type StartToolRunResult,
+  type StartToolCallInput,
+  type StartToolCallResult,
 } from '../../agent-store.js';
 import {
   mapAgentArtifactRow,
@@ -16,14 +16,12 @@ import {
   mapAgentTaskRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
-  mapAgentToolRunRow,
   mapAgentUserInputRequestRow,
   type AgentArtifactRow,
   type AgentMessageRow,
   type AgentTaskRow,
   type AgentTaskRunRow,
   type AgentToolCallRow,
-  type AgentToolRunRow,
   type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import {
@@ -35,7 +33,6 @@ import {
   appendTaskCheckpoint,
   assertTaskRunOwnership,
   requireRow,
-  selectActiveToolRun,
   selectLatestTaskCheckpoint,
   selectTask,
   selectTaskRun,
@@ -156,27 +153,21 @@ export async function saveToolCallsCommand(
   });
 }
 
-export async function startToolRunCommand(
+export async function startToolCallCommand(
   client: PoolClient,
-  input: StartToolRunInput
-): Promise<StartToolRunResult> {
+  input: StartToolCallInput
+): Promise<StartToolCallResult> {
   return withPostgresTransaction(client, async () => {
     await lockAgentSessionForTask(client, input.taskId);
     const task = await selectTask(client, input.taskId, true);
     if (!task) throw taskNotFound(input.taskId);
     const taskRun = await selectTaskRun(client, input.taskRunId, true);
-    assertTaskRunOwnership(task, taskRun, input.workerId, input.nowMs);
+    assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
     const call = await selectToolCall(client, input.taskId, input.modelToolCallId, true);
     if (!call) throw toolCallNotFound(input.taskId, input.modelToolCallId);
     if (['completed', 'failed'].includes(call.status)) {
-      const latestRun = await client.query<AgentToolRunRow>(
-        `select * from agent_tool_runs
-         where tool_call_id = $1 order by run_no desc limit 1`,
-        [call.id]
-      );
       return {
         toolCall: mapAgentToolCallRow(call),
-        ...(latestRun.rows[0] ? { toolRun: mapAgentToolRunRow(latestRun.rows[0]) } : {}),
         started: false,
       };
     }
@@ -187,20 +178,6 @@ export async function startToolRunCommand(
         { taskId: task.id, modelToolCallId: call.model_tool_call_id, status: call.status }
       );
     }
-    const runNoResult = await client.query<{ run_no: number }>(
-      `select coalesce(max(run_no), 0)::integer + 1 as run_no
-       from agent_tool_runs where tool_call_id = $1`,
-      [call.id]
-    );
-    const runNo = requireRow(runNoResult.rows[0], 'select tool run number').run_no;
-    const runResult = await client.query<AgentToolRunRow>(
-      `insert into agent_tool_runs(
-         id, tool_call_id, task_id, task_run_id, run_no, worker_id,
-         status, started_at_ms
-       ) values ($1, $2, $3, $4, $5, $6, 'running', $7)
-       returning *`,
-      [input.toolRunId, call.id, task.id, taskRun.id, runNo, input.workerId, input.nowMs]
-    );
     const callResult = await client.query<AgentToolCallRow>(
       `update agent_tool_calls
        set status = 'running', version = version + 1,
@@ -212,7 +189,6 @@ export async function startToolRunCommand(
     await touchSession(client, task.session_id, input.nowMs);
     return {
       toolCall: mapAgentToolCallRow(requireRow(callResult.rows[0], 'start tool call')),
-      toolRun: mapAgentToolRunRow(requireRow(runResult.rows[0], 'start tool run')),
       started: true,
     };
   });
@@ -234,10 +210,6 @@ export async function completeToolCallCommand(
         `select * from agent_messages where id = $1`,
         [call.result_message_id]
       );
-      const run = await client.query<AgentToolRunRow>(
-        `select * from agent_tool_runs where tool_call_id = $1 order by run_no desc limit 1`,
-        [call.id]
-      );
       const artifacts = await client.query<AgentArtifactRow>(
         `select * from agent_artifacts where tool_call_id = $1 and result_message_id = $2`,
         [call.id, call.result_message_id]
@@ -245,15 +217,10 @@ export async function completeToolCallCommand(
       return {
         message: mapAgentMessageRow(requireRow(message.rows[0], 'load tool result message')),
         toolCall: mapAgentToolCallRow(call),
-        toolRun: mapAgentToolRunRow(requireRow(run.rows[0], 'load tool run')),
         artifacts: artifacts.rows.map(mapAgentArtifactRow),
       };
     }
     if (call.status === 'outcome_unknown' && task.status === 'waiting_for_user') {
-      const run = await client.query<AgentToolRunRow>(
-        `select * from agent_tool_runs where tool_call_id = $1 order by run_no desc limit 1`,
-        [call.id]
-      );
       const request = await client.query<AgentUserInputRequestRow>(
         `select * from agent_user_input_requests
          where tool_call_id = $1 and kind = 'side_effect_confirmation' and status = 'pending'`,
@@ -261,7 +228,6 @@ export async function completeToolCallCommand(
       );
       return {
         toolCall: mapAgentToolCallRow(call),
-        toolRun: mapAgentToolRunRow(requireRow(run.rows[0], 'load unknown tool run')),
         artifacts: [],
         confirmationRequired: {
           task: mapAgentTaskRow(task),
@@ -278,14 +244,6 @@ export async function completeToolCallCommand(
         'INVALID_TOOL_CALL_STATE',
         `ToolCall ${JSON.stringify(call.model_tool_call_id)} cannot complete from ${call.status}.`,
         { taskId: task.id, modelToolCallId: call.model_tool_call_id, status: call.status }
-      );
-    }
-    const activeRun = await selectActiveToolRun(client, call.id, true);
-    if (!activeRun || activeRun.task_run_id !== taskRun.id) {
-      throw new AgentStoreError(
-        'INVALID_TOOL_CALL_STATE',
-        `ToolCall ${JSON.stringify(call.model_tool_call_id)} has no running ToolRun in this TaskRun.`,
-        { taskId: task.id, taskRunId: taskRun.id, modelToolCallId: call.model_tool_call_id }
       );
     }
     const callMessage = await client.query<Pick<AgentMessageRow, 'context_scope'>>(
@@ -360,23 +318,6 @@ export async function completeToolCallCommand(
       );
       messageRow = requireRow(messageResult.rows[0], 'save tool result message');
     }
-    const runResult = await client.query<AgentToolRunRow>(
-      `update agent_tool_runs
-       set status = $2, error_code = $3, error_message = $4, error_details = $5,
-           ended_at_ms = $6, duration_ms = $7
-       where id = $1 returning *`,
-      [
-        activeRun.id,
-        terminalStatus,
-        errorCode,
-        errorMessage,
-        errorDetails !== undefined
-          ? JSON.stringify(errorDetails)
-          : null,
-        input.nowMs,
-        input.outcome.durationMs,
-      ]
-    );
     const callResult = await client.query<AgentToolCallRow>(
       `update agent_tool_calls
        set status = $2, result_message_id = $3,
@@ -411,20 +352,19 @@ export async function completeToolCallCommand(
         const revision = requireRow(revisionResult.rows[0], 'select artifact revision').revision;
         const result = await client.query<AgentArtifactRow>(
           `insert into agent_artifacts(
-             id, session_id, task_id, tool_call_id, tool_run_id, result_message_id,
+             id, session_id, task_id, tool_call_id, result_message_id,
              kind, area, title, file_name, logical_path, storage_path,
              media_type, size_bytes, checksum, revision, metadata, created_at_ms
            ) values (
-             $1, $2, $3, $4, $5, $6,
-             $7, $8, $9, $10, $11, $12,
-             $13, $14, $15, $16, $17, $18
+             $1, $2, $3, $4, $5,
+             $6, $7, $8, $9, $10, $11,
+             $12, $13, $14, $15, $16, $17
            ) returning *`,
           [
             artifact.id,
             input.sessionId,
             input.taskId,
             call.id,
-            activeRun.id,
             input.messageId,
             artifact.kind,
             artifact.area,
@@ -509,7 +449,6 @@ export async function completeToolCallCommand(
     return {
       ...(messageRow ? { message: mapAgentMessageRow(messageRow) } : {}),
       toolCall: mapAgentToolCallRow(requireRow(callResult.rows[0], 'complete tool call')),
-      toolRun: mapAgentToolRunRow(requireRow(runResult.rows[0], 'complete tool run')),
       artifacts: artifactRows.map(mapAgentArtifactRow),
       ...(confirmationRequired ? { confirmationRequired } : {}),
     };
@@ -577,7 +516,6 @@ export async function completeTaskCommand(
       taskRun: mapAgentTaskRunRow(requireRow(runResult.rows[0], 'complete task run')),
       message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'save final message')),
       toolCalls: [],
-      toolRuns: [],
       userInputRequests: [],
       ...(checkpoint ? { checkpoint } : {}),
       planCleared: planResult.rowCount === 1,

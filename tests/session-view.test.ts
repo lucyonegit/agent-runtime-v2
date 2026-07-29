@@ -40,7 +40,6 @@ function emptySnapshot(): AgentSessionSnapshot {
     taskRuns: [],
     messages: [],
     toolCalls: [],
-    toolRuns: [],
     artifacts: [],
     userInputRequests: [],
   };

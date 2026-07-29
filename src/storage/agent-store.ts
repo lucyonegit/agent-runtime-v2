@@ -20,7 +20,6 @@ import type {
   AgentTaskRun,
   AgentTaskRunTrigger,
   AgentToolCall,
-  AgentToolRun,
   AgentToolSideEffectLevel,
   AgentUserInputRequest,
   AgentUserInputRequestKind,
@@ -148,7 +147,6 @@ export interface ReconcileInterruptedTaskResult {
   task: AgentTask;
   taskRun?: AgentTaskRun;
   toolCalls: AgentToolCall[];
-  toolRuns: AgentToolRun[];
   userInputRequests: AgentUserInputRequest[];
   checkpoint?: AgentTaskCheckpoint;
   planCleared: boolean;
@@ -167,7 +165,6 @@ export interface FinishTaskResult {
   task: AgentTask;
   taskRun?: AgentTaskRun;
   toolCalls: AgentToolCall[];
-  toolRuns: AgentToolRun[];
   userInputRequests: AgentUserInputRequest[];
   checkpoint?: AgentTaskCheckpoint;
   planCleared: boolean;
@@ -206,18 +203,16 @@ export interface SaveToolCallsResult {
   toolCalls: AgentToolCall[];
 }
 
-export interface StartToolRunInput {
+export interface StartToolCallInput {
   taskId: string;
   taskRunId: string;
   modelToolCallId: string;
-  toolRunId: string;
-  workerId: string;
+  ownerId: string;
   nowMs: number;
 }
 
-export interface StartToolRunResult {
+export interface StartToolCallResult {
   toolCall: AgentToolCall;
-  toolRun?: AgentToolRun;
   started: boolean;
 }
 
@@ -253,7 +248,6 @@ export interface CompleteToolCallInput {
 export interface CompleteToolCallResult {
   message?: AgentMessage;
   toolCall: AgentToolCall;
-  toolRun: AgentToolRun;
   artifacts: AgentArtifact[];
   confirmationRequired?: {
     task: AgentTask;
@@ -302,7 +296,6 @@ export interface WaitForUserInputResult {
   taskRun: AgentTaskRun;
   requests: AgentUserInputRequest[];
   toolCalls: AgentToolCall[];
-  toolRuns: AgentToolRun[];
 }
 
 export interface SaveUserInputAnswerInput {
@@ -421,7 +414,6 @@ export interface AgentSessionSnapshot {
   activePlan?: AgentActivePlan;
   messages: AgentMessage[];
   toolCalls: AgentToolCall[];
-  toolRuns: AgentToolRun[];
   artifacts: AgentArtifact[];
   userInputRequests: AgentUserInputRequest[];
   modelUsage?: AgentModelUsageStats;
@@ -450,7 +442,6 @@ export interface SessionStore {
   listTasks(sessionId: string): Promise<AgentTask[]>;
   listTaskRuns(sessionId: string): Promise<AgentTaskRun[]>;
   listToolCalls(sessionId: string): Promise<AgentToolCall[]>;
-  listToolRuns(sessionId: string): Promise<AgentToolRun[]>;
   listArtifacts(sessionId: string): Promise<AgentArtifact[]>;
   listUserInputRequests(sessionId: string): Promise<AgentUserInputRequest[]>;
 }
@@ -472,7 +463,7 @@ export interface ExecutionStore {
   getToolCall(taskId: string, modelToolCallId: string): Promise<AgentToolCall | undefined>;
   getLatestCheckpoint(taskId: string): Promise<AgentTaskCheckpoint | undefined>;
   saveToolCalls(input: SaveToolCallsInput): Promise<SaveToolCallsResult>;
-  startToolRun(input: StartToolRunInput): Promise<StartToolRunResult>;
+  startToolCall(input: StartToolCallInput): Promise<StartToolCallResult>;
   completeToolCall(input: CompleteToolCallInput): Promise<CompleteToolCallResult>;
   completeTask(input: CompleteTaskWithFinalMessageInput): Promise<CompleteTaskWithFinalMessageResult>;
   waitForUserInput(input: WaitForUserInputInput): Promise<WaitForUserInputResult>;

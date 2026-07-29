@@ -37,9 +37,6 @@ NODE_ENV=development npm run schema:reset -- --confirm-agent-runtime-reset
 - `DELETE /sessions/:sessionId`
 - `POST /sessions/:sessionId/tasks`
 - `POST /tasks/:taskId/cancel`
-- `POST /tasks/:taskId/retry`
-- `POST /tasks/:taskId/continue-as-new`
-- `POST /tasks/:taskId/resume`
 - `POST /user-input-requests/:requestId/answer`
 - `GET /sessions/:sessionId/events`
 
@@ -49,7 +46,7 @@ NODE_ENV=development npm run schema:reset -- --confirm-agent-runtime-reset
 - `GET /tasks/:taskId/context-preview`
 - `GET /model-calls/:modelCallId/context`
 
-Electron IPC 使用对应的 `task.create/task.cancel/task.retry/task.resume` 命令，不暴露 HTTP 给 Renderer。
+Runtime 不暴露 retry、continue-as-new 或通用 resume 命令。Task 失败/取消后由用户新消息创建新 Task；`answer` 是唯一可以继续原 Task 的入口。
 
 ## 4. 验证矩阵
 
@@ -62,9 +59,9 @@ npm run build
 
 PostgreSQL 集成测试覆盖：
 
-- Task/TaskRun/ToolCall/ToolRun 的创建与状态流转。
+- Task、TaskRun 和 ToolCall 的创建、租约 fence 与状态流转。
 - ToolMessage 作为唯一工具结果事实。
 - Task 终态事务清理 ActivePlan。
-- Retry 创建新 Task 且不污染旧执行历史。
-- HITL 回答和过期分别创建正确 trigger 的 TaskRun。
-- 崩溃恢复时安全工具可重跑，有副作用工具进入 `outcome_unknown`。
+- 普通 HITL 回答创建 `user_input_answered` TaskRun，过期则安全终止。
+- 崩溃对账不自动重跑：只读工具失败，有副作用工具进入 `outcome_unknown` 并请求用户确认。
+- 未知副作用的三种回答、超时和原始结果不可恢复语义。

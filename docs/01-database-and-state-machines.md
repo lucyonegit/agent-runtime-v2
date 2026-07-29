@@ -8,7 +8,6 @@ erDiagram
     TASK ||--o{ TASK_RUN : executes
     TASK ||--o{ RUNTIME_MESSAGE : owns
     RUNTIME_MESSAGE ||--o{ TOOL_CALL : declares
-    TOOL_CALL ||--o{ TOOL_RUN : executes
     TOOL_CALL o|--o| RUNTIME_MESSAGE : produces_result
     TOOL_CALL ||--o| USER_INPUT_REQUEST : waits_for
     SESSION ||--o| ACTIVE_PLAN : displays
@@ -26,19 +25,18 @@ erDiagram
 |---|---|---|
 | `agent_sessions` | `id` | 对话与工作区 |
 | `agent_tasks` | `id`；每 Session 仅一个活动 Task | 用户目标与业务终态 |
-| `agent_task_runs` | `id`；`unique(task_id, run_no)` | 物理执行窗口与执行权 |
+| `agent_task_runs` | `id`；`unique(task_id, run_no)` | 执行窗口、租约与 fence |
 | `agent_messages` | `row_id` 顺序；`id` 唯一 | LangChain 消息事实 |
-| `agent_task_checkpoints` | `unique(task_id, sequence_no)` | ReAct 恢复位置 |
-| `agent_tool_calls` | `unique(task_id, model_tool_call_id)` | 逻辑工具调用 |
-| `agent_tool_runs` | `unique(tool_call_id, run_no)` | 物理工具执行历史 |
+| `agent_task_checkpoints` | `unique(task_id, sequence_no)` | ReAct 的耐久游标 |
+| `agent_tool_calls` | `unique(task_id, model_tool_call_id)` | 工具意图与唯一执行状态 |
 | `agent_active_plans` | `session_id` 主键；`task_id` 唯一 | 当前临时计划 |
-| `agent_artifacts` | 逻辑路径 + revision | 工具生成的资源索引 |
-| `agent_user_input_requests` | `tool_call_id` 唯一 | 等待用户输入 |
+| `agent_artifacts` | 逻辑路径 + revision | ToolCall 结果生成的资源索引 |
+| `agent_user_input_requests` | `tool_call_id` 唯一 | HITL 请求与答案状态 |
 | `agent_context_compactions` | `session_id` 主键 | 单调推进的摘要缓存 |
 | `agent_model_calls` | `unique(task_run_id, logical_call_key)` | 模型输入输出审计 |
 | `agent_model_usage_stats` | `session_id` 主键 | 聚合 Token 用量 |
 
-重复保存父级 ID 的表使用组合外键校验完整归属链：Task 必须属于同一 Session，TaskRun、Message、ToolCall、ToolRun 必须属于同一 Task，Artifact 还必须匹配实际 ToolRun 与 ToolCall。Retry Task 可以复用同一 Session 内原 Task 的 goal message，但不能跨 Session 引用；这些约束作为命令层校验之外的数据库最终防线。
+重复保存父级 ID 的表使用组合外键校验完整归属链：Task 必须属于同一 Session；TaskRun、Message 和 ToolCall 必须属于同一 Task；Artifact 必须同时匹配 ToolCall 与结果 Message。命令层校验负责给出业务错误，数据库约束是最终防线。
 
 ## 3. Task 状态机
 
@@ -48,29 +46,27 @@ stateDiagram-v2
     created --> running
     running --> waiting_for_user
     waiting_for_user --> running
-    running --> recovery_required
-    recovery_required --> running
     running --> completed
     running --> failed
     running --> cancelled
+    created --> failed
+    created --> cancelled
+    waiting_for_user --> failed
     waiting_for_user --> cancelled
-    recovery_required --> cancelled
 ```
 
-活动状态是 `created/running/waiting_for_user/recovery_required`。数据库部分唯一索引保证同一 Session 不会并发推进两个活动 Task。Task 没有“正在恢复”状态：恢复原因属于新 TaskRun 的 trigger。
+活动状态只有 `created/running/waiting_for_user`。数据库部分唯一索引保证同一 Session 不会并发推进两个活动 Task。`failed/cancelled` 不会自动回到 `running`；继续工作需要新的用户消息，HITL 回答除外。
 
 ## 4. TaskRun 状态机
 
 TaskRun trigger：
 
-- `initial`：Task 首次启动。
+- `initial`：用户消息创建的 Task 首次启动。
 - `user_input_answered`：最后一个待回答请求被回答。
-- `input_expired`：最后一个待回答请求过期。
-- `manual_resume`：用户确认从中断点恢复。
 
-TaskRun 状态：`running/paused/completed/failed/interrupted/cancelled`。只有 `running` 可携带 owner 和 ownership 到期时间；终态必须清空执行权并写入 `endedAtMs`。
+TaskRun 状态为 `running/paused/completed/failed/interrupted/cancelled`。只有 `running` 可携带 owner 和租约到期时间；其他状态必须清空执行权并写入 `endedAtMs`。`paused` 只表示正在等待 HITL，不是通用恢复入口。
 
-## 5. ToolCall 与 ToolRun
+## 5. ToolCall 状态机
 
 ```mermaid
 stateDiagram-v2
@@ -87,4 +83,8 @@ stateDiagram-v2
     waiting_for_user --> cancelled
 ```
 
-每次从 `pending` 开始执行会插入 ToolRun(`running`)；随后 ToolRun 和 ToolCall 一起进入对应终态。`completed/failed` 的 ToolCall 必须关联 ToolMessage；`outcome_unknown` 表示外部副作用可能已发生但没有可信结果，必须人工处理。
+`pending -> running` 只允许发生一次。开始和完成都必须在事务中校验当前 TaskRun 的 owner 与未过期租约；失去所有权的旧 Worker 无法提交结果。
+
+`completed` 必须关联 ToolMessage。正常的 `failed` 也会写失败 ToolMessage；服务崩溃时可能只有 `startedAtMs` 而没有原始结果，重启对账会将只读/幂等 ToolCall 标为 `failed`，Context 排除不完整的 ToolCall/ToolMessage 配对。
+
+已开始的 `side_effecting` ToolCall 若没有可信结果则进入 `outcome_unknown`，创建 `side_effect_confirmation`，不自动重放。Artifact 只关联 ToolCall 与产生它的结果 Message，不再存在额外的工具执行尝试实体。

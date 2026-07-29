@@ -62,11 +62,6 @@ export class InterruptedTaskScanner {
             sessionId: result.task.sessionId,
             toolCall,
           })),
-          ...result.toolRuns.map(toolRun => ({
-            type: 'tool_run.upserted' as const,
-            sessionId: result.task.sessionId,
-            toolRun,
-          })),
           ...result.userInputRequests.map(request => ({
             type: 'user_input.upserted' as const,
             sessionId: result.task.sessionId,

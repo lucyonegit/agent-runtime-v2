@@ -13,8 +13,7 @@
 - `Session` 是长期对话和工作区。
 - `Task` 是一次用户目标。
 - `TaskRun` 是一次实际执行窗口。
-- `ToolCall` 是模型发出的逻辑调用。
-- `ToolRun` 是一次物理工具执行。
+- `ToolCall` 是模型发出的工具意图，并承载其唯一一次真实执行状态。
 - `RuntimeMessage` 是 LangChain 协议和工具结果的唯一消息事实。
 - `ActivePlan` 是当前 Session 的临时 UI 状态，终态即清除。
 - `ContextCompaction` 只是模型输入缓存，不是长期 Memory。

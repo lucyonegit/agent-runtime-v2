@@ -13,7 +13,6 @@ describe('single destructive PostgreSQL schema', () => {
       'agent_messages',
       'agent_task_checkpoints',
       'agent_tool_calls',
-      'agent_tool_runs',
       'agent_active_plans',
       'agent_artifacts',
       'agent_user_input_requests',
@@ -25,13 +24,17 @@ describe('single destructive PostgreSQL schema', () => {
     expect(AGENT_RUNTIME_SCHEMA_SQL).not.toContain("'resuming'");
   });
 
-  it('links logical calls to physical runs and keeps ToolMessage as the result fact', () => {
+  it('keeps execution state on ToolCall and ToolMessage as the result fact', () => {
     expect(AGENT_RUNTIME_SCHEMA_SQL).toContain('result_message_id text references agent_messages');
     expect(AGENT_RUNTIME_SCHEMA_SQL).toContain('tool_call_id text not null references agent_tool_calls');
-    expect(AGENT_RUNTIME_SCHEMA_SQL).toContain('task_run_id text not null references agent_task_runs');
+    expect(AGENT_RUNTIME_SCHEMA_SQL).toContain(
+      'created_in_task_run_id text not null references agent_task_runs'
+    );
+    expect(AGENT_RUNTIME_SCHEMA_SQL).not.toContain('create table agent_tool_runs');
     const toolCallTable = AGENT_RUNTIME_SCHEMA_SQL.split('create table agent_tool_calls (')[1]
       ?.split('create index idx_agent_tool_calls_recovery')[0];
     expect(toolCallTable).toBeDefined();
     expect(toolCallTable).not.toMatch(/result_payload\s+jsonb/);
+    expect(toolCallTable).toContain('started_at_ms bigint');
   });
 });

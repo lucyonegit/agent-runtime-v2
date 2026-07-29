@@ -24,7 +24,6 @@ export interface AgentArtifact {
   sessionId: string;
   taskId: string;
   toolCallId: string;
-  toolRunId: string;
   resultMessageId: string;
   kind: AgentArtifactKind;
   area: AgentArtifactArea;

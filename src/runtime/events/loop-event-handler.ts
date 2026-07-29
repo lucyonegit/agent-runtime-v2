@@ -152,9 +152,6 @@ export class LoopEventHandler {
       for (const toolCall of committed.toolCalls) {
         await this.#publish({ type: 'tool_call.upserted', sessionId: target.sessionId, toolCall });
       }
-      for (const toolRun of committed.toolRuns) {
-        await this.#publish({ type: 'tool_run.upserted', sessionId: target.sessionId, toolRun });
-      }
       for (const request of committed.requests) {
         await this.#publish({ type: 'user_input.upserted', sessionId: target.sessionId, request });
       }
@@ -277,11 +274,6 @@ export class LoopEventHandler {
         type: 'tool_call.upserted',
         sessionId: target.sessionId,
         toolCall: committed.toolCall,
-      });
-      await this.#publish({
-        type: 'tool_run.upserted',
-        sessionId: target.sessionId,
-        toolRun: committed.toolRun,
       });
       for (const artifact of committed.artifacts) {
         await this.#publish({ type: 'artifact.upserted', sessionId: target.sessionId, artifact });

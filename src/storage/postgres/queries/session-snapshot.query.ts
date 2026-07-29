@@ -9,7 +9,6 @@ import {
   mapAgentTaskRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
-  mapAgentToolRunRow,
   mapAgentUserInputRequestRow,
   type AgentActivePlanRow,
   type AgentArtifactRow,
@@ -19,7 +18,6 @@ import {
   type AgentTaskRow,
   type AgentTaskRunRow,
   type AgentToolCallRow,
-  type AgentToolRunRow,
   type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import { withPostgresReadSnapshot } from '../sql.js';
@@ -69,14 +67,6 @@ export function loadSessionSnapshotQuery(
        where session_id = $1 order by created_at_ms, id`,
       [sessionId]
     );
-    const toolRunResult = await client.query<AgentToolRunRow>(
-      `select run.*
-       from agent_tool_runs run
-       join agent_tasks task on task.id = run.task_id
-       where task.session_id = $1
-       order by run.started_at_ms, run.id`,
-      [sessionId]
-    );
     const artifactResult = await client.query<AgentArtifactRow>(
       `select * from agent_artifacts
        where session_id = $1 order by created_at_ms, id`,
@@ -98,7 +88,6 @@ export function loadSessionSnapshotQuery(
       ...(planResult.rows[0] ? { activePlan: mapAgentActivePlanRow(planResult.rows[0]) } : {}),
       messages: messageResult.rows.map(mapAgentMessageRow),
       toolCalls: toolCallResult.rows.map(mapAgentToolCallRow),
-      toolRuns: toolRunResult.rows.map(mapAgentToolRunRow),
       artifacts: artifactResult.rows.map(mapAgentArtifactRow),
       userInputRequests: requestResult.rows.map(mapAgentUserInputRequestRow),
       ...(usageResult.rows[0] ? { modelUsage: mapAgentModelUsageStatsRow(usageResult.rows[0]) } : {}),

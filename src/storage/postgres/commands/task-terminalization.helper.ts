@@ -3,7 +3,6 @@ import type {
   AgentTaskCheckpoint,
   AgentTaskCheckpointPhase,
   AgentToolCall,
-  AgentToolRun,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
 import { AgentStoreError, type FinishTaskResult } from '../../agent-store.js';
@@ -12,12 +11,10 @@ import {
   mapAgentTaskRunRow,
   mapAgentTaskCheckpointRow,
   mapAgentToolCallRow,
-  mapAgentToolRunRow,
   mapAgentUserInputRequestRow,
   type AgentTaskRow,
   type AgentTaskRunRow,
   type AgentToolCallRow,
-  type AgentToolRunRow,
   type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import {
@@ -27,7 +24,6 @@ import {
 
 export interface TerminalizedTaskChildren {
   toolCalls: AgentToolCall[];
-  toolRuns: AgentToolRun[];
   userInputRequests: AgentUserInputRequest[];
 }
 
@@ -47,31 +43,6 @@ export async function terminalizeTaskChildren(
     ? 'The Task failed after the side-effecting tool started; its outcome is unknown.'
     : 'The Task was cancelled after the side-effecting tool started; its outcome is unknown.';
 
-  const runResult = await client.query<AgentToolRunRow>(
-    `update agent_tool_runs run
-     set status = case
-           when call.side_effect_level = 'side_effecting' then 'outcome_unknown'
-           else 'cancelled'
-         end,
-         error_code = case
-           when call.side_effect_level = 'side_effecting'
-             then 'side_effect_outcome_unknown'
-           else $3
-         end,
-         error_message = case
-           when call.side_effect_level = 'side_effecting' then $4
-           else $5
-         end,
-         error_details = null,
-         ended_at_ms = $2,
-         duration_ms = greatest(0, $2 - run.started_at_ms)
-     from agent_tool_calls call
-     where run.tool_call_id = call.id
-       and run.task_id = $1
-       and run.status = 'running'
-     returning run.*`,
-    [input.taskId, input.nowMs, parentErrorCode, unknownMessage, parentErrorMessage]
-  );
   const callResult = await client.query<AgentToolCallRow>(
     `update agent_tool_calls
      set status = case
@@ -108,7 +79,6 @@ export async function terminalizeTaskChildren(
   );
   return {
     toolCalls: callResult.rows.map(mapAgentToolCallRow),
-    toolRuns: runResult.rows.map(mapAgentToolRunRow),
     userInputRequests: requestResult.rows.map(mapAgentUserInputRequestRow),
   };
 }
@@ -121,9 +91,6 @@ export async function assertNoActiveTaskChildren(
     `select exists(
        select 1 from agent_tool_calls
        where task_id = $1 and status in ('pending', 'running', 'waiting_for_user')
-       union all
-       select 1 from agent_tool_runs
-       where task_id = $1 and status = 'running'
        union all
        select 1 from agent_user_input_requests
        where task_id = $1 and status = 'pending'
@@ -177,7 +144,6 @@ export async function cancelLockedTask(
     return {
       task: mapAgentTaskRow(input.task),
       toolCalls: [],
-      toolRuns: [],
       userInputRequests: [],
       planCleared: false,
     };

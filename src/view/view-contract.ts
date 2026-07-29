@@ -8,7 +8,6 @@ import type {
   AgentTask,
   AgentTaskRun,
   AgentToolCall,
-  AgentToolRun,
   AgentUserInputRequest,
 } from '../domain/index.js';
 
@@ -36,7 +35,6 @@ export interface AgentSessionView {
   activePlan?: AgentActivePlan;
   messages: AgentMessage[];
   toolCalls: AgentToolCall[];
-  toolRuns: AgentToolRun[];
   artifacts: AgentArtifact[];
   managedProcesses: AgentManagedProcess[];
   userInputRequests: AgentUserInputRequest[];

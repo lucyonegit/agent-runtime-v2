@@ -7,7 +7,6 @@ import type {
   AgentTaskRow,
   AgentTaskRunRow,
   AgentToolCallRow,
-  AgentToolRunRow,
   AgentUserInputRequestRow,
 } from '../row-mappers.js';
 
@@ -84,20 +83,6 @@ export async function selectToolCall(
      from agent_tool_calls
      where task_id = $1 and model_tool_call_id = $2${lock ? ' for update' : ''}`,
     [taskId, modelToolCallId]
-  );
-  return result.rows[0];
-}
-
-export async function selectActiveToolRun(
-  client: PoolClient,
-  toolCallId: string,
-  lock = false
-): Promise<AgentToolRunRow | undefined> {
-  const result = await client.query<AgentToolRunRow>(
-    `select *
-     from agent_tool_runs
-     where tool_call_id = $1 and status = 'running'${lock ? ' for update' : ''}`,
-    [toolCallId]
   );
   return result.rows[0];
 }

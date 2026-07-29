@@ -10,11 +10,6 @@ export function taskFinishEvents(result: FinishTaskResult): AgentRealtimeEvent[]
       sessionId,
       toolCall,
     })),
-    ...result.toolRuns.map(toolRun => ({
-      type: 'tool_run.upserted' as const,
-      sessionId,
-      toolRun,
-    })),
     ...result.userInputRequests.map(request => ({
       type: 'user_input.upserted' as const,
       sessionId,

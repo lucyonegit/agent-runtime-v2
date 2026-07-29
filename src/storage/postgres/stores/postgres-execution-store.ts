@@ -16,8 +16,8 @@ import type {
   SaveToolCallsResult,
   SaveUserInputAnswerInput,
   SaveUserInputAnswerResult,
-  StartToolRunInput,
-  StartToolRunResult,
+  StartToolCallInput,
+  StartToolCallResult,
   WaitForUserInputInput,
   WaitForUserInputResult,
 } from '../../agent-store.js';
@@ -27,7 +27,7 @@ import {
   completeTaskCommand,
   completeToolCallCommand,
   saveToolCallsCommand,
-  startToolRunCommand,
+  startToolCallCommand,
   waitForUserInputCommand,
 } from '../transaction-commands.js';
 import {
@@ -65,8 +65,8 @@ export class PostgresExecutionStore implements ExecutionStore {
     return withPostgresClient(this.pool, client => saveToolCallsCommand(client, input));
   }
 
-  async startToolRun(input: StartToolRunInput): Promise<StartToolRunResult> {
-    return withPostgresClient(this.pool, client => startToolRunCommand(client, input));
+  async startToolCall(input: StartToolCallInput): Promise<StartToolCallResult> {
+    return withPostgresClient(this.pool, client => startToolCallCommand(client, input));
   }
 
   async completeToolCall(input: CompleteToolCallInput): Promise<CompleteToolCallResult> {

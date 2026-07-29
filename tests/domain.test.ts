@@ -6,7 +6,6 @@ import {
   AGENT_TASK_RUN_TRIGGERS,
   AGENT_TASK_STATUSES,
   AGENT_TOOL_CALL_STATUSES,
-  AGENT_TOOL_RUN_STATUSES,
   AGENT_USER_INPUT_REQUEST_KINDS,
   isTerminalTaskStatus,
   resolveTaskGoalMessage,
@@ -33,9 +32,6 @@ describe('durable domain vocabulary', () => {
     expect(AGENT_TOOL_CALL_STATUSES).toEqual([
       'pending', 'running', 'waiting_for_user', 'completed', 'failed',
       'outcome_unknown', 'cancelled',
-    ]);
-    expect(AGENT_TOOL_RUN_STATUSES).toEqual([
-      'running', 'completed', 'failed', 'interrupted', 'outcome_unknown', 'cancelled',
     ]);
     expect(AGENT_USER_INPUT_REQUEST_KINDS).toEqual([
       'tool_input', 'side_effect_confirmation',

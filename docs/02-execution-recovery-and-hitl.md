@@ -1,4 +1,4 @@
-# 执行、恢复与 HITL
+# 执行、中断对账与 HITL
 
 ## 1. 首次执行
 
@@ -13,93 +13,95 @@ sequenceDiagram
     U->>M: createTask(sessionId, message)
     M->>S: 事务 1 写 HumanMessage + Task(created)
     M->>S: 事务 2 写 TaskRun(initial) + Task(running)
-    M->>E: 后台调度 taskId
-    E->>S: 校验活动 TaskRun 的执行权
+    M->>E: dispatch(taskId, taskRunId)
+    E->>S: 读取并校验活动 TaskRun
     E->>R: runTask(Task, TaskRun)
-    R->>S: 每次模型调用前构建输入
-    R->>S: 记录 Message / ToolCall / ToolRun / Checkpoint
+    R->>S: Context 为每次模型调用构建输入
+    R->>S: 记录 Message / ToolCall / Checkpoint
     R->>S: 最终回复 + TaskRun completed + Task completed + 清理 Plan
 ```
 
-创建事实与取得执行权是两个独立事务。若事务 1 已提交而事务 2 失败，客户端以同一 `clientRequestId` 重放时会解析出既有 Task，并从 `created` 状态重新尝试启动，不会重复写用户消息。首次启动不预写 `ready_for_model` Checkpoint；第一个 Checkpoint 在首个 ToolCall 批次、等待输入或 Task 终态落库时产生。
+创建事实与取得执行权是两个独立事务。若事务 1 已提交而事务 2 失败，客户端以同一 `clientRequestId` 再次提交时会解析出既有 Task；只有仍为 `created` 的 Task 才会再次尝试首次启动，不会重复写用户消息。
 
-TaskExecutor 只接收 taskId。它重新读取数据库中的 Task、活动 TaskRun 和目标 Message，避免后台闭包携带陈旧状态。
+TaskExecutor 处理一条明确的 `(taskId, taskRunId)` 命令。它重新读取数据库状态，执行租约续期，并调用 ReActExecution；它不是队列、集群调度器或进程管理器。将来扩展多进程时，由消息队列投递同一种 TaskRun 命令，消费者本身保持可复制。
 
-进程内执行按 `(taskId, taskRunId)` 判定身份：同一 TaskRun 的重复 dispatch 复用已有 completion；恢复创建了更新的 TaskRun 时，新运行立即替换旧 Map 项并用 `task_run_superseded` 中止旧 loop。旧 finally 只有在 Map 仍指向自身时才能清理，不能删除新运行。
+## 2. 租约、fence 与本地停止
 
-租约刷新不是无条件 best-effort。明确的 `TASK_OWNERSHIP_LOST` 会立即以 `ownership_lost` abort 当前 loop；暂时性存储错误只在最后一次确认的 lease 尚未到期时容忍，到期后仍无法续期也必须自我 fencing。该 abort 只提供协作式停止，外部工具仍须依赖 ToolRun/operation id 判断真实结果。
+运行中的 TaskRun 保存 `ownerId + ownershipExpiresAtMs`。所有会产生耐久副作用的关键写入，例如开始 ToolCall、提交工具结果、等待输入和完成 Task，都在事务中重新校验：
 
-## 2. Checkpoint
+1. Task 仍为 `running`。
+2. TaskRun 仍为该 Task 的活动运行。
+3. owner 与当前 Worker 一致。
+4. 租约尚未过期。
+
+续租避免活着的 Worker 被错误接管；数据库 fence 阻止失去所有权的旧 Worker 继续提交副作用。`AbortSignal` 只用于尽快停止本地模型或工具调用，不能替代数据库正确性，也不能撤销已经发生的外部副作用。
+
+明确的 `TASK_OWNERSHIP_LOST` 会立即中止本地 loop。暂时性存储错误只在最后一次确认的租约仍有效时容忍；超过租约仍无法续期时，Worker 必须自我停止。
+
+## 3. Checkpoint 的边界
 
 Checkpoint 记录 `sequenceNo/phase/callMessageId/iterationNo/executedToolCalls`。主要 phase：
 
-- `ready_for_model`：下一步调用模型。
-- `tool_batch`：一个 Assistant tool_call 消息已经持久化，工具尚未全部结束。
-- `waiting_for_user`：存在请求用户输入的 ToolCall。
-- `completed/failed/cancelled`：Task 的最终恢复边界。
+- `tool_batch`：Assistant tool-call 消息已经持久化。
+- `waiting_for_user`：Task 正在等待 HITL。
+- `ready_for_model`：HITL 回答完成，下一步重新调用模型。
+- `completed/failed/cancelled`：Task 的终态边界。
 
-Checkpoint 不复制完整消息；恢复输入从 Message、ToolCall 和 ToolRun 重建。
+Checkpoint 是 ReAct 内部的耐久游标，不是通用 Task Resume API。它不复制消息，也不能恢复进程内存或未知工具结果；Context 始终从 Message、ToolCall、Plan 和压缩记录重建模型输入。
 
-Task 进入终态时使用一个事务收口 Task、TaskRun、所有活动 ToolCall/ToolRun、待处理 UserInputRequest、ActivePlan，以及已有 TaskRun 时的终态 Checkpoint。失败或取消会把未开始/可中断工具标为 `cancelled`；有已开始证据的 `side_effecting` 工具仍标为 `outcome_unknown`。事务返回全部变化 projection，Runtime 随后按 ToolCall、ToolRun、UserInputRequest、TaskRun、Task、Plan 的完整批次发布事件。完成路径若仍存在活动子状态会拒绝提交，避免出现 Task=`completed` 但工具仍在运行的矛盾状态。
+Task 进入终态时，Store 在一个事务中收口 Task、TaskRun、活动 ToolCall、待处理 UserInputRequest、ActivePlan 和终态 Checkpoint。完成路径若仍存在活动子状态会拒绝提交，避免 Task=`completed` 但工具仍在运行。
 
-## 3. 中断发现与人工恢复
+## 4. 服务启动后的中断对账
 
-TaskExecutor 周期扫描 `running` 且 `ownershipExpiresAtMs <= now` 的 TaskRun：
+服务启动时执行一次有界扫描，不持续轮询整个数据库。扫描只把不一致事实收敛到安全状态，不自动调度新 TaskRun：
 
-1. 旧 TaskRun 标记 `interrupted` 并清空 owner。
-2. Task 标记 `recovery_required`。
-3. 前端显示“继续任务”，不会自动执行。
-4. 用户调用 Resume API。
-5. 创建 TaskRun(`manual_resume`) 并恢复 Task=`running`。
-6. 处理未完成 ToolCall 后从最新 Checkpoint 继续 ReAct。
+- 长时间停在 `created` 的 Task：标记 `failed/execution_interrupted`。
+- 租约过期的 TaskRun：标记 `interrupted` 并清空 owner。
+- 已开始的 `read_only/idempotent` ToolCall：标记 `failed/execution_interrupted`，Task 失败，不自动重跑。
+- 已开始且结果未知的 `side_effecting` ToolCall：标记 `outcome_unknown`，创建 `side_effect_confirmation`，Task 进入 `waiting_for_user`。
+- 尚未开始的兄弟 ToolCall：取消。
 
-恢复工具规则：
+只读工具的原始结果并不存在，因此系统不会伪造 ToolMessage。Context 会排除不完整的 Assistant ToolCall/ToolMessage 组。用户下一条消息是正常继续工作的唯一驱动，模型再根据当前上下文决定是否重新查询。
 
-- `read_only/idempotent`：旧 ToolRun 进入 `interrupted`，ToolCall 回到 `pending`，允许创建新 ToolRun。
-- `side_effecting`：ToolRun 与 ToolCall 进入 `outcome_unknown`，不自动重放。
-- 已完成 ToolCall：从 `resultMessageId` 读取既有 ToolMessage，不再次调用工具。
+## 5. 普通 HITL
 
-同一规则也适用于进程仍存活时的失败与取消：参数校验、工具查找等确认发生在实际调用前的失败仍记为 `failed`；`side_effecting` 工具一旦开始调用，随后异常、非零退出或取消都进入 `outcome_unknown`。该转换与 Task=`recovery_required`、TaskRun=`interrupted` 在同一事务提交，当前 ReAct 立即停止，不能继续调用模型或兄弟工具。
+`request_user_input` 产生 kind=`tool_input` 的 UserInputRequest，一个 ToolCall 最多一个 Request。
 
-## 4. Retry
-
-Retry 创建新的 Task，并设置 `retryOfTaskId`。新 Task 直接复用原始不可变 HumanMessage 的 `goalMessageId`，不会重复写一条用户消息；旧 Task、TaskRun、ToolCall、ToolRun 和 Message 保持不变。UI 只显示重试链最末端未被后续 Task 替代的失败/取消卡片。
-
-## 5. HITL
-
-`request_user_input` 是 UserInputRequest 的唯一生产者，一个 ToolCall 最多一个 Request。
-
-触发：
+触发时：
 
 1. Assistant ToolCall Message 与 ToolCall 已落库。
-2. 工具创建 Request，ToolCall=`waiting_for_user`。
+2. ToolCall=`waiting_for_user`，Request=`pending`。
 3. 当前 TaskRun=`paused`，Task=`waiting_for_user`，Checkpoint=`waiting_for_user`。
 
-回答：
+回答时：
 
-1. Request=`answered`。
-2. 回答写为 ToolMessage，并由 ToolCall.resultMessageId 关联。
-3. ToolCall=`completed`。
-4. 所有待回答 Request 都结束后创建 TaskRun(`user_input_answered`)。
-5. Task=`running`，追加 `ready_for_model` Checkpoint，继续 ReAct。
+1. 校验 Request version、`clientAnswerId` 和持久化 input schema。
+2. Request=`answered`，答案写为 ToolMessage。
+3. ToolCall=`completed` 并关联 `resultMessageId`。
+4. 最后一个 pending Request 结束后，原子创建 TaskRun(`user_input_answered`)。
+5. Task=`running`，追加 `ready_for_model` Checkpoint，再投递 TaskRun 命令。
 
-过期：
+输入过期时会写失败 ToolMessage，将 ToolCall、TaskRun 和 Task 收敛为失败，不创建新的 TaskRun，也不让模型自动继续。
 
-1. Request=`expired`。
-2. 写入错误码为 `user_input_expired` 的失败 ToolMessage。
-3. ToolCall=`failed`。
-4. 所有待回答 Request 都结束后创建 TaskRun(`input_expired`)。
-5. 模型读取失败 ToolMessage，自行决定重新询问或结束。
+## 6. 未知副作用确认
 
-输入请求不承担危险操作审批语义；未来审批应使用独立业务实体。
+`side_effect_confirmation` 只询问事实，不承诺恢复原始 ToolResult。用户有三个选项：
 
-## 6. Session 删除
+- `confirmed_succeeded`：写入“用户确认已成功”的 ToolMessage，ToolCall=`completed`，创建新的 TaskRun，让模型自行判断是否需要读取当前状态。
+- `confirmed_not_applied`：写入明确失败的 ToolMessage，ToolCall=`failed`，创建新的 TaskRun，让模型决定是否产生一个新的 ToolCall。
+- `cannot_confirm_and_stop`：ToolCall 与 Task 失败，不再执行。
 
-Session 删除是可重试的两阶段生命周期，不直接级联删库：
+确认超时与“无法确认”一样安全停止。确认消息会明确标记 `originalToolResultUnavailable=true`；如果后续操作依赖原始返回值，模型必须重新使用读取类工具获取当前事实，不能从确认结果中猜测数据。
 
-1. 在一个数据库事务中锁定 Session，将其标为 `archived` tombstone，并取消所有活动 Task 及其子执行状态。后续新的 Task、Tool、HITL、Plan、ModelCall 发起和 ContextCompaction 写入只允许 `active` Session；已经发出的模型调用只允许在 abort 收尾期间补记审计，最终随 Session 删除。
-2. 根据被 fence 的 Session 中止本进程 TaskExecutor，并在有限宽限期内等待协作式退出；若执行忽略 abort，删除返回可重试错误，数据库与工作区暂不移除。
-3. 幂等停止 Session 的 managed processes，并幂等删除整个 Session workspace。
-4. 只有以上步骤成功后，才删除 `archived` Session 并由外键级联清理数据库记录。
+这套闭环不提供同一 ToolCall 的自动重放：新的真实工具执行必须来自模型新产生的 ToolCall。
 
-任一步失败都会保留 tombstone；重复 DELETE 会重新执行进程与工作区清理，因此数据库已不存在时也不会跳过遗留 workspace。事件流只在整个删除流程成功后关闭，关闭后的迟到事件会被丢弃，不能重新创建已删除 Session 的 Subject。
+## 7. Session 删除
+
+Session 删除采用可重试的两阶段生命周期：
+
+1. 在数据库事务中将 Session 标为 `archived`，取消活动 Task，并先提交数据库 fence。
+2. fence 提交后才通过 `AbortSignal` 中止本进程执行，并等待有限宽限期。
+3. 幂等停止 managed processes、删除 Session workspace。
+4. 以上步骤成功后删除 archived Session，由外键级联清理记录。
+
+任一步失败都会保留 tombstone，重复 DELETE 可继续清理。事件流只在整个删除流程成功后关闭。

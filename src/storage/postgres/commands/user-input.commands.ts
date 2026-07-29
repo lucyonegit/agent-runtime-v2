@@ -21,13 +21,11 @@ import {
   mapAgentTaskRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
-  mapAgentToolRunRow,
   mapAgentUserInputRequestRow,
   type AgentMessageRow,
   type AgentTaskRow,
   type AgentTaskRunRow,
   type AgentToolCallRow,
-  type AgentToolRunRow,
   type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import { lockAgentSession, withPostgresTransaction } from '../sql.js';
@@ -36,7 +34,6 @@ import {
   assertFutureOwnership,
   assertTaskRunOwnership,
   requireRow,
-  selectActiveToolRun,
   selectLatestTaskCheckpoint,
   selectMessageById,
   selectTask,
@@ -76,7 +73,6 @@ export async function waitForUserInputCommand(
     assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
 
     const callRows: AgentToolCallRow[] = [];
-    const runRows: AgentToolRunRow[] = [];
     const requestRows: AgentUserInputRequestRow[] = [];
     for (const request of input.requests) {
       const call = await selectToolCall(client, input.taskId, request.modelToolCallId, true);
@@ -88,22 +84,6 @@ export async function waitForUserInputCommand(
           { taskId: task.id, modelToolCallId: call.model_tool_call_id, status: call.status }
         );
       }
-      const activeRun = await selectActiveToolRun(client, call.id, true);
-      if (!activeRun || activeRun.task_run_id !== taskRun.id) {
-        throw new AgentStoreError(
-          'INVALID_TOOL_CALL_STATE',
-          `ToolCall ${JSON.stringify(call.model_tool_call_id)} has no running ToolRun.`,
-          { taskId: task.id, taskRunId: taskRun.id, modelToolCallId: call.model_tool_call_id }
-        );
-      }
-      const runResult = await client.query<AgentToolRunRow>(
-        `update agent_tool_runs
-         set status = 'completed', ended_at_ms = $2,
-             duration_ms = greatest(0, $2 - started_at_ms)
-         where id = $1 returning *`,
-        [activeRun.id, input.nowMs]
-      );
-      runRows.push(requireRow(runResult.rows[0], 'complete input-request tool run'));
       const callResult = await client.query<AgentToolCallRow>(
         `update agent_tool_calls
          set status = 'waiting_for_user', version = version + 1, updated_at_ms = $2
@@ -177,7 +157,6 @@ export async function waitForUserInputCommand(
       taskRun: mapAgentTaskRunRow(requireRow(pausedRunResult.rows[0], 'pause task run')),
       requests: requestRows.map(mapAgentUserInputRequestRow),
       toolCalls: callRows.map(mapAgentToolCallRow),
-      toolRuns: runRows.map(mapAgentToolRunRow),
     };
   });
 }
@@ -401,7 +380,6 @@ export async function answerUserInputCommand(
         task: mapAgentTaskRow(resumedTask),
         ...(runResult.rows[0] ? { taskRun: mapAgentTaskRunRow(runResult.rows[0]) } : {}),
         toolCalls: [answeredCall, ...children.toolCalls],
-        toolRuns: children.toolRuns,
         userInputRequests: [answeredRequest, ...children.userInputRequests],
         ...(checkpoint ? { checkpoint } : {}),
         planCleared: planResult.rowCount === 1,
@@ -619,7 +597,6 @@ export async function expireUserInputCommand(
       ...(runResult.rows[0] ? { taskRun: mapAgentTaskRunRow(runResult.rows[0]) } : {}),
       toolCall: failedCall,
       toolCalls: [failedCall, ...children.toolCalls],
-      toolRuns: children.toolRuns,
       userInputRequests: [expiredRequest, ...children.userInputRequests],
       ...(checkpoint ? { checkpoint } : {}),
       planCleared: planResult.rowCount === 1,

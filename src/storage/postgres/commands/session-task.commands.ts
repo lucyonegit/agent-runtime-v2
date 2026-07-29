@@ -23,14 +23,12 @@ import {
   mapAgentTaskCheckpointRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
-  mapAgentToolRunRow,
   mapAgentUserInputRequestRow,
   type AgentMessageRow,
   type AgentSessionRow,
   type AgentTaskRow,
   type AgentTaskRunRow,
   type AgentToolCallRow,
-  type AgentToolRunRow,
   type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import { lockAgentSession, lockAgentSessionForTask, withPostgresTransaction } from '../sql.js';
@@ -286,11 +284,9 @@ export async function reconcileInterruptedTaskCommand(
     let checkpoint: ReconcileInterruptedTaskResult['checkpoint'];
     let planCleared = false;
     const toolCallRows: AgentToolCallRow[] = [];
-    const toolRunRows: AgentToolRunRow[] = [];
     const requestRows: AgentUserInputRequestRow[] = [];
     let terminalized: Awaited<ReturnType<typeof terminalizeTaskChildren>> = {
       toolCalls: [],
-      toolRuns: [],
       userInputRequests: [],
     };
 
@@ -334,13 +330,12 @@ export async function reconcileInterruptedTaskCommand(
       taskRun = requireRow(runUpdate.rows[0], 'interrupt task run');
 
       const runningCallsResult = await client.query<AgentToolCallRow>(
-        `select call.*
-         from agent_tool_calls call
-         join agent_tool_runs run on run.tool_call_id = call.id
-         where run.task_run_id = $1 and run.status = 'running'
-         order by call.id
-         for update of call`,
-        [taskRun.id]
+        `select *
+         from agent_tool_calls
+         where task_id = $1 and status = 'running'
+         order by id
+         for update`,
+        [task.id]
       );
       const unknownCallMessageIds: string[] = [];
       const unknownCalls: AgentToolCallRow[] = [];
@@ -352,22 +347,6 @@ export async function reconcileInterruptedTaskCommand(
         const errorMessage = sideEffectUnknown
           ? 'The process stopped after the side-effecting tool began; its outcome is unknown.'
           : 'The tool execution was interrupted before a result was committed.';
-        const toolRunResult = await client.query<AgentToolRunRow>(
-          `update agent_tool_runs
-           set status = $2, error_code = $3, error_message = $4, error_details = null,
-               ended_at_ms = $5,
-               duration_ms = greatest(0, $5 - started_at_ms)
-           where tool_call_id = $1 and status = 'running'
-           returning *`,
-          [
-            call.id,
-            sideEffectUnknown ? 'outcome_unknown' : 'interrupted',
-            errorCode,
-            errorMessage,
-            input.nowMs,
-          ]
-        );
-        toolRunRows.push(...toolRunResult.rows);
         const callResult = await client.query<AgentToolCallRow>(
           `update agent_tool_calls
            set status = $2, error_code = $3, error_message = $4, error_details = null,
@@ -491,10 +470,6 @@ export async function reconcileInterruptedTaskCommand(
       toolCalls: [
         ...toolCallRows.map(mapAgentToolCallRow),
         ...terminalized.toolCalls,
-      ],
-      toolRuns: [
-        ...toolRunRows.map(mapAgentToolRunRow),
-        ...terminalized.toolRuns,
       ],
       userInputRequests: [
         ...requestRows.map(mapAgentUserInputRequestRow),

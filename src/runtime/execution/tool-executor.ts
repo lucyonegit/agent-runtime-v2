@@ -3,7 +3,6 @@ import {
   type StructuredToolInterface,
 } from '@langchain/core/tools';
 import { resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import type {
   AgentToolSideEffectLevel,
 } from '../../domain/index.js';
@@ -113,12 +112,11 @@ export class ToolExecutor implements ToolExecutorPort {
   async execute(request: ToolExecutionRequest): Promise<ToolExecutionResult> {
     let startResult;
     try {
-      startResult = await this.#store.execution.startToolRun({
+      startResult = await this.#store.execution.startToolCall({
         taskId: request.target.taskId,
         taskRunId: request.target.taskRunId,
         modelToolCallId: request.call.id,
-        toolRunId: `tool_run_${randomUUID()}`,
-        workerId: this.#workerId,
+        ownerId: this.#workerId,
         nowMs: this.#clock.nowMs(),
       });
     } catch (error) {
@@ -135,13 +133,6 @@ export class ToolExecutor implements ToolExecutorPort {
       sessionId: toolCall.sessionId,
       toolCall,
     });
-    if (startResult.toolRun) {
-      await this.#publish({
-        type: 'tool_run.upserted',
-        sessionId: toolCall.sessionId,
-        toolRun: startResult.toolRun,
-      });
-    }
     const runtimeTool = this.#tools.get(request.call.name);
     if (!runtimeTool) {
       return {

@@ -53,7 +53,6 @@ function cancelledTaskFinish(): FinishTaskResult {
       completedAtMs: 1_000,
     },
     toolCalls: [],
-    toolRuns: [],
     userInputRequests: [],
     planCleared: true,
   };

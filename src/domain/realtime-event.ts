@@ -6,7 +6,6 @@ import type { AgentActivePlan } from './plan.js';
 import type { AgentTask } from './task.js';
 import type { AgentTaskRun } from './task-run.js';
 import type { AgentToolCall } from './tool-call.js';
-import type { AgentToolRun } from './tool-run.js';
 import type { AgentUserInputRequest } from './user-input-request.js';
 
 export type AgentRealtimeEvent =
@@ -36,7 +35,6 @@ export type AgentRealtimeEvent =
   | { type: 'plan.updated'; sessionId: string; plan: AgentActivePlan }
   | { type: 'plan.cleared'; sessionId: string; taskId: string }
   | { type: 'tool_call.upserted'; sessionId: string; toolCall: AgentToolCall }
-  | { type: 'tool_run.upserted'; sessionId: string; toolRun: AgentToolRun }
   | { type: 'user_input.upserted'; sessionId: string; request: AgentUserInputRequest }
   | { type: 'model_usage.updated'; sessionId: string; stats: AgentModelUsageStats }
   | { type: 'artifact.upserted'; sessionId: string; artifact: AgentArtifact }

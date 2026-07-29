@@ -50,7 +50,6 @@ export class SessionView {
       ...(snapshot.activePlan ? { activePlan: snapshot.activePlan } : {}),
       messages: projected.messages,
       toolCalls: projected.toolCalls,
-      toolRuns: snapshot.toolRuns,
       artifacts: snapshot.artifacts,
       managedProcesses,
       userInputRequests: projected.requests,

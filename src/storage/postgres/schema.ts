@@ -7,7 +7,6 @@ export const AGENT_RUNTIME_TABLES = [
   'agent_messages',
   'agent_task_checkpoints',
   'agent_tool_calls',
-  'agent_tool_runs',
   'agent_active_plans',
   'agent_artifacts',
   'agent_user_input_requests',
@@ -220,37 +219,6 @@ create index idx_agent_tool_calls_recovery
 create index idx_agent_tool_calls_session_timeline
   on agent_tool_calls(session_id, created_at_ms asc, id asc);
 
-create table agent_tool_runs (
-  id text primary key,
-  tool_call_id text not null references agent_tool_calls(id) on delete cascade,
-  task_id text not null references agent_tasks(id) on delete cascade,
-  task_run_id text not null references agent_task_runs(id) on delete cascade,
-  run_no integer not null check (run_no > 0),
-  worker_id text not null,
-  status text not null check (
-    status in ('running', 'completed', 'failed', 'interrupted', 'outcome_unknown', 'cancelled')
-  ),
-  error_code text,
-  error_message text,
-  error_details jsonb,
-  started_at_ms bigint not null,
-  ended_at_ms bigint,
-  duration_ms bigint,
-  unique (id, tool_call_id, task_id),
-  unique (tool_call_id, run_no),
-  check (
-    (status = 'running' and ended_at_ms is null)
-    or (status <> 'running' and ended_at_ms is not null)
-  )
-);
-
-create unique index uniq_agent_tool_runs_active
-  on agent_tool_runs(tool_call_id)
-  where status = 'running';
-
-create index idx_agent_tool_runs_task_timeline
-  on agent_tool_runs(task_id, started_at_ms asc, id asc);
-
 create table agent_active_plans (
   session_id text primary key references agent_sessions(id) on delete cascade,
   task_id text not null unique references agent_tasks(id) on delete cascade,
@@ -266,7 +234,6 @@ create table agent_artifacts (
   session_id text not null references agent_sessions(id) on delete cascade,
   task_id text not null references agent_tasks(id) on delete cascade,
   tool_call_id text not null references agent_tool_calls(id) on delete restrict,
-  tool_run_id text not null references agent_tool_runs(id) on delete restrict,
   result_message_id text not null references agent_messages(id) on delete restrict,
   kind text not null check (kind in ('file')),
   area text not null check (area in ('code', 'docs', 'artifacts', 'downloads')),
@@ -423,12 +390,6 @@ alter table agent_tool_calls
   add constraint fk_agent_tool_calls_result_message_task
     foreign key (result_message_id, task_id) references agent_messages(id, task_id);
 
-alter table agent_tool_runs
-  add constraint fk_agent_tool_runs_call_task
-    foreign key (tool_call_id, task_id) references agent_tool_calls(id, task_id),
-  add constraint fk_agent_tool_runs_run_task
-    foreign key (task_run_id, task_id) references agent_task_runs(id, task_id);
-
 alter table agent_active_plans
   add constraint fk_agent_active_plans_task_session
     foreign key (task_id, session_id) references agent_tasks(id, session_id);
@@ -438,9 +399,6 @@ alter table agent_artifacts
     foreign key (task_id, session_id) references agent_tasks(id, session_id),
   add constraint fk_agent_artifacts_call_task
     foreign key (tool_call_id, task_id) references agent_tool_calls(id, task_id),
-  add constraint fk_agent_artifacts_run_lineage
-    foreign key (tool_run_id, tool_call_id, task_id)
-    references agent_tool_runs(id, tool_call_id, task_id),
   add constraint fk_agent_artifacts_result_message_task
     foreign key (result_message_id, task_id) references agent_messages(id, task_id);
 

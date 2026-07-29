@@ -109,18 +109,19 @@ export class PostgresTaskStore implements TaskStore {
        limit $3`,
       [input.nowMs, input.createdBeforeMs, input.limit]
     );
-    const runningTaskRunIds = result.rows.flatMap(row => row.run_id ? [row.run_id] : []);
-    const sideEffectResult = runningTaskRunIds.length === 0
+    const runningTaskIds = result.rows
+      .filter(row => row.run_id !== null)
+      .map(row => row.id);
+    const sideEffectResult = runningTaskIds.length === 0
       ? { rows: [] as Array<{ task_id: string; id: string; tool_name: string }> }
       : await this.pool.query<{ task_id: string; id: string; tool_name: string }>(
           `select call.task_id, call.id, call.tool_name
            from agent_tool_calls call
-           join agent_tool_runs run on run.tool_call_id = call.id
-           where run.task_run_id = any($1::text[])
-             and run.status = 'running'
+           where call.task_id = any($1::text[])
+             and call.status = 'running'
              and call.side_effect_level = 'side_effecting'
            order by call.task_id, call.id`,
-          [runningTaskRunIds]
+          [runningTaskIds]
         );
     const sideEffectsByTask = new Map<
       string,

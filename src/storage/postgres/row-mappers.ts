@@ -32,8 +32,6 @@ import type {
   AgentToolCall,
   AgentToolCallStatus,
   AgentToolResult,
-  AgentToolRun,
-  AgentToolRunStatus,
   AgentToolSideEffectLevel,
   AgentUserInputRequest,
   AgentUserInputRequestKind,
@@ -146,22 +144,6 @@ export interface AgentToolCallRow {
   updated_at_ms: DbBigint;
 }
 
-export interface AgentToolRunRow {
-  id: string;
-  tool_call_id: string;
-  task_id: string;
-  task_run_id: string;
-  run_no: number;
-  worker_id: string;
-  status: string;
-  error_code: string | null;
-  error_message: string | null;
-  error_details: unknown;
-  started_at_ms: DbBigint;
-  ended_at_ms: DbBigint | null;
-  duration_ms: DbBigint | null;
-}
-
 export interface AgentActivePlanRow {
   session_id: string;
   task_id: string;
@@ -177,7 +159,6 @@ export interface AgentArtifactRow {
   session_id: string;
   task_id: string;
   tool_call_id: string;
-  tool_run_id: string;
   result_message_id: string;
   kind: string;
   area: string;
@@ -391,22 +372,6 @@ export function mapAgentToolCallRow(row: AgentToolCallRow): AgentToolCall {
   };
 }
 
-export function mapAgentToolRunRow(row: AgentToolRunRow): AgentToolRun {
-  return {
-    id: row.id,
-    toolCallId: row.tool_call_id,
-    taskId: row.task_id,
-    taskRunId: row.task_run_id,
-    runNo: row.run_no,
-    workerId: row.worker_id,
-    status: row.status as AgentToolRunStatus,
-    ...mapExecutionError(row),
-    startedAtMs: mapBigint(row.started_at_ms, 'agent_tool_runs.started_at_ms'),
-    ...mapOptionalBigint('endedAtMs', row.ended_at_ms, 'agent_tool_runs.ended_at_ms'),
-    ...mapOptionalBigint('durationMs', row.duration_ms, 'agent_tool_runs.duration_ms'),
-  };
-}
-
 export function mapAgentActivePlanRow(row: AgentActivePlanRow): AgentActivePlan {
   return {
     sessionId: row.session_id,
@@ -425,7 +390,6 @@ export function mapAgentArtifactRow(row: AgentArtifactRow): AgentArtifact {
     sessionId: row.session_id,
     taskId: row.task_id,
     toolCallId: row.tool_call_id,
-    toolRunId: row.tool_run_id,
     resultMessageId: row.result_message_id,
     kind: row.kind as AgentArtifactKind,
     area: row.area as AgentArtifactArea,

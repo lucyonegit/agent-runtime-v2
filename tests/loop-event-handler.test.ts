@@ -54,13 +54,11 @@ describe('LoopEventHandler', () => {
   it('returns waiting feedback when a side-effect outcome requires confirmation', async () => {
     const publish = vi.fn(async (_event: AgentRealtimeEvent) => undefined);
     const toolCall = { id: 'tool_call_1', sessionId: 'session_1', status: 'outcome_unknown' };
-    const toolRun = { id: 'tool_run_1', taskId: 'task_1', status: 'outcome_unknown' };
     const task = { id: 'task_1', sessionId: 'session_1', status: 'waiting_for_user' };
     const taskRun = { id: 'task_run_1', taskId: 'task_1', status: 'paused' };
     const request = { id: 'request_1', taskId: 'task_1', kind: 'side_effect_confirmation' };
     const completeToolCall = vi.fn(async () => ({
       toolCall,
-      toolRun,
       artifacts: [],
       confirmationRequired: { task, taskRun, request },
     }) as never);
@@ -94,7 +92,6 @@ describe('LoopEventHandler', () => {
     expect(feedback).toEqual({ waitingForUser: { task, requests: [request] } });
     expect(publish.mock.calls.map(([event]) => event.type)).toEqual([
       'tool_call.upserted',
-      'tool_run.upserted',
       'user_input.upserted',
       'task_run.upserted',
       'task.upserted',

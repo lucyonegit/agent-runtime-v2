@@ -63,7 +63,6 @@ describe('PostgresAgentStore converged model', () => {
       activePlan: { taskId: task.id, title: 'Snapshot' },
       messages: [{ id: 'message_goal', role: 'user' }],
       toolCalls: [],
-      toolRuns: [],
       artifacts: [],
       userInputRequests: [],
     });
@@ -79,12 +78,11 @@ describe('PostgresAgentStore converged model', () => {
       suffix: '1',
       nowMs: 21,
     });
-    await store.execution.startToolRun({
+    await store.execution.startToolCall({
       taskId: firstTask.id,
       taskRunId: firstRun.taskRun.id,
       modelToolCallId: 'model_tool_call_1',
-      toolRunId: 'tool_run_1',
-      workerId: 'worker_1',
+      ownerId: 'worker_1',
       nowMs: 22,
     });
     await store.plans.apply({
@@ -125,7 +123,6 @@ describe('PostgresAgentStore converged model', () => {
       'fk_agent_active_plans_task_session',
       'fk_agent_artifacts_call_task',
       'fk_agent_artifacts_result_message_task',
-      'fk_agent_artifacts_run_lineage',
       'fk_agent_artifacts_task_session',
       'fk_agent_checkpoints_message_task',
       'fk_agent_checkpoints_run_task',
@@ -143,8 +140,6 @@ describe('PostgresAgentStore converged model', () => {
       'fk_agent_tool_calls_result_message_task',
       'fk_agent_tool_calls_run_task',
       'fk_agent_tool_calls_task_session',
-      'fk_agent_tool_runs_call_task',
-      'fk_agent_tool_runs_run_task',
       'fk_agent_usage_latest_call_session',
     ];
     const installed = await pool.query<{ conname: string }>(
@@ -197,12 +192,6 @@ describe('PostgresAgentStore converged model', () => {
         ),
       },
       {
-        constraint: 'fk_agent_tool_runs_call_task',
-        run: () => pool.query(
-          `update agent_tool_runs set tool_call_id = 'tool_call_2' where id = 'tool_run_1'`
-        ),
-      },
-      {
         constraint: 'fk_agent_active_plans_task_session',
         run: () => pool.query(
           `update agent_active_plans set task_id = 'task_2' where session_id = 'session_1'`
@@ -221,7 +210,6 @@ describe('PostgresAgentStore converged model', () => {
     const expectedIndexes = [
       'idx_agent_artifacts_tool_result',
       'idx_agent_tool_calls_session_timeline',
-      'idx_agent_tool_runs_task_timeline',
       'idx_agent_user_input_session_timeline',
       'idx_agent_user_input_task_pending',
       'uniq_agent_user_input_client_answer',
@@ -375,7 +363,7 @@ describe('PostgresAgentStore converged model', () => {
     });
   });
 
-  it('persists Task, TaskRun, ToolCall and ToolRun while Message owns the result fact', async () => {
+  it('persists TaskRun ownership and ToolCall execution while Message owns the result fact', async () => {
     const { task } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
     const calls = await store.execution.saveToolCalls({
@@ -401,18 +389,16 @@ describe('PostgresAgentStore converged model', () => {
     });
 
     const revisionBeforeToolStart = (await store.sessions.get(task.sessionId))!.version;
-    const toolStarted = await store.execution.startToolRun({
+    const toolStarted = await store.execution.startToolCall({
       taskId: task.id,
       taskRunId: 'task_run_1',
       modelToolCallId: 'model_tool_call_1',
-      toolRunId: 'tool_run_1',
-      workerId: 'worker_1',
+      ownerId: 'worker_1',
       nowMs: 22,
     });
     expect(toolStarted).toMatchObject({
       started: true,
       toolCall: { status: 'running' },
-      toolRun: { id: 'tool_run_1', runNo: 1, status: 'running' },
     });
     await expect(store.sessions.get(task.sessionId)).resolves.toMatchObject({
       version: revisionBeforeToolStart + 1,
@@ -445,8 +431,6 @@ describe('PostgresAgentStore converged model', () => {
       id: 'message_tool_result', role: 'tool', messageType: 'tool_result',
       modelToolCallId: 'model_tool_call_1', contextScope: 'task',
     });
-    expect(completedTool.toolRun).toMatchObject({ status: 'completed', durationMs: 4 });
-
     await store.plans.apply({
       sessionId: task.sessionId,
       taskId: task.id,
@@ -472,7 +456,6 @@ describe('PostgresAgentStore converged model', () => {
       message: { role: 'assistant', channel: 'final', contextScope: 'conversation' },
       checkpoint: { phase: 'completed', executedToolCalls: 1 },
       toolCalls: [],
-      toolRuns: [],
       userInputRequests: [],
       planCleared: true,
     });
@@ -650,12 +633,11 @@ describe('PostgresAgentStore converged model', () => {
       }],
       nowMs: 11,
     });
-    await store.execution.startToolRun({
+    await store.execution.startToolCall({
       taskId: task.id,
       taskRunId: 'task_run_1',
       modelToolCallId: 'model_side_effect',
-      toolRunId: 'tool_run_side_effect',
-      workerId: 'worker_1',
+      ownerId: 'worker_1',
       nowMs: 12,
     });
 
@@ -676,7 +658,6 @@ describe('PostgresAgentStore converged model', () => {
       task: { status: 'waiting_for_user' },
       taskRun: { status: 'interrupted' },
       toolCalls: [{ status: 'outcome_unknown' }],
-      toolRuns: [{ status: 'outcome_unknown' }],
       userInputRequests: [{
         id: 'input_side_effect_confirmation',
         kind: 'side_effect_confirmation',
@@ -711,12 +692,11 @@ describe('PostgresAgentStore converged model', () => {
       suffix: 'replay_safe',
       nowMs: 11,
     });
-    await store.execution.startToolRun({
+    await store.execution.startToolCall({
       taskId: task.id,
       taskRunId: started.taskRun.id,
       modelToolCallId: 'model_tool_call_replay_safe',
-      toolRunId: 'tool_run_replay_safe',
-      workerId: 'worker_1',
+      ownerId: 'worker_1',
       nowMs: 12,
     });
     const reconciliation = await store.tasks.reconcileInterrupted({
@@ -728,7 +708,6 @@ describe('PostgresAgentStore converged model', () => {
     expect(reconciliation).toMatchObject({
       task: { status: 'failed', error: { code: 'execution_interrupted' } },
       toolCalls: [{ status: 'failed', error: { code: 'execution_interrupted' } }],
-      toolRuns: [{ status: 'interrupted' }],
       userInputRequests: [],
     });
 
@@ -744,7 +723,7 @@ describe('PostgresAgentStore converged model', () => {
     await expect(store.tasks.getRun('task_run_2')).resolves.toBeUndefined();
   });
 
-  it('requires recovery when a side-effecting tool fails after execution starts', async () => {
+  it('requires user confirmation when a side-effecting tool fails after execution starts', async () => {
     const { task } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
     await store.execution.saveToolCalls({
@@ -765,12 +744,11 @@ describe('PostgresAgentStore converged model', () => {
       }],
       nowMs: 21,
     });
-    await store.execution.startToolRun({
+    await store.execution.startToolCall({
       taskId: task.id,
       taskRunId: started.taskRun.id,
       modelToolCallId: 'model_side_effect',
-      toolRunId: 'tool_run_side_effect',
-      workerId: 'worker_1',
+      ownerId: 'worker_1',
       nowMs: 22,
     });
 
@@ -799,10 +777,6 @@ describe('PostgresAgentStore converged model', () => {
 
     expect(unknown).toMatchObject({
       toolCall: {
-        status: 'outcome_unknown',
-        error: { code: 'side_effect_outcome_unknown' },
-      },
-      toolRun: {
         status: 'outcome_unknown',
         error: { code: 'side_effect_outcome_unknown' },
       },
@@ -844,12 +818,11 @@ describe('PostgresAgentStore converged model', () => {
       }],
       nowMs: 21,
     });
-    await store.execution.startToolRun({
+    await store.execution.startToolCall({
       taskId: task.id,
       taskRunId: started.taskRun.id,
       modelToolCallId: 'model_side_effect',
-      toolRunId: 'tool_run_side_effect',
-      workerId: 'worker_1',
+      ownerId: 'worker_1',
       nowMs: 22,
     });
 
@@ -877,7 +850,6 @@ describe('PostgresAgentStore converged model', () => {
 
     expect(failed).toMatchObject({
       toolCall: { status: 'failed', error: { code: 'invalid_tool_arguments' } },
-      toolRun: { status: 'failed' },
     });
     expect(failed.confirmationRequired).toBeUndefined();
     await expect(store.tasks.get(task.id)).resolves.toMatchObject({ status: 'running' });
@@ -1019,16 +991,12 @@ describe('PostgresAgentStore converged model', () => {
       ],
       nowMs: 21,
     });
-    for (const [modelToolCallId, toolRunId] of [
-      ['model_side_effect', 'tool_run_side_effect'],
-      ['model_read', 'tool_run_read'],
-    ] as const) {
-      await store.execution.startToolRun({
+    for (const modelToolCallId of ['model_side_effect', 'model_read'] as const) {
+      await store.execution.startToolCall({
         taskId: task.id,
         taskRunId: started.taskRun.id,
         modelToolCallId,
-        toolRunId,
-        workerId: 'worker_1',
+        ownerId: 'worker_1',
         nowMs: 22,
       });
     }
@@ -1039,16 +1007,11 @@ describe('PostgresAgentStore converged model', () => {
       nowMs: 23,
     });
     const calls = await store.sessions.listToolCalls(task.sessionId);
-    const runs = await store.sessions.listToolRuns(task.sessionId);
 
     expect(calls.find(call => call.id === 'tool_call_side_effect')).toMatchObject({
       status: 'outcome_unknown', error: { code: 'side_effect_outcome_unknown' },
     });
-    expect(runs.find(run => run.id === 'tool_run_side_effect')).toMatchObject({
-      status: 'outcome_unknown', error: { code: 'side_effect_outcome_unknown' },
-    });
     expect(calls.find(call => call.id === 'tool_call_read')).toMatchObject({ status: 'cancelled' });
-    expect(runs.find(run => run.id === 'tool_run_read')).toMatchObject({ status: 'cancelled' });
     expect(cancelled).toMatchObject({
       task: { status: 'cancelled' },
       taskRun: { status: 'cancelled' },
@@ -1057,10 +1020,6 @@ describe('PostgresAgentStore converged model', () => {
       toolCalls: expect.arrayContaining([
         expect.objectContaining({ id: 'tool_call_side_effect', status: 'outcome_unknown' }),
         expect.objectContaining({ id: 'tool_call_read', status: 'cancelled' }),
-      ]),
-      toolRuns: expect.arrayContaining([
-        expect.objectContaining({ id: 'tool_run_side_effect', status: 'outcome_unknown' }),
-        expect.objectContaining({ id: 'tool_run_read', status: 'cancelled' }),
       ]),
     });
   });
@@ -1095,12 +1054,11 @@ describe('PostgresAgentStore converged model', () => {
       ],
       nowMs: 21,
     });
-    await store.execution.startToolRun({
+    await store.execution.startToolCall({
       taskId: task.id,
       taskRunId: started.taskRun.id,
       modelToolCallId: 'model_side_effect',
-      toolRunId: 'tool_run_side_effect',
-      workerId: 'worker_1',
+      ownerId: 'worker_1',
       nowMs: 22,
     });
     await store.plans.apply({
@@ -1135,10 +1093,6 @@ describe('PostgresAgentStore converged model', () => {
         expect.objectContaining({ id: 'tool_call_side_effect', status: 'outcome_unknown' }),
         expect.objectContaining({ id: 'tool_call_pending', status: 'cancelled' }),
       ]),
-      toolRuns: [expect.objectContaining({
-        id: 'tool_run_side_effect',
-        status: 'outcome_unknown',
-      })],
       userInputRequests: [],
     });
     await expect(store.plans.getActive(task.sessionId)).resolves.toBeUndefined();
@@ -1190,7 +1144,6 @@ describe('PostgresAgentStore converged model', () => {
         id: 'tool_call_input_1',
         status: 'cancelled',
       })],
-      toolRuns: [],
       userInputRequests: [expect.objectContaining({
         id: 'input_1',
         status: 'cancelled',
@@ -1224,12 +1177,11 @@ describe('PostgresAgentStore converged model', () => {
       }],
       nowMs: 21,
     });
-    await store.execution.startToolRun({
+    await store.execution.startToolCall({
       taskId: task.id,
       taskRunId: started.taskRun.id,
       modelToolCallId: 'model_delete_side_effect',
-      toolRunId: 'tool_run_delete_side_effect',
-      workerId: 'worker_1',
+      ownerId: 'worker_1',
       nowMs: 22,
     });
 
@@ -1245,7 +1197,6 @@ describe('PostgresAgentStore converged model', () => {
         taskRun: { id: started.taskRun.id, status: 'cancelled' },
         checkpoint: { phase: 'cancelled', metadata: { reason: 'session_deletion' } },
         toolCalls: [{ id: 'tool_call_delete_side_effect', status: 'outcome_unknown' }],
-        toolRuns: [{ id: 'tool_run_delete_side_effect', status: 'outcome_unknown' }],
       }],
     });
     await expect(store.sessions.get(task.sessionId)).resolves.toMatchObject({ status: 'archived' });
@@ -1328,12 +1279,11 @@ async function createRuntimeSideEffectConfirmation() {
     }],
     nowMs: 21,
   });
-  await store.execution.startToolRun({
+  await store.execution.startToolCall({
     taskId: task.id,
     taskRunId: started.taskRun.id,
     modelToolCallId: 'model_side_effect',
-    toolRunId: 'tool_run_side_effect',
-    workerId: 'worker_1',
+    ownerId: 'worker_1',
     nowMs: 22,
   });
   const completion = await store.execution.completeToolCall({
@@ -1430,12 +1380,11 @@ async function createWaitingToolCall(taskId: string, taskRunId: string, nowMs: n
     }],
     nowMs,
   });
-  await store.execution.startToolRun({
+  await store.execution.startToolCall({
     taskId,
     taskRunId,
     modelToolCallId: 'model_input_call_1',
-    toolRunId: 'tool_run_input_1',
-    workerId: 'worker_1',
+    ownerId: 'worker_1',
     nowMs: nowMs + 1,
   });
 }

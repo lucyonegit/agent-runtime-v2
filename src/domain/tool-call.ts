@@ -13,7 +13,7 @@ export const AGENT_TOOL_CALL_STATUSES = [
 export type AgentToolCallStatus = typeof AGENT_TOOL_CALL_STATUSES[number];
 export type AgentToolSideEffectLevel = 'read_only' | 'idempotent' | 'side_effecting';
 
-/** One logical tool intent emitted by a model message. Physical runs live in AgentToolRun. */
+/** One model-emitted tool intent with at most one real execution attempt. */
 export interface AgentToolCall {
   id: string;
   sessionId: string;

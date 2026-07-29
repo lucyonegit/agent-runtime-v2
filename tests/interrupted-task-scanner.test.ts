@@ -16,7 +16,6 @@ describe('InterruptedTaskScanner startup reconciliation', () => {
     const reconcileInterrupted = vi.fn(async () => ({
       task: failed,
       toolCalls: [],
-      toolRuns: [],
       userInputRequests: [],
       planCleared: false,
     }));
@@ -69,7 +68,6 @@ describe('InterruptedTaskScanner startup reconciliation', () => {
     }) => ({
       task: waiting,
       toolCalls: [],
-      toolRuns: [],
       userInputRequests: [{
         id: input.confirmationRequests[0]!.requestId,
         kind: 'side_effect_confirmation',
@@ -111,7 +109,6 @@ describe('InterruptedTaskScanner startup reconciliation', () => {
       taskRun: { id: 'task_run_1' },
       toolCall: { id: 'tool_call_1' },
       toolCalls: [{ id: 'tool_call_1' }],
-      toolRuns: [],
       userInputRequests: [{ id: 'input_1' }],
       planCleared: false,
     }));
