@@ -10,9 +10,9 @@ import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool, type StructuredToolInterface } from '@langchain/core/tools';
 import {
   AgentLoop as RuntimeAgentLoop,
+  type AgentLoopCheckpoint,
   type AgentLoopInput,
   type AgentLoopOptions,
-  type AgentLoopResumeState,
   type ToolExecutorPort,
 } from '../src/runtime/loop/agent-loop.js';
 import { LOOP_EVENT_TYPES, type LoopEvent } from '../src/runtime/loop/loop-events.js';
@@ -240,24 +240,22 @@ describe('AgentLoop with LangChain messages', () => {
     expect(executed).toEqual(['call_1', 'call_2']);
   });
 
-  it('resumes pending checkpoint tools before making the next model call', async () => {
+  it('continues Task-wide checkpoint counters without executing beyond the tool budget', async () => {
     const order: string[] = [];
+    const execute = vi.fn<ToolExecutorPort['execute']>(async () => ({
+      type: 'completed', content: 'must not execute',
+    }));
     const loop = new AgentLoop({
       streaming: false,
       model: invokeModel(() => {
         order.push('model');
-        return chunk('continued from checkpoint');
+        return toolChunk([{ id: 'call_after_hitl', name: 'lookup', args: {} }]);
       }),
     });
     const run = await consume(loop.run(loopInput({
-      resume: {
+      checkpoint: {
         iterationNo: 3,
         executedToolCalls: 4,
-        pendingToolCalls: [{
-          id: 'call_resume_5',
-          name: 'lookup',
-          args: { q: 'checkpoint' },
-        }],
       },
       context: {
         loadMessages: async iteration => {
@@ -265,22 +263,21 @@ describe('AgentLoop with LangChain messages', () => {
           return [];
         },
       },
-      tools: {
-        executor: {
-          execute: async ({ call }) => {
-            order.push(`tool:${call.id}`);
-            return { type: 'completed', content: 'recovered result' };
-          },
-        },
-      },
+      tools: { executor: { execute } },
+      limits: { maxIterations: 8, maxToolCalls: 4 },
     })));
 
-    expect(order).toEqual(['tool:call_resume_5', 'context:3', 'model']);
+    expect(order).toEqual(['context:3', 'model']);
+    expect(execute).not.toHaveBeenCalled();
     expect(run.events.map(event => event.type)).toEqual([
-      LOOP_EVENT_TYPES.ToolResultCompleted,
       LOOP_EVENT_TYPES.ModelOutputCompleted,
     ]);
-    expect(run.result).toMatchObject({ type: 'completed', content: 'continued from checkpoint' });
+    expect(run.result).toEqual({
+      type: 'failed',
+      code: 'max_tool_calls',
+      message: 'Tool-call limit 4 would be exceeded.',
+      details: { executedToolCalls: 4, requestedToolCalls: 1 },
+    });
   });
 
   it('uses AIMessageChunk.concat to assemble streamed tool calls', async () => {
@@ -634,12 +631,12 @@ function toolChunk(toolCalls: Array<{ id?: string; name: string; args: Record<st
 }
 
 type AgentLoopInputOverrides = Partial<
-  Omit<AgentLoopInput, 'context' | 'tools' | 'policy' | 'resume'>
+  Omit<AgentLoopInput, 'context' | 'tools' | 'policy' | 'checkpoint'>
 > & {
   context?: Partial<AgentLoopInput['context']>;
   tools?: Partial<AgentLoopInput['tools']>;
   policy?: AgentLoopInput['policy'];
-  resume?: Partial<AgentLoopResumeState>;
+  checkpoint?: Partial<AgentLoopCheckpoint>;
 };
 
 function loopInput(overrides: AgentLoopInputOverrides = {}): AgentLoopInput {
@@ -647,7 +644,7 @@ function loopInput(overrides: AgentLoopInputOverrides = {}): AgentLoopInput {
     context,
     tools,
     policy,
-    resume,
+    checkpoint,
     ...topLevel
   } = overrides;
   const defaultExecutor: ToolExecutorPort = {
@@ -669,12 +666,11 @@ function loopInput(overrides: AgentLoopInputOverrides = {}): AgentLoopInput {
     limits: { maxIterations: 8, maxToolCalls: 16 },
     ...topLevel,
     ...(policy ? { policy } : {}),
-    ...(resume ? {
-      resume: {
+    ...(checkpoint ? {
+      checkpoint: {
         iterationNo: 0,
         executedToolCalls: 0,
-        pendingToolCalls: [],
-        ...resume,
+        ...checkpoint,
       },
     } : {}),
   };

@@ -47,7 +47,7 @@ Checkpoint 记录 `sequenceNo/phase/callMessageId/iterationNo/executedToolCalls`
 - `ready_for_model`：HITL 回答完成，下一步重新调用模型。
 - `completed/failed/cancelled`：Task 的终态边界。
 
-Checkpoint 是 ReAct 内部的耐久游标，不是通用 Task Resume API。它不复制消息，也不能恢复进程内存或未知工具结果；Context 始终从 Message、ToolCall、Plan 和压缩记录重建模型输入。
+Checkpoint 是 ReAct 内部的耐久游标，不是通用 Task Resume API。它不复制消息，也不能恢复进程内存或未知工具结果；Context 始终从 Message、ToolCall、Plan 和压缩记录重建模型输入。HITL 创建新 TaskRun 后只延续 `iterationNo/executedToolCalls` 配额计数，不从 Checkpoint 重放待执行 ToolCall。
 
 Task 进入终态时，Store 在一个事务中收口 Task、TaskRun、活动 ToolCall、待处理 UserInputRequest、ActivePlan 和终态 Checkpoint。完成路径若仍存在活动子状态会拒绝提交，避免 Task=`completed` 但工具仍在运行。
 

@@ -69,7 +69,7 @@ export class AnswerUserInputFlow {
       if (!result.taskRun) {
         throw new RuntimeError(
           'storage_error',
-          'User input resume committed without a TaskRun.'
+          'User input continuation committed without a TaskRun.'
         );
       }
       this.execution.dispatch({ taskId: result.task.id, taskRunId: result.taskRun.id });

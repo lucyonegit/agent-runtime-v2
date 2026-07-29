@@ -47,10 +47,9 @@ export interface AgentLoopPolicy {
   validateToolCalls?: ToolCallsValidator;
 }
 
-export interface AgentLoopResumeState {
+export interface AgentLoopCheckpoint {
   iterationNo: number;
   executedToolCalls: number;
-  pendingToolCalls: AgentMessageToolCall[];
 }
 
 export interface AgentLoopInput {
@@ -59,7 +58,7 @@ export interface AgentLoopInput {
   tools: AgentLoopToolRuntime;
   policy?: AgentLoopPolicy;
   limits: AgentLoopLimits;
-  resume?: AgentLoopResumeState;
+  checkpoint?: AgentLoopCheckpoint;
 }
 
 export type ToolCallsValidation =
@@ -154,39 +153,10 @@ export class AgentLoop {
     assertLimits(input.limits);
     let correctionMessages: BaseMessage[] = [];
     const definitions = new Map(input.tools.definitions.map(tool => [tool.name, tool]));
-    let executedToolCalls = input.resume?.executedToolCalls ?? 0;
-
-    if (input.resume?.pendingToolCalls.length) {
-      const inputRequests: Extract<ToolOutcome, { type: 'input' }>[] = [];
-      for (const call of input.resume.pendingToolCalls) {
-        const preflight = this.#terminalPreflight(input.limits);
-        if (preflight) return preflight;
-        let outcome: ToolOutcome;
-        try {
-          outcome = await this.#executeTool(input, call, definitions.get(call.name));
-        } catch (error) {
-          if (input.limits.signal?.aborted || isAbortError(error)) {
-            return cancelledResult(input.limits.signal);
-          }
-          throw error;
-        }
-        if (outcome.type === 'input') {
-          inputRequests.push(outcome);
-          continue;
-        }
-        yield outcome.event;
-      }
-      for (const outcome of inputRequests) yield outcome.event;
-      if (inputRequests.length > 0) {
-        return {
-          type: 'waiting_for_user',
-          modelToolCallIds: inputRequests.map(outcome => outcome.call.id),
-        };
-      }
-    }
+    let executedToolCalls = input.checkpoint?.executedToolCalls ?? 0;
 
     for (
-      let iteration = input.resume?.iterationNo ?? 0;
+      let iteration = input.checkpoint?.iterationNo ?? 0;
       iteration < input.limits.maxIterations;
       iteration += 1
     ) {

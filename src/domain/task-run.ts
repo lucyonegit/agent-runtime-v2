@@ -18,7 +18,7 @@ export const AGENT_TASK_RUN_STATUSES = [
 
 export type AgentTaskRunStatus = typeof AGENT_TASK_RUN_STATUSES[number];
 
-/** One physical ownership window for a Task. Every resume creates a new row. */
+/** One physical ownership window for a Task. Every HITL continuation creates a new row. */
 export interface AgentTaskRun {
   id: string;
   taskId: string;

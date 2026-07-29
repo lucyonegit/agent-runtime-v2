@@ -8,7 +8,6 @@ import { AgentLoop } from '../loop/agent-loop.js';
 import { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';
 import { ToolCallPolicy } from './policies/tool-call-policy.js';
-import { TaskRunResumeLoader } from './recovery/task-run-resume-loader.js';
 import { ToolExecutor, type RuntimeTool } from './tool-executor.js';
 import type { ReActTaskExecutionResult } from './types/react-execution.types.js';
 
@@ -30,11 +29,9 @@ export interface ReActExecutionOptions {
 /** Runs one physical TaskRun through the single durable ReAct loop. */
 export class ReActExecution {
   readonly #toolCallPolicy: ToolCallPolicy;
-  readonly #resume: TaskRunResumeLoader;
 
   constructor(private readonly options: ReActExecutionOptions) {
     this.#toolCallPolicy = new ToolCallPolicy(options.tools);
-    this.#resume = new TaskRunResumeLoader(options.store);
   }
 
   async runTask(input: {
@@ -47,7 +44,7 @@ export class ReActExecution {
       input.taskRun,
       { signal: input.signal }
     );
-    const resume = await this.#resume.load(input.task);
+    const latestCheckpoint = await this.options.store.execution.getLatestCheckpoint(input.task.id);
     const toolExecutor = new ToolExecutor({
       store: this.options.store,
       workerId: this.options.workerId,
@@ -103,7 +100,12 @@ export class ReActExecution {
             deadlineMs: input.taskRun.startedAtMs + this.options.executionDeadlineMs,
             signal: input.signal,
           },
-          ...(resume ? { resume } : {}),
+          ...(latestCheckpoint ? {
+            checkpoint: {
+              iterationNo: latestCheckpoint.iterationNo,
+              executedToolCalls: latestCheckpoint.executedToolCalls,
+            },
+          } : {}),
         },
       },
     });
