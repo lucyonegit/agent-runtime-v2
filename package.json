@@ -22,9 +22,9 @@
   "dependencies": {
     "@langchain/core": "^1.2.1",
     "@langchain/openai": "^1.5.3",
-    "@nestjs/common": "^11.1.27",
-    "@nestjs/core": "^11.1.27",
-    "@nestjs/platform-fastify": "^11.1.27",
+    "@nestjs/common": "^11.1.28",
+    "@nestjs/core": "^11.1.28",
+    "@nestjs/platform-fastify": "^11.1.28",
     "dotenv": "^17.4.2",
     "ipaddr.js": "2.4.0",
     "pg": "^8.22.0",
@@ -38,5 +38,8 @@
     "ts-node": "^10.9.2",
     "typescript": "~5.9.3",
     "vitest": "^4.1.8"
+  },
+  "overrides": {
+    "find-my-way": "9.7.0"
   }
 }
