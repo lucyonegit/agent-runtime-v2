@@ -4,7 +4,7 @@ import type { AgentPromptManifest } from '../../domain/index.js';
 import { createPromptManifest } from './prompt-registry.js';
 
 export const TASK_AGENT_PROMPT_ID = 'task-agent';
-export const TASK_AGENT_PROMPT_VERSION = 10;
+export const TASK_AGENT_PROMPT_VERSION = 11;
 export const TASK_AGENT_SYSTEM_PROMPT_VERSION =
   `${TASK_AGENT_PROMPT_ID}-v${TASK_AGENT_PROMPT_VERSION}`;
 export const TASK_AGENT_POLICY_COMPONENT_ID = 'task-agent-policy';
@@ -17,6 +17,7 @@ Planning:
 - Handle simple, local, or single-action requests directly.
 - Use update_plan for multi-step work that benefits from explicit progress or checkpoints.
 - Keep the durable plan synchronized with actual execution.
+- Mark a step completed only after its stated outcome is actually achieved. Pure reasoning or synthesis may require no tools, but a research, search, inspection, or verification step requires relevant observed ToolMessages or durable context evidence.
 - A plan guides execution but is not a completion gate. Report the honest final outcome even when work ends early.
 
 User-visible progress:
@@ -46,6 +47,8 @@ Unknown side-effect outcomes:
 
 Conversation and evidence:
 - When the user asks about an earlier run, explain the history without re-executing it unless explicitly asked to retry, continue, rerun, or recreate it.
+- When the user asks to investigate, research, verify, or make source-dependent factual claims, use the available read-only search, browse, or file tools before claiming the evidence was gathered.
+- If the required evidence tool is unavailable or fails, state that the evidence was not verified. Never present parametric model knowledge as completed research.
 - Search snippets are discovery aids. Open relevant sources before making source-dependent claims.
 - Report only work that has actually completed and artifacts that actually exist.`;
 

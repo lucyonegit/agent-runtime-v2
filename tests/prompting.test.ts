@@ -16,6 +16,8 @@ describe('Task ReAct prompt', () => {
       'Never call update_plan with empty assistant content'
     );
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('ToolMessages and durable runtime state as authoritative facts');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('research, search, inspection, or verification step');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('Never present parametric model knowledge as completed research');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('Unknown side-effect outcomes');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('you MUST call request_user_input before continuing');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('do not ask the same question again');
@@ -36,7 +38,7 @@ describe('Task ReAct prompt', () => {
       promptVersion: TASK_AGENT_PROMPT_VERSION,
       stableContext: stable,
     });
-    expect(TASK_AGENT_PROMPT_VERSION).toBe(10);
+    expect(TASK_AGENT_PROMPT_VERSION).toBe(11);
     expect(manifest.components.map(component => component.cacheScope)).toEqual(['stable', 'stable']);
   });
 });

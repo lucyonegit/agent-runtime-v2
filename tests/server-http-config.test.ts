@@ -30,7 +30,11 @@ describe('Agent HTTP CORS configuration', () => {
     expect(DEFAULT_SERVER_CONFIG.cors.allowedHeaders).toContain('content-type');
     expect(DEFAULT_SERVER_CONFIG.bodyLimitBytes).toBe(1_048_576);
     expect(DEFAULT_SERVER_CONFIG.debugEndpointsEnabled).toBe(false);
-    expect(DEFAULT_SERVER_CONFIG.toolCapabilities).toEqual(['artifacts', 'filesystem']);
+    expect(DEFAULT_SERVER_CONFIG.toolCapabilities).toEqual([
+      'artifacts',
+      'filesystem',
+      'browser',
+    ]);
   });
 
   it('does not register Debug Context routes unless explicitly enabled', () => {
@@ -41,7 +45,7 @@ describe('Agent HTTP CORS configuration', () => {
     ]);
   });
 
-  it('keeps host tools and their process endpoints out of HTTP by default', () => {
+  it('keeps host process tools out of HTTP and permits public-web reads by default', () => {
     const config = loadRuntimeConfig({ env: { DATABASE_URL: 'postgres://runtime' } });
     const restricted = restrictHttpToolCapabilities(config);
 
@@ -57,7 +61,7 @@ describe('Agent HTTP CORS configuration', () => {
       filesystem: true,
       shell: false,
       managedProcesses: false,
-      browser: false,
+      browser: true,
     });
     expect(httpModule(false, false).controllers).not.toContain(
       AgentManagedProcessController
