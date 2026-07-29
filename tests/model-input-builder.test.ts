@@ -4,6 +4,50 @@ import { ModelInputBuilder } from '../src/runtime/context/model-input-builder.js
 import type { AgentStore } from '../src/storage/agent-store.js';
 
 describe('ModelInputBuilder', () => {
+  it('owns the lazy model messages and matching audit manifest for one TaskRun', async () => {
+    const loadInputSnapshot = vi.fn(async () => ({
+      messages: [message({
+        rowId: 1,
+        id: 'goal',
+        role: 'user',
+        messageType: 'user_message',
+        content: 'current goal',
+      })],
+    }));
+    const builder = new ModelInputBuilder({
+      store: {
+        context: { loadInputSnapshot },
+      } as unknown as AgentStore,
+      systemPrompt: 'system policy',
+      systemPromptVersion: 'task-agent-v1',
+      promptId: 'task-agent',
+      promptVersion: 1,
+      inputTokenLimit: 100_000,
+      reservedOutputTokens: 4_096,
+      contextConfig: {
+        keepRecentInputTokens: 8_000,
+        maxToolResultTokens: 1_000,
+        summaryMaxTokens: 1_000,
+      },
+      toolSchemas: [],
+      getStableContext: async () => 'stable environment',
+    });
+
+    const prepared = builder.prepareTaskRunContext(task(), taskRun());
+
+    expect(loadInputSnapshot).not.toHaveBeenCalled();
+    expect(() => prepared.manifest()).toThrow('before Context has loaded its messages');
+
+    const messages = await prepared.loadMessages();
+
+    expect(messages.map(item => item.getType())).toEqual(['system', 'system', 'human']);
+    expect(prepared.manifest()).toMatchObject({
+      purpose: 'task.react',
+      messageGroupIds: ['goal'],
+    });
+    expect(loadInputSnapshot).toHaveBeenCalledOnce();
+  });
+
   it('builds one ReAct context from conversation messages plus current-Task messages', async () => {
     const messages: AgentMessage[] = [
       message({ rowId: 1, id: 'old_user', taskId: 'task_old', role: 'user', messageType: 'user_message' }),

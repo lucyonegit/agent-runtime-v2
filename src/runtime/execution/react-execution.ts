@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentTask, AgentTaskRun } from '../../domain/index.js';
-import type { ModelInput } from '../context/types/model-input.types.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import type { ModelInputBuilder } from '../context/model-input-builder.js';
 import { LoopEventHandler } from '../events/loop-event-handler.js';
@@ -9,13 +8,13 @@ import { AgentLoop } from '../loop/agent-loop.js';
 import { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';
 import { ToolCallPolicy } from './policies/tool-call-policy.js';
-import { PendingToolCallLoader } from './recovery/pending-tool-call-loader.js';
+import { TaskRunResumeLoader } from './recovery/task-run-resume-loader.js';
 import { ToolExecutor, type RuntimeTool } from './tool-executor.js';
 import type { ReActTaskExecutionResult } from './types/react-execution.types.js';
 
 export interface ReActExecutionOptions {
   store: AgentStore;
-  context: Pick<ModelInputBuilder, 'buildForTask'>;
+  context: Pick<ModelInputBuilder, 'prepareTaskRunContext'>;
   workerId: string;
   publisher: RuntimeEventPublisher;
   modelFactory: AuditedModelFactory;
@@ -31,11 +30,11 @@ export interface ReActExecutionOptions {
 /** Runs one physical TaskRun through the single durable ReAct loop. */
 export class ReActExecution {
   readonly #toolCallPolicy: ToolCallPolicy;
-  readonly #pendingToolCalls: PendingToolCallLoader;
+  readonly #resume: TaskRunResumeLoader;
 
   constructor(private readonly options: ReActExecutionOptions) {
     this.#toolCallPolicy = new ToolCallPolicy(options.tools);
-    this.#pendingToolCalls = new PendingToolCallLoader(options.store);
+    this.#resume = new TaskRunResumeLoader(options.store);
   }
 
   async runTask(input: {
@@ -43,9 +42,12 @@ export class ReActExecution {
     taskRun: AgentTaskRun;
     signal?: AbortSignal;
   }): Promise<ReActTaskExecutionResult> {
-    const checkpoint = await this.options.store.execution.getLatestCheckpoint(input.task.id);
-    const pendingToolCalls = await this.#pendingToolCalls.load(input.task, checkpoint?.callMessageId);
-    let currentInput: ModelInput | undefined;
+    const context = this.options.context.prepareTaskRunContext(
+      input.task,
+      input.taskRun,
+      { signal: input.signal }
+    );
+    const resume = await this.#resume.load(input.task);
     const toolExecutor = new ToolExecutor({
       store: this.options.store,
       workerId: this.options.workerId,
@@ -55,21 +57,13 @@ export class ReActExecution {
       clock: this.options.clock,
     });
     const tools = toolExecutor.tools();
-    const resume = checkpoint ? {
-      iterationNo: checkpoint.iterationNo,
-      executedToolCalls: checkpoint.executedToolCalls,
-      pendingToolCalls,
-    } : undefined;
 
     return executeDurableAgentLoop({
       loop: new AgentLoop({
         model: this.options.modelFactory.create({
           task: input.task,
           taskRun: input.taskRun,
-          manifest: () => {
-            if (!currentInput) throw new Error('Model input is unavailable before tool recovery completes.');
-            return currentInput.inputManifest;
-          },
+          manifest: context.manifest,
           callType: 'task.react',
           logicalCallKey: 'task.react',
           tools,
@@ -92,16 +86,7 @@ export class ReActExecution {
         task: input.task,
         taskRun: input.taskRun,
         loopInput: {
-          context: {
-            loadMessages: async () => {
-              currentInput = await this.options.context.buildForTask(
-                input.task,
-                input.taskRun,
-                { signal: input.signal }
-              );
-              return currentInput.messages;
-            },
-          },
+          context: { loadMessages: context.loadMessages },
           tools: {
             definitions: tools,
             executor: toolExecutor,

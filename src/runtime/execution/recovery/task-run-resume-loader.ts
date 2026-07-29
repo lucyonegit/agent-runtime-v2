@@ -1,11 +1,22 @@
 import type { AgentTask } from '../../../domain/index.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
+import type { AgentLoopResumeState } from '../../loop/agent-loop.js';
 
-/** Rebuilds only the unfinished tool batch referenced by the durable checkpoint. */
-export class PendingToolCallLoader {
+/** Rebuilds the exact AgentLoop continuation described by the latest durable checkpoint. */
+export class TaskRunResumeLoader {
   constructor(private readonly store: AgentStore) {}
 
-  async load(task: AgentTask, callMessageId?: string) {
+  async load(task: AgentTask): Promise<AgentLoopResumeState | undefined> {
+    const checkpoint = await this.store.execution.getLatestCheckpoint(task.id);
+    if (!checkpoint) return undefined;
+    return {
+      iterationNo: checkpoint.iterationNo,
+      executedToolCalls: checkpoint.executedToolCalls,
+      pendingToolCalls: await this.#loadPendingToolCalls(task, checkpoint.callMessageId),
+    };
+  }
+
+  async #loadPendingToolCalls(task: AgentTask, callMessageId?: string) {
     if (!callMessageId) return [];
     const [messages, toolCalls] = await Promise.all([
       this.store.sessions.listMessages(task.sessionId),

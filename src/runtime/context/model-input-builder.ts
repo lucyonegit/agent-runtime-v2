@@ -40,6 +40,11 @@ export interface ModelInputBuilderOptions {
   modelFactory?: AuditedModelFactory;
 }
 
+export interface PreparedTaskRunContext {
+  loadMessages(): Promise<BaseMessage[]>;
+  manifest(): AgentContextInputManifest;
+}
+
 /** The single production entry point for building LangChain model input. */
 export class ModelInputBuilder {
   readonly #compactor?: MessageCompactor;
@@ -54,6 +59,27 @@ export class ModelInputBuilder {
         inputTokenLimit: options.inputTokenLimit,
       });
     }
+  }
+
+  /** Keeps per-run model input and its audit manifest behind one Context API. */
+  prepareTaskRunContext(
+    task: AgentTask,
+    taskRun: AgentTaskRun,
+    options: { signal?: AbortSignal } = {}
+  ): PreparedTaskRunContext {
+    let current: ModelInput | undefined;
+    return {
+      loadMessages: async () => {
+        current = await this.buildForTask(task, taskRun, options);
+        return current.messages;
+      },
+      manifest: () => {
+        if (!current) {
+          throw new Error('Model input is unavailable before Context has loaded its messages.');
+        }
+        return current.inputManifest;
+      },
+    };
   }
 
   async buildForTask(
