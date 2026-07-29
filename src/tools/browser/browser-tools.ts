@@ -1,6 +1,9 @@
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import type { LookupAddress } from 'node:dns';
+import { isIP, type LookupFunction } from 'node:net';
 import { DynamicStructuredTool } from '@langchain/core/tools';
+import ipaddr from 'ipaddr.js';
+import { Agent } from 'undici';
 import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
@@ -60,28 +63,33 @@ export function createBrowserTools(
           numberArgument(values, 'maxLength', browserConfig.defaultContentCharacters)
         )
       );
-      const response = await safeFetch(url, browserConfig);
-      if (!response.ok) throw new Error(`Fetch failed with status ${response.status}.`);
-      const mediaType = response.headers.get('content-type')
-        ?.split(';', 1)[0]
-        ?.trim()
-        .toLowerCase();
-      if (!mediaType || !isTextMediaType(mediaType)) {
-        throw new Error(
-          `Unsupported content type ${JSON.stringify(mediaType ?? 'unknown')} for browse_url. `
-          + 'Use a dedicated file or PDF tool instead.'
+      const fetched = await safeFetch(url, browserConfig);
+      try {
+        const response = fetched.response;
+        if (!response.ok) throw new Error(`Fetch failed with status ${response.status}.`);
+        const mediaType = response.headers.get('content-type')
+          ?.split(';', 1)[0]
+          ?.trim()
+          .toLowerCase();
+        if (!mediaType || !isTextMediaType(mediaType)) {
+          throw new Error(
+            `Unsupported content type ${JSON.stringify(mediaType ?? 'unknown')} for browse_url. `
+            + 'Use a dedicated file or PDF tool instead.'
+          );
+        }
+        const html = await readBoundedResponseText(
+          response,
+          browserConfig.maximumResponseBytes
         );
+        return jsonToolOutput({
+          success: true,
+          url: response.url,
+          title: extractTitle(html),
+          content: extractText(html).slice(0, maxLength),
+        });
+      } finally {
+        await fetched.release();
       }
-      const html = await readBoundedResponseText(
-        response,
-        browserConfig.maximumResponseBytes
-      );
-      return jsonToolOutput({
-        success: true,
-        url: response.url,
-        title: extractTitle(html),
-        content: extractText(html).slice(0, maxLength),
-      });
     },
   });
 
@@ -98,18 +106,23 @@ export function createBrowserTools(
     func: async input => {
       const query = stringArgument(input as Record<string, unknown>, 'query').trim();
       if (!query) throw new Error('Search query is required.');
-      const response = await safeFetch(
+      const fetched = await safeFetch(
         `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
         browserConfig
       );
-      if (!response.ok) throw new Error(`Search failed with status ${response.status}.`);
-      const html = await readBoundedResponseText(
-        response,
-        browserConfig.maximumResponseBytes
-      );
-      const results = extractDuckDuckGoResults(html)
-        .slice(0, browserConfig.searchResultLimit);
-      return jsonToolOutput({ query, resultsCount: results.length, results });
+      try {
+        const response = fetched.response;
+        if (!response.ok) throw new Error(`Search failed with status ${response.status}.`);
+        const html = await readBoundedResponseText(
+          response,
+          browserConfig.maximumResponseBytes
+        );
+        const results = extractDuckDuckGoResults(html)
+          .slice(0, browserConfig.searchResultLimit);
+        return jsonToolOutput({ query, resultsCount: results.length, results });
+      } finally {
+        await fetched.release();
+      }
     },
   });
 
@@ -122,25 +135,42 @@ export function createBrowserTools(
 async function safeFetch(
   input: string,
   config: BrowserToolConfig
-): Promise<Response> {
+): Promise<{ response: Response; release(): Promise<void> }> {
+  const agent = new Agent({
+    connect: { lookup: createPublicLookup(config.allowProxyFakeIps) },
+  });
   let url = new URL(input);
-  for (let redirect = 0; redirect <= config.maximumRedirects; redirect += 1) {
-    await assertPublicUrl(url, config.allowProxyFakeIps);
-    const response = await fetch(url, {
-      headers: defaultHeaders,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(config.requestTimeoutMs),
-    });
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-    const location = response.headers.get('location');
-    if (!location) {
+  try {
+    for (let redirect = 0; redirect <= config.maximumRedirects; redirect += 1) {
+      assertPublicUrl(url);
+      const response = await fetch(url, {
+        headers: defaultHeaders,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(config.requestTimeoutMs),
+        dispatcher: agent,
+      } as RequestInit & { dispatcher: Agent });
+      if (![301, 302, 303, 307, 308].includes(response.status)) {
+        return {
+          response,
+          release: async () => {
+            await cancelResponseBody(response);
+            await agent.close();
+          },
+        };
+      }
+      const location = response.headers.get('location');
+      if (!location) {
+        await cancelResponseBody(response);
+        throw new Error('Redirect response is missing a location header.');
+      }
       await cancelResponseBody(response);
-      throw new Error('Redirect response is missing a location header.');
+      url = new URL(location, url);
     }
-    await cancelResponseBody(response);
-    url = new URL(location, url);
+    throw new Error('Too many redirects.');
+  } catch (error) {
+    await agent.destroy().catch(() => undefined);
+    throw findNetworkPolicyError(error) ?? error;
   }
-  throw new Error('Too many redirects.');
 }
 
 export async function readBoundedResponseText(
@@ -190,43 +220,99 @@ function responseTooLarge(maximumBytes: number): Error {
   return new Error(`Browser response exceeds the configured ${maximumBytes} byte limit.`);
 }
 
-async function assertPublicUrl(url: URL, allowProxyFakeIps: boolean): Promise<void> {
+function assertPublicUrl(url: URL): void {
   if (!['http:', 'https:'].includes(url.protocol)) {
     throw new Error('Only HTTP and HTTPS URLs are supported.');
   }
   if (url.username || url.password) throw new Error('URL credentials are not allowed.');
-  const hostname = url.hostname.toLowerCase();
+  const hostname = normalizeIpHostname(url.hostname.toLowerCase());
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
     throw new Error('Local network URLs are not allowed.');
   }
   const hostnameIsIp = isIP(hostname) !== 0;
-  const addresses = hostnameIsIp
-    ? [{ address: hostname }]
-    : await lookup(hostname, { all: true, verbatim: true });
-  const allowProxyFakeIp = !hostnameIsIp && allowProxyFakeIps;
-  if (addresses.length === 0
-    || addresses.some(item => isPrivateAddress(item.address, allowProxyFakeIp))) {
-    throw new Error('Private or unresolved network addresses are not allowed.');
+  if (hostnameIsIp && isPrivateAddress(hostname, false)) {
+    throw new BrowserNetworkPolicyError();
   }
 }
 
-export function isPrivateAddress(address: string, allowProxyFakeIp = false): boolean {
-  const normalized = address.toLowerCase();
-  if (normalized.includes(':')) {
-    return normalized === '::' || normalized === '::1'
-      || normalized.startsWith('fc') || normalized.startsWith('fd')
-      || /^fe[89ab]/.test(normalized)
-      || normalized.startsWith('::ffff:') && isPrivateAddress(normalized.slice(7));
+type BrowserDnsResolver = (hostname: string) => Promise<LookupAddress[]>;
+
+/** Validates exactly the DNS answers that Node's connector will use. */
+export function createPublicLookup(
+  allowProxyFakeIps: boolean,
+  resolveAddresses: BrowserDnsResolver = hostname => (
+    lookup(hostname, { all: true, verbatim: true })
+  )
+): LookupFunction {
+  return (hostname, options, callback) => {
+    void (async () => {
+      const normalizedHostname = normalizeIpHostname(hostname);
+      const hostnameIsIp = isIP(normalizedHostname) !== 0;
+      const addresses = hostnameIsIp
+        ? [{ address: normalizedHostname, family: isIP(normalizedHostname) }]
+        : await resolveAddresses(hostname);
+      const allowProxyFakeIp = !hostnameIsIp && allowProxyFakeIps;
+      if (addresses.length === 0
+        || addresses.some(item => isPrivateAddress(item.address, allowProxyFakeIp))) {
+        throw new BrowserNetworkPolicyError();
+      }
+      const requestedFamily = options.family === 4 || options.family === 'IPv4'
+        ? 4
+        : options.family === 6 || options.family === 'IPv6'
+          ? 6
+          : 0;
+      const eligible = requestedFamily === 0
+        ? addresses
+        : addresses.filter(address => address.family === requestedFamily);
+      if (eligible.length === 0) throw new BrowserNetworkPolicyError();
+      if (options.all) callback(null, eligible);
+      else callback(null, eligible[0]!.address, eligible[0]!.family);
+    })().catch(error => callback(error as NodeJS.ErrnoException, ''));
+  };
+}
+
+class BrowserNetworkPolicyError extends Error {
+  constructor() {
+    super('Private or unresolved network addresses are not allowed.');
+    this.name = 'BrowserNetworkPolicyError';
   }
-  const parts = normalized.split('.').map(Number);
-  const [a, b] = parts;
-  return parts.length !== 4 || a === 0 || a === 10 || a === 127
-    || a === 169 && b === 254
-    || a === 172 && b! >= 16 && b! <= 31
-    || a === 192 && b === 168
-    || a === 100 && b! >= 64 && b! <= 127
-    || !allowProxyFakeIp && a === 198 && (b === 18 || b === 19)
-    || a! >= 224;
+}
+
+function findNetworkPolicyError(error: unknown): BrowserNetworkPolicyError | undefined {
+  let current = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (current instanceof BrowserNetworkPolicyError) return current;
+    if (!current || typeof current !== 'object' || !('cause' in current)) return undefined;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+export function isPrivateAddress(address: string, allowProxyFakeIp = false): boolean {
+  let parsed: ipaddr.IPv4 | ipaddr.IPv6;
+  try {
+    parsed = ipaddr.parse(normalizeIpHostname(address));
+  } catch {
+    return true;
+  }
+  if (parsed.kind() === 'ipv6') {
+    const ipv6 = parsed as ipaddr.IPv6;
+    if (ipv6.isIPv4MappedAddress()) {
+      return isPrivateAddress(ipv6.toIPv4Address().toString(), allowProxyFakeIp);
+    }
+  }
+  if (allowProxyFakeIp && parsed.kind() === 'ipv4') {
+    const octets = parsed.toByteArray();
+    if (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19)) return false;
+  }
+  return parsed.range() !== 'unicast';
+}
+
+function normalizeIpHostname(hostname: string): string {
+  const normalized = hostname.toLowerCase();
+  return normalized.startsWith('[') && normalized.endsWith(']')
+    ? normalized.slice(1, -1)
+    : normalized;
 }
 
 export function isTextMediaType(mediaType: string): boolean {

@@ -10,7 +10,11 @@ import type {
   RuntimeToolContext,
   RuntimeUserInputArtifact,
 } from '../src/runtime/execution/tool-executor.js';
-import { isPrivateAddress, isTextMediaType } from '../src/tools/browser/browser-tools.js';
+import {
+  createPublicLookup,
+  isPrivateAddress,
+  isTextMediaType,
+} from '../src/tools/browser/browser-tools.js';
 import {
   FILE_WRITE_MAX_CHARACTERS,
   FILE_WRITE_MAX_ESTIMATED_TOKENS,
@@ -498,12 +502,19 @@ describe('LangChain runtime tools', () => {
     }
     await expect(invoke('browse_url', { url: 'http://127.0.0.1:3000/private' }))
       .rejects.toThrow('Private or unresolved network addresses');
+    await expect(invoke('browse_url', { url: 'http://[::1]:3000/private' }))
+      .rejects.toThrow('Private or unresolved network addresses');
   });
 
   it('allows proxy fake DNS addresses only through the explicit hostname path', async () => {
     expect(isPrivateAddress('198.18.2.210')).toBe(true);
     expect(isPrivateAddress('198.18.2.210', true)).toBe(false);
     expect(isPrivateAddress('127.0.0.1', true)).toBe(true);
+    expect(isPrivateAddress('[::1]')).toBe(true);
+    expect(isPrivateAddress('::ffff:127.0.0.1')).toBe(true);
+    expect(isPrivateAddress('ff02::1')).toBe(true);
+    expect(isPrivateAddress('2001:db8::1')).toBe(true);
+    expect(isPrivateAddress('2606:4700:4700::1111')).toBe(false);
     const previous = process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS;
     process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS = 'true';
     try {
@@ -513,6 +524,36 @@ describe('LangChain runtime tools', () => {
       if (previous === undefined) delete process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS;
       else process.env.AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS = previous;
     }
+  });
+
+  it('rejects mixed public/private DNS answers in the connector lookup', async () => {
+    const secureLookup = createPublicLookup(false, async () => [
+      { address: '93.184.216.34', family: 4 },
+      { address: '127.0.0.1', family: 4 },
+    ]);
+    const error = await new Promise<unknown>(resolve => {
+      secureLookup('example.com', { all: true }, candidate => resolve(candidate));
+    });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message: 'Private or unresolved network addresses are not allowed.',
+    });
+  });
+
+  it('routes hostname fetches through the validated connector lookup', async () => {
+    const request = vi.fn(async (_url: URL, init?: RequestInit & { dispatcher?: unknown }) => {
+      expect(init?.dispatcher).toBeDefined();
+      return new Response('<title>Safe</title><p>public content</p>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    });
+    vi.stubGlobal('fetch', request);
+
+    await expect(invoke('browse_url', { url: 'https://example.com/' }))
+      .resolves.toMatchObject({ title: 'Safe', content: 'Safe public content' });
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it('rejects PDF responses before decoding the binary body', async () => {
