@@ -68,6 +68,161 @@ describe('PostgresAgentStore converged model', () => {
     });
   });
 
+  it('rejects cross-session, cross-task and cross-run lineage at the database boundary', async () => {
+    const { task: firstTask } = await createTask();
+    const firstRun = await startRun(firstTask.id, firstTask.version, 'task_run_1', 'initial', 20);
+    await createPendingToolCall({
+      sessionId: firstTask.sessionId,
+      taskId: firstTask.id,
+      taskRunId: firstRun.taskRun.id,
+      suffix: '1',
+      nowMs: 21,
+    });
+    await store.execution.startToolRun({
+      taskId: firstTask.id,
+      taskRunId: firstRun.taskRun.id,
+      modelToolCallId: 'model_tool_call_1',
+      toolRunId: 'tool_run_1',
+      workerId: 'worker_1',
+      nowMs: 22,
+    });
+    await store.plans.apply({
+      sessionId: firstTask.sessionId,
+      taskId: firstTask.id,
+      taskRunId: firstRun.taskRun.id,
+      ownerId: 'worker_1',
+      title: 'First plan',
+      steps: [{ step: 'Inspect', status: 'in_progress' }],
+      nowMs: 23,
+    });
+
+    await store.sessions.create({ id: 'session_2', title: 'Second', nowMs: 100 });
+    const { task: secondTask } = await store.tasks.createWithUserMessage({
+      sessionId: 'session_2',
+      taskId: 'task_2',
+      userMessageId: 'message_goal_2',
+      content: 'Inspect another session.',
+      clientRequestId: 'request_2',
+      nowMs: 101,
+    });
+    const secondRun = await startRun(
+      secondTask.id,
+      secondTask.version,
+      'task_run_2',
+      'initial',
+      102
+    );
+    await createPendingToolCall({
+      sessionId: secondTask.sessionId,
+      taskId: secondTask.id,
+      taskRunId: secondRun.taskRun.id,
+      suffix: '2',
+      nowMs: 103,
+    });
+
+    const expectedConstraints = [
+      'fk_agent_active_plans_task_session',
+      'fk_agent_artifacts_call_task',
+      'fk_agent_artifacts_result_message_task',
+      'fk_agent_artifacts_run_lineage',
+      'fk_agent_artifacts_task_session',
+      'fk_agent_checkpoints_message_task',
+      'fk_agent_checkpoints_run_task',
+      'fk_agent_checkpoints_task_session',
+      'fk_agent_compactions_message_session',
+      'fk_agent_input_requests_answer_message_task',
+      'fk_agent_input_requests_call_task',
+      'fk_agent_input_requests_task_session',
+      'fk_agent_messages_run_task',
+      'fk_agent_messages_task_session',
+      'fk_agent_model_calls_run_task',
+      'fk_agent_model_calls_task_session',
+      'fk_agent_tasks_goal_message',
+      'fk_agent_tasks_retry_session',
+      'fk_agent_tool_calls_call_message_task',
+      'fk_agent_tool_calls_result_message_task',
+      'fk_agent_tool_calls_run_task',
+      'fk_agent_tool_calls_task_session',
+      'fk_agent_tool_runs_call_task',
+      'fk_agent_tool_runs_run_task',
+      'fk_agent_usage_latest_call_session',
+    ];
+    const installed = await pool.query<{ conname: string }>(
+      `select conname from pg_constraint
+       where conname = any($1::text[])
+       order by conname`,
+      [expectedConstraints]
+    );
+    expect(installed.rows.map(row => row.conname)).toEqual(expectedConstraints);
+
+    const violations = [
+      {
+        constraint: 'fk_agent_tasks_retry_session',
+        run: () => pool.query(
+          `update agent_tasks set retry_of_task_id = 'task_2' where id = 'task_1'`
+        ),
+      },
+      {
+        constraint: 'fk_agent_tasks_goal_message',
+        run: () => pool.query(
+          `update agent_tasks set goal_message_id = 'message_goal_2' where id = 'task_1'`
+        ),
+      },
+      {
+        constraint: 'fk_agent_messages_task_session',
+        run: () => pool.query(
+          `update agent_messages set session_id = 'session_2' where id = 'message_call_1'`
+        ),
+      },
+      {
+        constraint: 'fk_agent_messages_run_task',
+        run: () => pool.query(
+          `update agent_messages set task_run_id = 'task_run_2' where id = 'message_call_1'`
+        ),
+      },
+      {
+        constraint: 'fk_agent_checkpoints_task_session',
+        run: () => pool.query(
+          `update agent_task_checkpoints set session_id = 'session_2' where task_id = 'task_1'`
+        ),
+      },
+      {
+        constraint: 'fk_agent_tool_calls_run_task',
+        run: () => pool.query(
+          `update agent_tool_calls
+           set created_in_task_run_id = 'task_run_2'
+           where id = 'tool_call_1'`
+        ),
+      },
+      {
+        constraint: 'fk_agent_tool_calls_call_message_task',
+        run: () => pool.query(
+          `update agent_tool_calls
+           set call_message_id = 'message_call_2'
+           where id = 'tool_call_1'`
+        ),
+      },
+      {
+        constraint: 'fk_agent_tool_runs_call_task',
+        run: () => pool.query(
+          `update agent_tool_runs set tool_call_id = 'tool_call_2' where id = 'tool_run_1'`
+        ),
+      },
+      {
+        constraint: 'fk_agent_active_plans_task_session',
+        run: () => pool.query(
+          `update agent_active_plans set task_id = 'task_2' where session_id = 'session_1'`
+        ),
+      },
+    ];
+    for (const violation of violations) {
+      await expect(violation.run()).rejects.toMatchObject({
+        code: '23503',
+        constraint: violation.constraint,
+      });
+    }
+  });
+
   it('loads all durable model-input sources through one context snapshot', async () => {
     const { task: firstTask } = await createTask();
     const firstRun = await startRun(firstTask.id, firstTask.version, 'task_run_1', 'initial', 20);
@@ -945,6 +1100,38 @@ async function createTask() {
     content: 'Inspect the code.',
     clientRequestId: 'request_1',
     nowMs: 2,
+  });
+}
+
+async function createPendingToolCall(input: {
+  sessionId: string;
+  taskId: string;
+  taskRunId: string;
+  suffix: string;
+  nowMs: number;
+}) {
+  return store.execution.saveToolCalls({
+    sessionId: input.sessionId,
+    taskId: input.taskId,
+    taskRunId: input.taskRunId,
+    ownerId: 'worker_1',
+    outputId: `output_tool_call_${input.suffix}`,
+    messageId: `message_call_${input.suffix}`,
+    content: '',
+    contextScope: 'task',
+    toolCalls: [{
+      id: `tool_call_${input.suffix}`,
+      call: {
+        id: `model_tool_call_${input.suffix}`,
+        name: 'read_file',
+        args: { path: `code/${input.suffix}.ts` },
+        type: 'tool_call',
+      },
+      argumentsChecksum: `checksum_${input.suffix}`,
+      sideEffectLevel: 'read_only',
+      idempotencyKey: `idempotency_${input.suffix}`,
+    }],
+    nowMs: input.nowMs,
   });
 }
 

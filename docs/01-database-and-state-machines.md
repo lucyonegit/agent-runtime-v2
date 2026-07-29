@@ -38,6 +38,8 @@ erDiagram
 | `agent_model_calls` | `unique(task_run_id, logical_call_key)` | 模型输入输出审计 |
 | `agent_model_usage_stats` | `session_id` 主键 | 聚合 Token 用量 |
 
+重复保存父级 ID 的表使用组合外键校验完整归属链：Task 必须属于同一 Session，TaskRun、Message、ToolCall、ToolRun 必须属于同一 Task，Artifact 还必须匹配实际 ToolRun 与 ToolCall。Retry Task 可以复用同一 Session 内原 Task 的 goal message，但不能跨 Session 引用；这些约束作为命令层校验之外的数据库最终防线。
+
 ## 3. Task 状态机
 
 ```mermaid
@@ -86,4 +88,3 @@ stateDiagram-v2
 ```
 
 每次从 `pending` 开始执行会插入 ToolRun(`running`)；随后 ToolRun 和 ToolCall 一起进入对应终态。`completed/failed` 的 ToolCall 必须关联 ToolMessage；`outcome_unknown` 表示外部副作用可能已发生但没有可信结果，必须人工处理。
-

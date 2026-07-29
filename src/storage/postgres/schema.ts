@@ -30,7 +30,7 @@ create table agent_tasks (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
   goal_message_id text not null,
-  retry_of_task_id text references agent_tasks(id) on delete set null,
+  retry_of_task_id text,
   client_request_id text,
   status text not null check (
     status in (
@@ -47,6 +47,10 @@ create table agent_tasks (
   updated_at_ms bigint not null,
   started_at_ms bigint,
   completed_at_ms bigint,
+  unique (id, session_id),
+  constraint fk_agent_tasks_retry_session
+    foreign key (retry_of_task_id, session_id) references agent_tasks(id, session_id)
+    on delete set null (retry_of_task_id),
   check (
     (status in ('completed', 'failed', 'cancelled') and completed_at_ms is not null)
     or status not in ('completed', 'failed', 'cancelled')
@@ -83,6 +87,7 @@ create table agent_task_runs (
   started_at_ms bigint not null,
   updated_at_ms bigint not null,
   ended_at_ms bigint,
+  unique (id, task_id),
   unique (task_id, run_no),
   check (
     (status = 'running' and owner_id is not null and ownership_expires_at_ms is not null
@@ -126,13 +131,16 @@ create table agent_messages (
   tool_result jsonb,
   metadata jsonb,
   created_at_ms bigint not null,
+  unique (id, session_id),
+  unique (id, task_id),
+  unique (row_id, session_id),
   check (tool_calls is null or jsonb_typeof(tool_calls) = 'array'),
   check (tool_result is null or jsonb_typeof(tool_result) = 'object')
 );
 
 alter table agent_tasks
   add constraint fk_agent_tasks_goal_message
-  foreign key (goal_message_id) references agent_messages(id)
+  foreign key (goal_message_id, session_id) references agent_messages(id, session_id)
   deferrable initially deferred;
 
 create unique index uniq_agent_messages_task_output
@@ -199,6 +207,7 @@ create table agent_tool_calls (
   started_at_ms bigint,
   completed_at_ms bigint,
   updated_at_ms bigint not null,
+  unique (id, task_id),
   unique (task_id, model_tool_call_id),
   unique (task_id, idempotency_key),
   check (
@@ -228,6 +237,7 @@ create table agent_tool_runs (
   started_at_ms bigint not null,
   ended_at_ms bigint,
   duration_ms bigint,
+  unique (id, tool_call_id, task_id),
   unique (tool_call_id, run_no),
   check (
     (status = 'running' and ended_at_ms is null)
@@ -347,6 +357,7 @@ create table agent_model_calls (
   metadata jsonb,
   created_at_ms bigint not null,
   completed_at_ms bigint,
+  unique (id, session_id),
   unique (task_run_id, logical_call_key)
 );
 
@@ -370,6 +381,74 @@ create table agent_model_usage_stats (
   version integer not null default 0,
   updated_at_ms bigint not null
 );
+
+alter table agent_messages
+  add constraint fk_agent_messages_task_session
+    foreign key (task_id, session_id) references agent_tasks(id, session_id),
+  add constraint fk_agent_messages_run_task
+    foreign key (task_run_id, task_id) references agent_task_runs(id, task_id);
+
+alter table agent_task_checkpoints
+  add constraint fk_agent_checkpoints_task_session
+    foreign key (task_id, session_id) references agent_tasks(id, session_id),
+  add constraint fk_agent_checkpoints_run_task
+    foreign key (task_run_id, task_id) references agent_task_runs(id, task_id),
+  add constraint fk_agent_checkpoints_message_task
+    foreign key (call_message_id, task_id) references agent_messages(id, task_id);
+
+alter table agent_tool_calls
+  add constraint fk_agent_tool_calls_task_session
+    foreign key (task_id, session_id) references agent_tasks(id, session_id),
+  add constraint fk_agent_tool_calls_run_task
+    foreign key (created_in_task_run_id, task_id) references agent_task_runs(id, task_id),
+  add constraint fk_agent_tool_calls_call_message_task
+    foreign key (call_message_id, task_id) references agent_messages(id, task_id),
+  add constraint fk_agent_tool_calls_result_message_task
+    foreign key (result_message_id, task_id) references agent_messages(id, task_id);
+
+alter table agent_tool_runs
+  add constraint fk_agent_tool_runs_call_task
+    foreign key (tool_call_id, task_id) references agent_tool_calls(id, task_id),
+  add constraint fk_agent_tool_runs_run_task
+    foreign key (task_run_id, task_id) references agent_task_runs(id, task_id);
+
+alter table agent_active_plans
+  add constraint fk_agent_active_plans_task_session
+    foreign key (task_id, session_id) references agent_tasks(id, session_id);
+
+alter table agent_artifacts
+  add constraint fk_agent_artifacts_task_session
+    foreign key (task_id, session_id) references agent_tasks(id, session_id),
+  add constraint fk_agent_artifacts_call_task
+    foreign key (tool_call_id, task_id) references agent_tool_calls(id, task_id),
+  add constraint fk_agent_artifacts_run_lineage
+    foreign key (tool_run_id, tool_call_id, task_id)
+    references agent_tool_runs(id, tool_call_id, task_id),
+  add constraint fk_agent_artifacts_result_message_task
+    foreign key (result_message_id, task_id) references agent_messages(id, task_id);
+
+alter table agent_user_input_requests
+  add constraint fk_agent_input_requests_task_session
+    foreign key (task_id, session_id) references agent_tasks(id, session_id),
+  add constraint fk_agent_input_requests_call_task
+    foreign key (tool_call_id, task_id) references agent_tool_calls(id, task_id),
+  add constraint fk_agent_input_requests_answer_message_task
+    foreign key (answer_message_id, task_id) references agent_messages(id, task_id);
+
+alter table agent_context_compactions
+  add constraint fk_agent_compactions_message_session
+    foreign key (through_message_row_id, session_id)
+    references agent_messages(row_id, session_id);
+
+alter table agent_model_calls
+  add constraint fk_agent_model_calls_task_session
+    foreign key (task_id, session_id) references agent_tasks(id, session_id),
+  add constraint fk_agent_model_calls_run_task
+    foreign key (task_run_id, task_id) references agent_task_runs(id, task_id);
+
+alter table agent_model_usage_stats
+  add constraint fk_agent_usage_latest_call_session
+    foreign key (latest_model_call_id, session_id) references agent_model_calls(id, session_id);
 `;
 
 export async function createAgentRuntimeSchema(client: PoolClient): Promise<void> {
