@@ -16,6 +16,10 @@ describe('Task ReAct prompt', () => {
       'Never call update_plan with empty assistant content'
     );
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('ToolMessages and durable runtime state as authoritative facts');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('Unknown side-effect outcomes');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('you MUST call request_user_input before continuing');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('do not ask the same question again');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('not a recovered ToolResult');
   });
 
   it('keeps the cacheable environment prefix stable and versioned', () => {
@@ -32,7 +36,7 @@ describe('Task ReAct prompt', () => {
       promptVersion: TASK_AGENT_PROMPT_VERSION,
       stableContext: stable,
     });
-    expect(TASK_AGENT_PROMPT_VERSION).toBe(9);
+    expect(TASK_AGENT_PROMPT_VERSION).toBe(10);
     expect(manifest.components.map(component => component.cacheScope)).toEqual(['stable', 'stable']);
   });
 });

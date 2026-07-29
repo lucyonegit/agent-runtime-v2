@@ -12,7 +12,10 @@ import { stringArgument } from '../helpers/tool-input.helper.js';
 export function createHitlTools(): RuntimeTool[] {
   const requestUserInput = new DynamicStructuredTool({
     name: 'request_user_input',
-    description: 'Pause execution and ask the user for text, single-choice, or multi-choice input.',
+    description: [
+      'Pause execution and ask the user for text, single-choice, or multi-choice input.',
+      'You MUST use this tool before continuing when the current request depends on or may repeat an outcome_unknown side effect that cannot be resolved from authoritative read-only state or the user\'s latest message.',
+    ].join(' '),
     schema: {
       type: 'object',
       properties: {

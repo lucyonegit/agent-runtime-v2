@@ -204,7 +204,9 @@ describe('ModelInputBuilder', () => {
     ]);
     expect(text).toContain('"status":"outcome_unknown"');
     expect(text).toContain('"toolName":"send_email"');
-    expect(text).toContain('call request_user_input if human confirmation is needed');
+    expect(text).toContain('you MUST call request_user_input before continuing');
+    expect(text).toContain('do not ask the same question again');
+    expect(text).toContain('not as a recovered ToolResult');
     expect(input.includedMessageIds).toEqual(['goal']);
   });
 

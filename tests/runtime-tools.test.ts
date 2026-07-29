@@ -74,6 +74,9 @@ describe('LangChain runtime tools', () => {
       ]);
     expect(tools.filter(item => item.exclusive).map(item => item.tool.name))
       .toEqual(['start_file_write', 'append_file_chunk', 'run_shell']);
+    const requestUserInput = tools.find(item => item.tool.name === 'request_user_input');
+    expect(requestUserInput?.tool.description).toContain('outcome_unknown');
+    expect(requestUserInput?.tool.description).toContain('MUST use this tool before continuing');
   });
 
   it('runs basic tools through LangChain ToolCall and returns ToolMessage artifacts', async () => {

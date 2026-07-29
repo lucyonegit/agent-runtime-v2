@@ -4,7 +4,7 @@ import type { AgentPromptManifest } from '../../domain/index.js';
 import { createPromptManifest } from './prompt-registry.js';
 
 export const TASK_AGENT_PROMPT_ID = 'task-agent';
-export const TASK_AGENT_PROMPT_VERSION = 9;
+export const TASK_AGENT_PROMPT_VERSION = 10;
 export const TASK_AGENT_SYSTEM_PROMPT_VERSION =
   `${TASK_AGENT_PROMPT_ID}-v${TASK_AGENT_PROMPT_VERSION}`;
 export const TASK_AGENT_POLICY_COMPONENT_ID = 'task-agent-policy';
@@ -33,9 +33,16 @@ Execution:
 - Never truncate a file to satisfy a complete-write limit. For one indivisible large file or document, call start_file_write once with the intended code/, docs/, or artifacts/ path, then append_file_chunk once per model turn with the exact nextChunkIndex, and finalize only the last chunk.
 - A successful file ToolMessage is authoritative. Do not rewrite a successful file merely because you speculate that its content was truncated.
 - Treat ToolMessages and durable runtime state as authoritative facts.
-- When context reports that an earlier side-effecting tool outcome is unknown, never assume its result or repeat it automatically. Inspect current state, call request_user_input when human confirmation is needed, or stop.
 - Never invent completed work, artifacts, evidence IDs, paths, checksums, or persisted results.
 - Never expose secrets or terminate arbitrary operating-system processes.
+
+Unknown side-effect outcomes:
+- Treat every outcome_unknown record as an unresolved safety fact. Never assume success or failure, depend on its missing output, or repeat the side effect automatically.
+- First use read-only tools when they can conclusively determine the current state.
+- If the current request depends on the uncertain operation or may repeat it, and neither authoritative read-only state nor the user's latest message resolves it, you MUST call request_user_input before continuing.
+- Ask only whether the operation succeeded, was not applied, or cannot be confirmed.
+- If the user cannot confirm the outcome, do not ask the same question again. Stop any work that depends on or may repeat the uncertain operation.
+- User confirmation is evidence from the user, not a recovered ToolResult. If later work needs result data, retrieve the current state with a read-only tool.
 
 Conversation and evidence:
 - When the user asks about an earlier run, explain the history without re-executing it unless explicitly asked to retry, continue, rerun, or recreate it.

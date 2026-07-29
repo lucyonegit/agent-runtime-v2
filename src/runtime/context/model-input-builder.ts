@@ -292,7 +292,10 @@ function formatOutcomeUnknownContext(
       originalToolResultUnavailable: true,
     }))),
     'Do not assume whether any listed operation succeeded or failed, and do not automatically repeat it.',
-    'Based on the current user request, inspect current state with safe tools, call request_user_input if human confirmation is needed, or stop.',
+    'Resolve each listed fact with authoritative read-only state when possible.',
+    "If the current request depends on an unresolved operation or may repeat it, and the user's latest message does not explicitly resolve it, you MUST call request_user_input before continuing.",
+    'If the user cannot confirm the outcome, do not ask the same question again. Stop any work that depends on or may repeat the operation.',
+    'Treat the user answer as evidence, not as a recovered ToolResult. Retrieve any required result data from current state with a read-only tool.',
   ].join('\n');
 }
 
