@@ -8,9 +8,11 @@ import {
   mapAgentActivePlanRow,
   mapAgentContextCompactionRow,
   mapAgentMessageRow,
+  mapAgentToolCallRow,
   type AgentActivePlanRow,
   type AgentContextCompactionRow,
   type AgentMessageRow,
+  type AgentToolCallRow,
 } from '../row-mappers.js';
 import { withPostgresReadSnapshot } from '../sql.js';
 
@@ -67,8 +69,15 @@ export function loadContextInputSnapshotQuery(
       `select * from agent_active_plans where session_id = $1`,
       [input.sessionId]
     );
+    const outcomeUnknownResult = await client.query<AgentToolCallRow>(
+      `select * from agent_tool_calls
+       where session_id = $1 and status = 'outcome_unknown'
+       order by created_at_ms, id`,
+      [input.sessionId]
+    );
     return {
       messages: messageResult.rows.map(mapAgentMessageRow),
+      outcomeUnknownToolCalls: outcomeUnknownResult.rows.map(mapAgentToolCallRow),
       ...(planResult.rows[0] ? { activePlan: mapAgentActivePlanRow(planResult.rows[0]) } : {}),
       ...(compaction ? { compaction } : {}),
     };

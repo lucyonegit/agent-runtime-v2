@@ -167,12 +167,18 @@ export class ModelInputBuilder {
       this.options.contextConfig.maxToolResultTokens,
       projectedToolResultMessageIds
     ));
+    const outcomeUnknownContext = formatOutcomeUnknownContext(
+      snapshot.outcomeUnknownToolCalls ?? []
+    );
 
     const messages: BaseMessage[] = [
       new SystemMessage(this.options.systemPrompt),
       new SystemMessage(stableContext),
       ...(snapshot.compaction
         ? [new SystemMessage(`Earlier conversation summary:\n${snapshot.compaction.summary}`)]
+        : []),
+      ...(outcomeUnknownContext
+        ? [new SystemMessage(outcomeUnknownContext)]
         : []),
       ...projectedGroups.flatMap(group => group.messages.map(toLangChainMessage)),
       ...(snapshot.activePlan?.taskId === task.id ? [new SystemMessage(
@@ -192,6 +198,7 @@ export class ModelInputBuilder {
       compactionSummary: snapshot.compaction?.summary,
       estimatedTokens,
       stableContext,
+      outcomeUnknownContext,
       excludedToolCallMessageIds: projection.excludedToolCallMessageIds,
       projectedToolResultMessageIds,
     });
@@ -218,11 +225,13 @@ export class ModelInputBuilder {
     compactionSummary?: string;
     estimatedTokens: number;
     stableContext: string;
+    outcomeUnknownContext: string | undefined;
     excludedToolCallMessageIds: string[];
     projectedToolResultMessageIds: string[];
   }): AgentContextInputManifest {
     const systemTokens = estimateTextTokens(this.options.systemPrompt)
-      + estimateTextTokens(input.stableContext);
+      + estimateTextTokens(input.stableContext)
+      + estimateTextTokens(input.outcomeUnknownContext ?? '');
     const summaryTokens = estimateTextTokens(input.compactionSummary ?? '');
     const toolTokens = estimateTextTokens(stableStringify(this.options.toolSchemas.map(toolSchemaProjection)));
     const messageTokens = Math.max(
@@ -265,6 +274,26 @@ export class ModelInputBuilder {
       },
     };
   }
+}
+
+function formatOutcomeUnknownContext(
+  toolCalls: AgentContextSnapshot['outcomeUnknownToolCalls']
+): string | undefined {
+  if (toolCalls.length === 0) return undefined;
+  return [
+    'Authoritative facts about earlier side-effecting tool executions with unavailable results:',
+    stableStringify(toolCalls.map(toolCall => ({
+      taskId: toolCall.taskId,
+      toolCallId: toolCall.id,
+      toolName: toolCall.toolName,
+      arguments: toolCall.arguments,
+      status: 'outcome_unknown',
+      executionStarted: true,
+      originalToolResultUnavailable: true,
+    }))),
+    'Do not assume whether any listed operation succeeded or failed, and do not automatically repeat it.',
+    'Based on the current user request, inspect current state with safe tools, call request_user_input if human confirmation is needed, or stop.',
+  ].join('\n');
 }
 
 const MAX_COMPACTION_PASSES_PER_BUILD = 8;

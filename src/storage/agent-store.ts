@@ -423,6 +423,7 @@ export interface AgentSessionSnapshot {
 
 export interface AgentContextSnapshot {
   messages: AgentMessage[];
+  outcomeUnknownToolCalls: AgentToolCall[];
   activePlan?: AgentActivePlan;
   compaction?: AgentContextCompaction;
 }

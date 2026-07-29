@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentMessage, AgentTask, AgentTaskRun } from '../src/domain/index.js';
+import type { AgentMessage, AgentTask, AgentTaskRun, AgentToolCall } from '../src/domain/index.js';
 import { ModelInputBuilder } from '../src/runtime/context/model-input-builder.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
@@ -161,6 +161,53 @@ describe('ModelInputBuilder', () => {
     });
   });
 
+  it('projects unknown side-effect outcomes as authoritative context without creating HITL', async () => {
+    const loadInputSnapshot = vi.fn(async () => ({
+      messages: [message({
+        rowId: 1,
+        id: 'goal',
+        role: 'user',
+        messageType: 'user_message',
+        content: 'continue',
+      })],
+      outcomeUnknownToolCalls: [toolCall({
+        id: 'tool_call_unknown',
+        taskId: 'task_previous',
+        modelToolCallId: 'model_tool_call_unknown',
+        toolName: 'send_email',
+        arguments: { recipient: 'person@example.com' },
+        status: 'outcome_unknown',
+      })],
+    }));
+    const builder = new ModelInputBuilder({
+      store: { context: { loadInputSnapshot } } as unknown as AgentStore,
+      systemPrompt: 'system policy',
+      systemPromptVersion: 'task-agent-v1',
+      promptId: 'task-agent',
+      promptVersion: 1,
+      inputTokenLimit: 100_000,
+      reservedOutputTokens: 4_096,
+      contextConfig: {
+        keepRecentInputTokens: 8_000,
+        maxToolResultTokens: 1_000,
+        summaryMaxTokens: 1_000,
+      },
+      toolSchemas: [],
+      getStableContext: async () => 'stable environment',
+    });
+
+    const input = await builder.buildForTask(task(), taskRun());
+    const text = input.messages.map(item => item.text).join('\n');
+
+    expect(input.messages.map(item => item.getType())).toEqual([
+      'system', 'system', 'system', 'human',
+    ]);
+    expect(text).toContain('"status":"outcome_unknown"');
+    expect(text).toContain('"toolName":"send_email"');
+    expect(text).toContain('call request_user_input if human confirmation is needed');
+    expect(input.includedMessageIds).toEqual(['goal']);
+  });
+
   it('counts assistant tool-call arguments in the model input budget', async () => {
     const messages: AgentMessage[] = [
       message({
@@ -240,6 +287,27 @@ function taskRun(): AgentTaskRun {
     ownershipExpiresAtMs: 1_000,
     startedAtMs: 1,
     updatedAtMs: 1,
+  };
+}
+
+function toolCall(overrides: Partial<AgentToolCall> & Pick<AgentToolCall, 'id'>): AgentToolCall {
+  return {
+    sessionId: 'session_1',
+    taskId: 'task_current',
+    createdInTaskRunId: 'task_run_previous',
+    callMessageId: 'message_tool_call',
+    modelToolCallId: 'model_tool_call',
+    toolName: 'read_file',
+    arguments: {},
+    argumentsChecksum: 'checksum',
+    sideEffectLevel: 'side_effecting',
+    idempotencyKey: 'idempotency_key',
+    status: 'outcome_unknown',
+    version: 1,
+    createdAtMs: 1,
+    startedAtMs: 2,
+    updatedAtMs: 3,
+    ...overrides,
   };
 }
 

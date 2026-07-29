@@ -4,7 +4,7 @@ import type { AgentPromptManifest } from '../../domain/index.js';
 import { createPromptManifest } from './prompt-registry.js';
 
 export const TASK_AGENT_PROMPT_ID = 'task-agent';
-export const TASK_AGENT_PROMPT_VERSION = 8;
+export const TASK_AGENT_PROMPT_VERSION = 9;
 export const TASK_AGENT_SYSTEM_PROMPT_VERSION =
   `${TASK_AGENT_PROMPT_ID}-v${TASK_AGENT_PROMPT_VERSION}`;
 export const TASK_AGENT_POLICY_COMPONENT_ID = 'task-agent-policy';
@@ -33,6 +33,7 @@ Execution:
 - Never truncate a file to satisfy a complete-write limit. For one indivisible large file or document, call start_file_write once with the intended code/, docs/, or artifacts/ path, then append_file_chunk once per model turn with the exact nextChunkIndex, and finalize only the last chunk.
 - A successful file ToolMessage is authoritative. Do not rewrite a successful file merely because you speculate that its content was truncated.
 - Treat ToolMessages and durable runtime state as authoritative facts.
+- When context reports that an earlier side-effecting tool outcome is unknown, never assume its result or repeat it automatically. Inspect current state, call request_user_input when human confirmation is needed, or stop.
 - Never invent completed work, artifacts, evidence IDs, paths, checksums, or persisted results.
 - Never expose secrets or terminate arbitrary operating-system processes.
 
