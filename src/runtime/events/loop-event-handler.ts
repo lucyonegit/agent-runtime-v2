@@ -137,7 +137,6 @@ export class LoopEventHandler {
         requests: events.map(event => ({
           requestId: this.#ids.userInputRequestId(),
           modelToolCallId: event.modelToolCallId,
-          kind: 'tool_input',
           title: event.request.title,
           prompt: event.request.prompt,
           inputSchema: event.request.inputSchema,

@@ -477,7 +477,6 @@ describe('PostgresAgentStore converged model', () => {
       requests: [{
         requestId: 'input_1',
         modelToolCallId: 'model_input_call_1',
-        kind: 'tool_input',
         prompt: 'Choose a value',
         inputSchema: { type: 'text' },
       }],
@@ -487,7 +486,7 @@ describe('PostgresAgentStore converged model', () => {
       task: { status: 'waiting_for_user' },
       taskRun: { status: 'paused', endedAtMs: 25 },
       toolCalls: [{ status: 'waiting_for_user' }],
-      requests: [{ kind: 'tool_input', status: 'pending', toolCallId: 'tool_call_input_1' }],
+      requests: [{ status: 'pending', toolCallId: 'tool_call_input_1' }],
     });
 
     await expect(store.execution.answerUserInput({
@@ -573,7 +572,6 @@ describe('PostgresAgentStore converged model', () => {
       requests: [{
         requestId: 'input_1',
         modelToolCallId: 'model_input_call_1',
-        kind: 'tool_input',
         prompt: 'Choose quickly',
         inputSchema: { type: 'text' },
         expiresAtMs: 50,
@@ -988,7 +986,6 @@ describe('PostgresAgentStore converged model', () => {
       requests: [{
         requestId: 'input_1',
         modelToolCallId: 'model_input_call_1',
-        kind: 'tool_input',
         prompt: 'Choose a value',
         inputSchema: { type: 'text' },
       }],

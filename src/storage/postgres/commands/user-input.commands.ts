@@ -87,20 +87,19 @@ export async function waitForUserInputCommand(
       callRows.push(requireRow(callResult.rows[0], 'mark tool call waiting'));
       const requestResult = await client.query<AgentUserInputRequestRow>(
         `insert into agent_user_input_requests(
-           id, session_id, task_id, tool_call_id, kind, status,
+           id, session_id, task_id, tool_call_id, status,
            title, prompt, input_schema, expires_at_ms,
            version, metadata, created_at_ms, updated_at_ms
          ) values (
-           $1, $2, $3, $4, $5, 'pending',
-           $6, $7, $8, $9,
-           0, $10, $11, $11
+           $1, $2, $3, $4, 'pending',
+           $5, $6, $7, $8,
+           0, $9, $10, $10
          ) returning *`,
         [
           request.requestId,
           input.sessionId,
           input.taskId,
           call.id,
-          request.kind,
           request.title ?? null,
           request.prompt,
           JSON.stringify(request.inputSchema),

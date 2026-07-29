@@ -2,12 +2,6 @@ import { AGENT_REQUEST_LIMITS } from './request-limits.js';
 
 export type AgentUserInputStatus = 'pending' | 'answered' | 'cancelled' | 'expired';
 
-export const AGENT_USER_INPUT_REQUEST_KINDS = [
-  'tool_input',
-] as const;
-
-export type AgentUserInputRequestKind = typeof AGENT_USER_INPUT_REQUEST_KINDS[number];
-
 export type AgentUserInputSchema =
   | { type: 'text'; placeholder?: string; defaultValue?: string; maxLength?: number }
   | { type: 'single_choice'; options: Array<{ label: string; value: string }> }
@@ -119,7 +113,6 @@ export interface AgentUserInputRequest {
   sessionId: string;
   taskId: string;
   toolCallId: string;
-  kind: AgentUserInputRequestKind;
   status: AgentUserInputStatus;
   title?: string;
   prompt: string;

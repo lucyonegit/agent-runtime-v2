@@ -32,7 +32,6 @@ import type {
   AgentToolResult,
   AgentToolSideEffectLevel,
   AgentUserInputRequest,
-  AgentUserInputRequestKind,
   AgentUserInputSchema,
   AgentUserInputStatus,
 } from '../../domain/index.js';
@@ -163,7 +162,6 @@ export interface AgentUserInputRequestRow {
   session_id: string;
   task_id: string;
   tool_call_id: string;
-  kind: string;
   status: string;
   title: string | null;
   prompt: string;
@@ -380,7 +378,6 @@ export function mapAgentUserInputRequestRow(row: AgentUserInputRequestRow): Agen
     sessionId: row.session_id,
     taskId: row.task_id,
     toolCallId: row.tool_call_id,
-    kind: row.kind as AgentUserInputRequestKind,
     status: row.status as AgentUserInputStatus,
     ...(row.title === null ? {} : { title: row.title }),
     prompt: row.prompt,
