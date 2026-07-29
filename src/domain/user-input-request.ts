@@ -1,5 +1,12 @@
 export type AgentUserInputStatus = 'pending' | 'answered' | 'cancelled' | 'expired';
 
+export const AGENT_USER_INPUT_REQUEST_KINDS = [
+  'tool_input',
+  'side_effect_confirmation',
+] as const;
+
+export type AgentUserInputRequestKind = typeof AGENT_USER_INPUT_REQUEST_KINDS[number];
+
 import { AGENT_REQUEST_LIMITS } from './request-limits.js';
 
 export type AgentUserInputSchema =
@@ -107,12 +114,13 @@ function invalid(reason: string): AgentUserInputAnswerValidation {
   return { valid: false, reason };
 }
 
-/** request_user_input is the only producer; the answer is committed as ToolMessage. */
+/** One explicit human decision point; the answer is committed as a ToolMessage. */
 export interface AgentUserInputRequest {
   id: string;
   sessionId: string;
   taskId: string;
   toolCallId: string;
+  kind: AgentUserInputRequestKind;
   status: AgentUserInputStatus;
   title?: string;
   prompt: string;

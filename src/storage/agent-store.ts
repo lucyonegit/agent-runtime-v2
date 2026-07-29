@@ -23,6 +23,7 @@ import type {
   AgentToolRun,
   AgentToolSideEffectLevel,
   AgentUserInputRequest,
+  AgentUserInputRequestKind,
   AgentUserInputSchema,
 } from '../domain/index.js';
 
@@ -262,6 +263,7 @@ export interface CompleteTaskWithFinalMessageResult extends FinishTaskResult {
 interface PendingUserInputRequestInput {
   requestId: string;
   modelToolCallId: string;
+  kind: AgentUserInputRequestKind;
   title?: string;
   prompt: string;
   inputSchema: AgentUserInputSchema;

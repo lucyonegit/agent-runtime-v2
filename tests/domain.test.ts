@@ -7,6 +7,7 @@ import {
   AGENT_TASK_STATUSES,
   AGENT_TOOL_CALL_STATUSES,
   AGENT_TOOL_RUN_STATUSES,
+  AGENT_USER_INPUT_REQUEST_KINDS,
   isTerminalTaskStatus,
   resolveTaskGoalMessage,
   validateAgentUserInputAnswer,
@@ -35,6 +36,9 @@ describe('durable domain vocabulary', () => {
     ]);
     expect(AGENT_TOOL_RUN_STATUSES).toEqual([
       'running', 'completed', 'failed', 'interrupted', 'outcome_unknown', 'cancelled',
+    ]);
+    expect(AGENT_USER_INPUT_REQUEST_KINDS).toEqual([
+      'tool_input', 'side_effect_confirmation',
     ]);
     expect(isTerminalTaskStatus('completed')).toBe(true);
     expect(isTerminalTaskStatus('recovery_required')).toBe(false);
