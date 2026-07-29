@@ -15,6 +15,5 @@ export interface ReActLoopExecutionInput {
 export type ReActTaskExecutionResult =
   | { type: 'completed'; task: AgentTask; message: AgentMessage }
   | { type: 'waiting_for_user'; task: AgentTask; requests: AgentUserInputRequest[] }
-  | { type: 'recovery_required'; task: AgentTask }
   | { type: 'failed'; task: AgentTask }
   | { type: 'cancelled'; task: AgentTask };

@@ -44,10 +44,11 @@ describe('executeDurableAgentLoop event boundary', () => {
     expect(result).toEqual({ type: 'completed', task: completedTask, message });
   });
 
-  it('stops the loop only when the handler reports recovery feedback', async () => {
+  it('stops the loop when the handler reports a side-effect confirmation request', async () => {
     const activeTask = task('running');
     const activeRun = taskRun();
-    const recoveryTask = task('recovery_required');
+    const waitingTask = task('waiting_for_user');
+    const request = { id: 'input_1' } as never;
     const event = {
       type: LOOP_EVENT_TYPES.ToolResultFailed,
       modelToolCallId: 'model_tool_call_1',
@@ -58,7 +59,9 @@ describe('executeDurableAgentLoop event boundary', () => {
       durationMs: 5,
     } satisfies LoopEvent;
     const iterator = asyncIterator([{ done: false as const, value: event }]);
-    const handle = vi.fn(async () => ({ recoveryRequired: recoveryTask }));
+    const handle = vi.fn(async () => ({
+      waitingForUser: { task: waitingTask, requests: [request] },
+    }));
 
     const result = await executeDurableAgentLoop({
       loop: { run: vi.fn(() => iterator) } as never,
@@ -72,10 +75,14 @@ describe('executeDurableAgentLoop event boundary', () => {
     expect(iterator.return).toHaveBeenCalledWith({
       type: 'failed',
       code: 'tool_state_unknown',
-      message: 'A side-effecting tool outcome is unknown and requires manual recovery.',
+      message: 'A side-effecting tool outcome is unknown and requires user confirmation.',
     });
     expect(iterator.next).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ type: 'recovery_required', task: recoveryTask });
+    expect(result).toEqual({
+      type: 'waiting_for_user',
+      task: waitingTask,
+      requests: [request],
+    });
   });
 });
 

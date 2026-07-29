@@ -18,11 +18,11 @@ import {
 describe('durable domain vocabulary', () => {
   it('exposes only the converged Task and execution states', () => {
     expect(AGENT_TASK_STATUSES).toEqual([
-      'created', 'running', 'waiting_for_user', 'recovery_required',
+      'created', 'running', 'waiting_for_user',
       'completed', 'failed', 'cancelled',
     ]);
     expect(ACTIVE_TASK_STATUSES).toEqual([
-      'created', 'running', 'waiting_for_user', 'recovery_required',
+      'created', 'running', 'waiting_for_user',
     ]);
     expect(AGENT_TASK_RUN_TRIGGERS).toEqual([
       'initial', 'user_input_answered',
@@ -41,7 +41,7 @@ describe('durable domain vocabulary', () => {
       'tool_input', 'side_effect_confirmation',
     ]);
     expect(isTerminalTaskStatus('completed')).toBe(true);
-    expect(isTerminalTaskStatus('recovery_required')).toBe(false);
+    expect(isTerminalTaskStatus('waiting_for_user')).toBe(false);
   });
 
   it('resolves a Task goal by immutable message identity, not timeline position', () => {

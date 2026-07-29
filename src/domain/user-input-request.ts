@@ -7,6 +7,35 @@ export const AGENT_USER_INPUT_REQUEST_KINDS = [
 
 export type AgentUserInputRequestKind = typeof AGENT_USER_INPUT_REQUEST_KINDS[number];
 
+export const AGENT_SIDE_EFFECT_CONFIRMATION_VALUES = [
+  'confirmed_succeeded',
+  'confirmed_not_applied',
+  'cannot_confirm_and_stop',
+] as const;
+
+export type AgentSideEffectConfirmation =
+  typeof AGENT_SIDE_EFFECT_CONFIRMATION_VALUES[number];
+
+export function createSideEffectConfirmationSchema(): AgentUserInputSchema {
+  return {
+    type: 'single_choice',
+    options: [
+      { label: 'Yes, the operation succeeded', value: 'confirmed_succeeded' },
+      { label: 'No, the operation was not applied', value: 'confirmed_not_applied' },
+      { label: 'I cannot confirm; stop this task', value: 'cannot_confirm_and_stop' },
+    ],
+  };
+}
+
+export function isAgentSideEffectConfirmation(
+  value: unknown
+): value is AgentSideEffectConfirmation {
+  return typeof value === 'string'
+    && AGENT_SIDE_EFFECT_CONFIRMATION_VALUES.includes(
+      value as AgentSideEffectConfirmation
+    );
+}
+
 import { AGENT_REQUEST_LIMITS } from './request-limits.js';
 
 export type AgentUserInputSchema =

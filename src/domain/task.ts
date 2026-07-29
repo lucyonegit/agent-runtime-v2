@@ -5,7 +5,6 @@ export const AGENT_TASK_STATUSES = [
   'created',
   'running',
   'waiting_for_user',
-  'recovery_required',
   'completed',
   'failed',
   'cancelled',
@@ -17,7 +16,6 @@ export const ACTIVE_TASK_STATUSES = [
   'created',
   'running',
   'waiting_for_user',
-  'recovery_required',
 ] as const satisfies readonly AgentTaskStatus[];
 
 const TERMINAL_TASK_STATUSES = [

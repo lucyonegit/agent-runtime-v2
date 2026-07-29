@@ -46,17 +46,25 @@ export class AnswerUserInputFlow {
       [result.toolCall],
       [result.request]
     );
-    await this.events.publishAll([
-      { type: 'message.upserted', sessionId: result.task.sessionId, message: projection.messages[0]! },
-      { type: 'tool_call.upserted', sessionId: result.task.sessionId, toolCall: projection.toolCalls[0]! },
-      { type: 'user_input.upserted', sessionId: result.task.sessionId, request: projection.requests[0]! },
-      { type: 'task.upserted', sessionId: result.task.sessionId, task: result.task },
-      ...(result.taskRun ? [{
-        type: 'task_run.upserted' as const,
-        sessionId: result.task.sessionId,
-        taskRun: result.taskRun,
-      }] : []),
-    ]);
+    await this.events.publishAll([{
+      type: 'message.upserted',
+      sessionId: result.task.sessionId,
+      message: projection.messages[0]!,
+    }]);
+    if (result.taskFinish) {
+      await this.events.publishTaskFinish(result.taskFinish);
+    } else {
+      await this.events.publishAll([
+        { type: 'tool_call.upserted', sessionId: result.task.sessionId, toolCall: projection.toolCalls[0]! },
+        { type: 'user_input.upserted', sessionId: result.task.sessionId, request: projection.requests[0]! },
+        { type: 'task.upserted', sessionId: result.task.sessionId, task: result.task },
+        ...(result.taskRun ? [{
+          type: 'task_run.upserted' as const,
+          sessionId: result.task.sessionId,
+          taskRun: result.taskRun,
+        }] : []),
+      ]);
+    }
     if (result.shouldResume) {
       if (!result.taskRun) {
         throw new RuntimeError(

@@ -48,13 +48,17 @@ export async function executeDurableAgentLoop(
       } else if (event.type === LOOP_EVENT_TYPES.ToolInputRequired) {
         inputEvents.push(event);
       }
-      if (feedback?.recoveryRequired) {
+      if (feedback?.waitingForUser) {
         await iterator.return({
           type: 'failed',
           code: 'tool_state_unknown',
-          message: 'A side-effecting tool outcome is unknown and requires manual recovery.',
+          message: 'A side-effecting tool outcome is unknown and requires user confirmation.',
         });
-        return { type: 'recovery_required', task: feedback.recoveryRequired };
+        return {
+          type: 'waiting_for_user',
+          task: feedback.waitingForUser.task,
+          requests: feedback.waitingForUser.requests,
+        };
       }
       continue;
     }

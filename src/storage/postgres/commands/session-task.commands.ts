@@ -10,8 +10,8 @@ import {
   type CreateTaskWithUserMessageResult,
   type FailTaskInput,
   type FinishTaskResult,
-  type MarkTaskRecoveryRequiredInput,
-  type MarkTaskRecoveryRequiredResult,
+  type ReconcileInterruptedTaskInput,
+  type ReconcileInterruptedTaskResult,
   type RenewTaskRunOwnershipInput,
   type StartTaskRunInput,
   type StartTaskRunResult,
@@ -20,22 +20,27 @@ import {
   mapAgentMessageRow,
   mapAgentSessionRow,
   mapAgentTaskRow,
+  mapAgentTaskCheckpointRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
   mapAgentToolRunRow,
+  mapAgentUserInputRequestRow,
   type AgentMessageRow,
   type AgentSessionRow,
   type AgentTaskRow,
   type AgentTaskRunRow,
   type AgentToolCallRow,
   type AgentToolRunRow,
+  type AgentUserInputRequestRow,
 } from '../row-mappers.js';
 import { lockAgentSession, lockAgentSessionForTask, withPostgresTransaction } from '../sql.js';
 import {
   assertFutureOwnership,
   assertTaskRunOwnership,
+  appendTaskCheckpoint,
   isConstraint,
   requireRow,
+  selectLatestTaskCheckpoint,
   selectTask,
   selectTaskRun,
   taskNotFound,
@@ -95,7 +100,7 @@ export async function beginSessionDeletionCommand(
     const taskResult = await client.query<AgentTaskRow>(
       `select * from agent_tasks
        where session_id = $1
-         and status in ('created', 'running', 'waiting_for_user', 'recovery_required')
+         and status in ('created', 'running', 'waiting_for_user')
        order by created_at_ms, id
        for update`,
       [input.sessionId]
@@ -258,10 +263,10 @@ export async function renewTaskRunOwnershipCommand(
   return mapAgentTaskRunRow(row);
 }
 
-export async function markTaskRecoveryRequiredCommand(
+export async function reconcileInterruptedTaskCommand(
   client: PoolClient,
-  input: MarkTaskRecoveryRequiredInput
-): Promise<MarkTaskRecoveryRequiredResult> {
+  input: ReconcileInterruptedTaskInput
+): Promise<ReconcileInterruptedTaskResult> {
   return withPostgresTransaction(client, async () => {
     await lockAgentSessionForTask(client, input.taskId);
     const task = await selectTask(client, input.taskId, true);
@@ -269,10 +274,40 @@ export async function markTaskRecoveryRequiredCommand(
     if (task.version !== input.expectedTaskVersion) {
       throw staleTaskVersion(task, input.expectedTaskVersion);
     }
+    const confirmations = new Map(
+      input.confirmationRequests.map(item => [item.toolCallId, item])
+    );
+    if (confirmations.size !== input.confirmationRequests.length) {
+      throw new TypeError('Side-effect confirmation ToolCall IDs must be unique.');
+    }
+
     let taskRun: AgentTaskRunRow | undefined;
-    const toolCalls: AgentToolCallRow[] = [];
-    const toolRuns: AgentToolRunRow[] = [];
-    if (task.status === 'running') {
+    let updatedTask: AgentTaskRow;
+    let checkpoint: ReconcileInterruptedTaskResult['checkpoint'];
+    let planCleared = false;
+    const toolCallRows: AgentToolCallRow[] = [];
+    const toolRunRows: AgentToolRunRow[] = [];
+    const requestRows: AgentUserInputRequestRow[] = [];
+    let terminalized: Awaited<ReturnType<typeof terminalizeTaskChildren>> = {
+      toolCalls: [],
+      toolRuns: [],
+      userInputRequests: [],
+    };
+
+    if (task.status === 'created') {
+      const taskResult = await client.query<AgentTaskRow>(
+        `update agent_tasks
+         set status = 'failed',
+             error_code = 'execution_interrupted',
+             error_message = 'The service restarted before this Task began execution.',
+             error_details = null, version = version + 1,
+             updated_at_ms = $2, completed_at_ms = $2
+         where id = $1 returning *`,
+        [task.id, input.nowMs]
+      );
+      updatedTask = requireRow(taskResult.rows[0], 'fail undispatched task');
+      planCleared = await clearActivePlan(client, task.session_id, task.id);
+    } else if (task.status === 'running') {
       const runResult = await client.query<AgentTaskRunRow>(
         `select * from agent_task_runs
          where task_id = $1 and status = 'running'
@@ -292,7 +327,7 @@ export async function markTaskRecoveryRequiredCommand(
          set status = 'interrupted', owner_id = null, ownership_expires_at_ms = null,
              error_code = 'execution_interrupted',
              error_message = 'The execution owner stopped before the Task completed.',
-             updated_at_ms = $2, ended_at_ms = $2
+             error_details = null, updated_at_ms = $2, ended_at_ms = $2
          where id = $1 returning *`,
         [taskRun.id, input.nowMs]
       );
@@ -307,65 +342,166 @@ export async function markTaskRecoveryRequiredCommand(
          for update of call`,
         [taskRun.id]
       );
+      const unknownCallMessageIds: string[] = [];
+      const unknownCalls: AgentToolCallRow[] = [];
       for (const call of runningCallsResult.rows) {
-        const unsafe = call.side_effect_level === 'side_effecting';
-        const runUpdateResult = await client.query<AgentToolRunRow>(
+        const sideEffectUnknown = call.side_effect_level === 'side_effecting';
+        const errorCode = sideEffectUnknown
+          ? 'side_effect_outcome_unknown'
+          : 'execution_interrupted';
+        const errorMessage = sideEffectUnknown
+          ? 'The process stopped after the side-effecting tool began; its outcome is unknown.'
+          : 'The tool execution was interrupted before a result was committed.';
+        const toolRunResult = await client.query<AgentToolRunRow>(
           `update agent_tool_runs
-           set status = $2,
-               error_code = $3,
-               error_message = $4,
-               ended_at_ms = $5
+           set status = $2, error_code = $3, error_message = $4, error_details = null,
+               ended_at_ms = $5,
+               duration_ms = greatest(0, $5 - started_at_ms)
            where tool_call_id = $1 and status = 'running'
            returning *`,
           [
             call.id,
-            unsafe ? 'outcome_unknown' : 'interrupted',
-            unsafe ? 'side_effect_outcome_unknown' : 'execution_interrupted',
-            unsafe
-              ? 'The process stopped before the side-effect outcome was committed.'
-              : 'The tool execution was interrupted before a result was committed.',
+            sideEffectUnknown ? 'outcome_unknown' : 'interrupted',
+            errorCode,
+            errorMessage,
             input.nowMs,
           ]
         );
-        toolRuns.push(...runUpdateResult.rows);
-        const callUpdate = await client.query<AgentToolCallRow>(
+        toolRunRows.push(...toolRunResult.rows);
+        const callResult = await client.query<AgentToolCallRow>(
           `update agent_tool_calls
-           set status = $2,
-               error_code = $3,
-               error_message = $4,
-               error_details = null,
+           set status = $2, error_code = $3, error_message = $4, error_details = null,
                version = version + 1,
+               completed_at_ms = case when $2::text = 'failed' then $5::bigint else null end,
                updated_at_ms = $5
            where id = $1 returning *`,
           [
             call.id,
-            unsafe ? 'outcome_unknown' : 'pending',
-            unsafe ? 'side_effect_outcome_unknown' : null,
-            unsafe ? 'The process stopped before the side-effect outcome was committed.' : null,
+            sideEffectUnknown ? 'outcome_unknown' : 'failed',
+            errorCode,
+            errorMessage,
             input.nowMs,
           ]
         );
-        toolCalls.push(requireRow(callUpdate.rows[0], 'prepare tool call recovery'));
+        toolCallRows.push(requireRow(callResult.rows[0], 'reconcile interrupted tool call'));
+        if (!sideEffectUnknown) continue;
+        unknownCalls.push(call);
+        unknownCallMessageIds.push(call.call_message_id);
       }
-    } else if (task.status !== 'created') {
+
+      terminalized = await terminalizeTaskChildren(client, {
+        taskId: task.id,
+        phase: 'failed',
+        nowMs: input.nowMs,
+      });
+      for (const call of unknownCalls) {
+        const confirmation = confirmations.get(call.id);
+        if (!confirmation) {
+          throw new AgentStoreError(
+            'CONCURRENCY_CONFLICT',
+            `No confirmation request ID was allocated for ToolCall ${JSON.stringify(call.id)}.`,
+            { taskId: task.id, toolCallId: call.id }
+          );
+        }
+        const requestResult = await client.query<AgentUserInputRequestRow>(
+          `insert into agent_user_input_requests(
+             id, session_id, task_id, tool_call_id, kind, status,
+             title, prompt, input_schema,
+             version, metadata, created_at_ms, updated_at_ms
+           ) values (
+             $1, $2, $3, $4, 'side_effect_confirmation', 'pending',
+             $5, $6, $7,
+             0, $8, $9, $9
+           ) returning *`,
+          [
+            confirmation.requestId,
+            task.session_id,
+            task.id,
+            call.id,
+            confirmation.title,
+            confirmation.prompt,
+            JSON.stringify(confirmation.inputSchema),
+            confirmation.metadata ?? null,
+            input.nowMs,
+          ]
+        );
+        requestRows.push(requireRow(requestResult.rows[0], 'create side-effect confirmation'));
+      }
+      if (requestRows.length > 0) {
+        const taskResult = await client.query<AgentTaskRow>(
+          `update agent_tasks
+           set status = 'waiting_for_user',
+               error_code = 'side_effect_outcome_unknown',
+               error_message = 'A side-effecting tool outcome requires user confirmation.',
+               error_details = null, version = version + 1, updated_at_ms = $2
+           where id = $1 returning *`,
+          [task.id, input.nowMs]
+        );
+        updatedTask = requireRow(taskResult.rows[0], 'wait for side-effect confirmation');
+        const previous = await selectLatestTaskCheckpoint(client, task.id);
+        const checkpointRow = await appendTaskCheckpoint(client, {
+          sessionId: task.session_id,
+          taskId: task.id,
+          taskRunId: taskRun.id,
+          phase: 'waiting_for_user',
+          callMessageId: unknownCallMessageIds[0],
+          iterationNo: previous?.iteration_no ?? 0,
+          executedToolCalls: previous?.executed_tool_calls ?? 0,
+          metadata: {
+            requestIds: requestRows.map(row => row.id),
+            sideEffectOutcomeUnknown: true,
+          },
+          nowMs: input.nowMs,
+        });
+        checkpoint = mapAgentTaskCheckpointRow(checkpointRow);
+      } else {
+        const taskResult = await client.query<AgentTaskRow>(
+          `update agent_tasks
+           set status = 'failed',
+               error_code = 'execution_interrupted',
+               error_message = 'The service restarted before this Task completed.',
+               error_details = null, version = version + 1,
+               updated_at_ms = $2, completed_at_ms = $2
+           where id = $1 returning *`,
+          [task.id, input.nowMs]
+        );
+        updatedTask = requireRow(taskResult.rows[0], 'fail interrupted task');
+        checkpoint = await appendTerminalTaskCheckpoint(client, {
+          sessionId: task.session_id,
+          taskId: task.id,
+          taskRunId: taskRun.id,
+          phase: 'failed',
+          metadata: { errorCode: 'execution_interrupted' },
+          nowMs: input.nowMs,
+        });
+        planCleared = await clearActivePlan(client, task.session_id, task.id);
+      }
+    } else {
       throw new AgentStoreError(
         'INVALID_TASK_STATE',
-        `Task ${JSON.stringify(task.id)} cannot require recovery from ${task.status}.`,
+        `Task ${JSON.stringify(task.id)} cannot be reconciled from ${task.status}.`,
         { taskId: task.id, status: task.status }
       );
     }
-    const taskResult = await client.query<AgentTaskRow>(
-      `update agent_tasks
-       set status = 'recovery_required', version = version + 1, updated_at_ms = $2
-       where id = $1 returning *`,
-      [task.id, input.nowMs]
-    );
+
     await touchSession(client, task.session_id, input.nowMs);
     return {
-      task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'mark recovery required')),
+      task: mapAgentTaskRow(updatedTask),
       ...(taskRun ? { taskRun: mapAgentTaskRunRow(taskRun) } : {}),
-      toolCalls: toolCalls.map(mapAgentToolCallRow),
-      toolRuns: toolRuns.map(mapAgentToolRunRow),
+      toolCalls: [
+        ...toolCallRows.map(mapAgentToolCallRow),
+        ...terminalized.toolCalls,
+      ],
+      toolRuns: [
+        ...toolRunRows.map(mapAgentToolRunRow),
+        ...terminalized.toolRuns,
+      ],
+      userInputRequests: [
+        ...requestRows.map(mapAgentUserInputRequestRow),
+        ...terminalized.userInputRequests,
+      ],
+      ...(checkpoint ? { checkpoint } : {}),
+      planCleared,
     };
   });
 }

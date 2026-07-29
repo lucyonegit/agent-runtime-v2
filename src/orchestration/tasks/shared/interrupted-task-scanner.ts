@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mapStoreError, RuntimeError } from '../../../runtime/errors/runtime-error.js';
 import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-publisher.js';
 import { taskFinishEvents } from '../../../runtime/events/helpers/task-finish-events.js';
+import { createSideEffectConfirmationRequest } from '../../../runtime/hitl/side-effect-confirmation.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
 
 export interface InterruptedTaskScannerOptions {
@@ -22,23 +23,31 @@ export class InterruptedTaskScanner {
     while (await this.#expireUserInputBatch(nowMs)) {
       // Drain the startup backlog in bounded database batches.
     }
-    while (await this.#recoverTaskBatch(nowMs)) {
+    while (await this.#reconcileTaskBatch(nowMs)) {
       // Drain the startup backlog in bounded database batches.
     }
   }
 
-  async #recoverTaskBatch(nowMs: number): Promise<boolean> {
-    const candidates = await this.options.store.tasks.listNeedingRecovery({
+  async #reconcileTaskBatch(nowMs: number): Promise<boolean> {
+    const candidates = await this.options.store.tasks.listInterrupted({
       nowMs,
       createdBeforeMs: nowMs - this.options.createdTaskGraceMs,
       limit: this.options.batchSize,
     });
-    let recovered = 0;
+    let reconciled = 0;
     for (const candidate of candidates) {
       try {
-        const result = await this.options.store.tasks.markRecoveryRequired({
+        const result = await this.options.store.tasks.reconcileInterrupted({
           taskId: candidate.task.id,
           expectedTaskVersion: candidate.task.version,
+          confirmationRequests: candidate.sideEffectingToolCalls.map(toolCall => ({
+            toolCallId: toolCall.id,
+            ...createSideEffectConfirmationRequest({
+              requestId: `input_${randomUUID()}`,
+              toolName: toolCall.toolName,
+              reason: 'service_restart',
+            }),
+          })),
           nowMs: this.options.clock.nowMs(),
         });
         const events = [
@@ -58,9 +67,19 @@ export class InterruptedTaskScanner {
             sessionId: result.task.sessionId,
             toolRun,
           })),
+          ...result.userInputRequests.map(request => ({
+            type: 'user_input.upserted' as const,
+            sessionId: result.task.sessionId,
+            request,
+          })),
+          ...(result.planCleared ? [{
+            type: 'plan.cleared' as const,
+            sessionId: result.task.sessionId,
+            taskId: result.task.id,
+          }] : []),
         ];
         for (const event of events) await this.#publish(event);
-        recovered += 1;
+        reconciled += 1;
       } catch (error) {
         const mapped = mapStoreError(error);
         if (!(mapped instanceof RuntimeError
@@ -69,7 +88,7 @@ export class InterruptedTaskScanner {
         }
       }
     }
-    return candidates.length === this.options.batchSize && recovered > 0;
+    return candidates.length === this.options.batchSize && reconciled > 0;
   }
 
   async #expireUserInputBatch(nowMs: number): Promise<boolean> {

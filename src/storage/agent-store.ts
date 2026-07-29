@@ -115,28 +115,43 @@ export interface RenewTaskRunOwnershipInput {
   ownershipExpiresAtMs: number;
 }
 
-export interface ListTasksNeedingRecoveryInput {
+export interface ListInterruptedTasksInput {
   nowMs: number;
   createdBeforeMs: number;
   limit: number;
 }
 
-export interface TaskRecoveryCandidate {
+export interface InterruptedTaskCandidate {
   task: AgentTask;
   taskRun?: AgentTaskRun;
+  sideEffectingToolCalls: Array<{ id: string; toolName: string }>;
 }
 
-export interface MarkTaskRecoveryRequiredInput {
+export interface SideEffectConfirmationRequestDraft {
+  requestId: string;
+  title: string;
+  prompt: string;
+  inputSchema: AgentUserInputSchema;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReconcileInterruptedTaskInput {
   taskId: string;
   expectedTaskVersion: number;
+  confirmationRequests: Array<
+    SideEffectConfirmationRequestDraft & { toolCallId: string }
+  >;
   nowMs: number;
 }
 
-export interface MarkTaskRecoveryRequiredResult {
+export interface ReconcileInterruptedTaskResult {
   task: AgentTask;
   taskRun?: AgentTaskRun;
   toolCalls: AgentToolCall[];
   toolRuns: AgentToolRun[];
+  userInputRequests: AgentUserInputRequest[];
+  checkpoint?: AgentTaskCheckpoint;
+  planCleared: boolean;
 }
 
 export interface FailTaskInput {
@@ -230,18 +245,20 @@ export interface CompleteToolCallInput {
   ownerId: string;
   modelToolCallId: string;
   messageId: string;
+  confirmationRequest: SideEffectConfirmationRequestDraft;
   outcome: CompletedToolOutcome;
   nowMs: number;
 }
 
 export interface CompleteToolCallResult {
-  message: AgentMessage;
+  message?: AgentMessage;
   toolCall: AgentToolCall;
   toolRun: AgentToolRun;
   artifacts: AgentArtifact[];
-  recoveryRequired?: {
+  confirmationRequired?: {
     task: AgentTask;
     taskRun: AgentTaskRun;
+    request: AgentUserInputRequest;
   };
 }
 
@@ -307,6 +324,7 @@ export interface SaveUserInputAnswerResult {
   taskRun?: AgentTaskRun;
   toolCall: AgentToolCall;
   shouldResume: boolean;
+  taskFinish?: FinishTaskResult;
 }
 
 export interface ExpireUserInputRequestInput {
@@ -441,11 +459,11 @@ export interface TaskStore {
   get(taskId: string): Promise<AgentTask | undefined>;
   getByClientRequestId(sessionId: string, clientRequestId: string): Promise<AgentTask | undefined>;
   getRun(taskRunId: string): Promise<AgentTaskRun | undefined>;
-  listNeedingRecovery(input: ListTasksNeedingRecoveryInput): Promise<TaskRecoveryCandidate[]>;
+  listInterrupted(input: ListInterruptedTasksInput): Promise<InterruptedTaskCandidate[]>;
   createWithUserMessage(input: CreateTaskWithUserMessageInput): Promise<CreateTaskWithUserMessageResult>;
   startRun(input: StartTaskRunInput): Promise<StartTaskRunResult>;
   renewRunOwnership(input: RenewTaskRunOwnershipInput): Promise<AgentTaskRun>;
-  markRecoveryRequired(input: MarkTaskRecoveryRequiredInput): Promise<MarkTaskRecoveryRequiredResult>;
+  reconcileInterrupted(input: ReconcileInterruptedTaskInput): Promise<ReconcileInterruptedTaskResult>;
   fail(input: FailTaskInput): Promise<FinishTaskResult>;
   cancel(input: CancelTaskInput): Promise<FinishTaskResult>;
 }

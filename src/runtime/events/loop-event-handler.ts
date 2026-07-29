@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentMessage, AgentRealtimeEvent, AgentTask } from '../../domain/index.js';
+import type {
+  AgentMessage,
+  AgentRealtimeEvent,
+  AgentTask,
+  AgentUserInputRequest,
+} from '../../domain/index.js';
 import type { AgentStore, FinishTaskResult } from '../../storage/agent-store.js';
 import { mapStoreError } from '../errors/runtime-error.js';
 import type { RuntimeTool } from '../execution/tool-executor.js';
@@ -9,6 +14,7 @@ import { LOOP_EVENT_TYPES, type LoopEvent } from '../loop/loop-events.js';
 import { redactToolArguments } from './helpers/event-payload.helper.js';
 import { taskFinishEvents } from './helpers/task-finish-events.js';
 import type { RuntimeEventPublisher } from './runtime-event-publisher.js';
+import { createSideEffectConfirmationRequest } from '../hitl/side-effect-confirmation.js';
 
 export { redactToolArguments } from './helpers/event-payload.helper.js';
 
@@ -33,7 +39,10 @@ export interface LoopEventHandlerOptions {
 
 /** The only LoopEvent feedback that changes execution control flow. */
 export interface LoopEventFeedback {
-  recoveryRequired: AgentTask;
+  waitingForUser: {
+    task: AgentTask;
+    requests: AgentUserInputRequest[];
+  };
 }
 
 /** Commits durable LoopEvent state when needed, then publishes its realtime projection. */
@@ -249,14 +258,21 @@ export class LoopEventHandler {
         ownerId: this.options.ownerId,
         modelToolCallId: event.modelToolCallId,
         messageId: this.#ids.messageId(),
+        confirmationRequest: createSideEffectConfirmationRequest({
+          requestId: this.#ids.userInputRequestId(),
+          toolName: event.toolName,
+          reason: 'runtime_failure',
+        }),
         outcome,
         nowMs: this.#clock.nowMs(),
       });
-      await this.#publish({
-        type: 'message.upserted',
-        sessionId: target.sessionId,
-        message: committed.message,
-      });
+      if (committed.message) {
+        await this.#publish({
+          type: 'message.upserted',
+          sessionId: target.sessionId,
+          message: committed.message,
+        });
+      }
       await this.#publish({
         type: 'tool_call.upserted',
         sessionId: target.sessionId,
@@ -270,18 +286,28 @@ export class LoopEventHandler {
       for (const artifact of committed.artifacts) {
         await this.#publish({ type: 'artifact.upserted', sessionId: target.sessionId, artifact });
       }
-      if (!committed.recoveryRequired) return undefined;
+      if (!committed.confirmationRequired) return undefined;
+      await this.#publish({
+        type: 'user_input.upserted',
+        sessionId: target.sessionId,
+        request: committed.confirmationRequired.request,
+      });
       await this.#publish({
         type: 'task_run.upserted',
         sessionId: target.sessionId,
-        taskRun: committed.recoveryRequired.taskRun,
+        taskRun: committed.confirmationRequired.taskRun,
       });
       await this.#publish({
         type: 'task.upserted',
         sessionId: target.sessionId,
-        task: committed.recoveryRequired.task,
+        task: committed.confirmationRequired.task,
       });
-      return { recoveryRequired: committed.recoveryRequired.task };
+      return {
+        waitingForUser: {
+          task: committed.confirmationRequired.task,
+          requests: [committed.confirmationRequired.request],
+        },
+      };
     } catch (error) {
       throw mapStoreError(error);
     }

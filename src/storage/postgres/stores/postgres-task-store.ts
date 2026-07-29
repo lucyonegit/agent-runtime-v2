@@ -6,20 +6,20 @@ import type {
   CreateTaskWithUserMessageResult,
   FailTaskInput,
   FinishTaskResult,
-  ListTasksNeedingRecoveryInput,
-  MarkTaskRecoveryRequiredInput,
-  MarkTaskRecoveryRequiredResult,
+  InterruptedTaskCandidate,
+  ListInterruptedTasksInput,
+  ReconcileInterruptedTaskInput,
+  ReconcileInterruptedTaskResult,
   RenewTaskRunOwnershipInput,
   StartTaskRunInput,
   StartTaskRunResult,
-  TaskRecoveryCandidate,
   TaskStore,
 } from '../../agent-store.js';
 import {
   cancelTaskCommand,
   createTaskWithUserMessageCommand,
   failTaskCommand,
-  markTaskRecoveryRequiredCommand,
+  reconcileInterruptedTaskCommand,
   renewTaskRunOwnershipCommand,
   startTaskRunCommand,
 } from '../transaction-commands.js';
@@ -31,7 +31,7 @@ import {
 } from '../row-mappers.js';
 import { withPostgresClient } from './postgres-store.helper.js';
 
-interface RecoveryRow extends AgentTaskRow {
+interface InterruptedTaskRow extends AgentTaskRow {
   run_id: string | null;
   run_task_id: string | null;
   run_run_no: number | null;
@@ -78,13 +78,13 @@ export class PostgresTaskStore implements TaskStore {
     return result.rows[0] ? mapAgentTaskRunRow(result.rows[0]) : undefined;
   }
 
-  async listNeedingRecovery(
-    input: ListTasksNeedingRecoveryInput
-  ): Promise<TaskRecoveryCandidate[]> {
+  async listInterrupted(
+    input: ListInterruptedTasksInput
+  ): Promise<InterruptedTaskCandidate[]> {
     if (!Number.isSafeInteger(input.limit) || input.limit <= 0) {
       throw new RangeError('Recovery batch limit must be a positive safe integer.');
     }
-    const result = await this.pool.query<RecoveryRow>(
+    const result = await this.pool.query<InterruptedTaskRow>(
       `select task.*,
               run.id as run_id,
               run.task_id as run_task_id,
@@ -109,8 +109,31 @@ export class PostgresTaskStore implements TaskStore {
        limit $3`,
       [input.nowMs, input.createdBeforeMs, input.limit]
     );
+    const runningTaskRunIds = result.rows.flatMap(row => row.run_id ? [row.run_id] : []);
+    const sideEffectResult = runningTaskRunIds.length === 0
+      ? { rows: [] as Array<{ task_id: string; id: string; tool_name: string }> }
+      : await this.pool.query<{ task_id: string; id: string; tool_name: string }>(
+          `select call.task_id, call.id, call.tool_name
+           from agent_tool_calls call
+           join agent_tool_runs run on run.tool_call_id = call.id
+           where run.task_run_id = any($1::text[])
+             and run.status = 'running'
+             and call.side_effect_level = 'side_effecting'
+           order by call.task_id, call.id`,
+          [runningTaskRunIds]
+        );
+    const sideEffectsByTask = new Map<
+      string,
+      Array<{ id: string; toolName: string }>
+    >();
+    for (const call of sideEffectResult.rows) {
+      const calls = sideEffectsByTask.get(call.task_id) ?? [];
+      calls.push({ id: call.id, toolName: call.tool_name });
+      sideEffectsByTask.set(call.task_id, calls);
+    }
     return result.rows.map(row => ({
       task: mapAgentTaskRow(row),
+      sideEffectingToolCalls: sideEffectsByTask.get(row.id) ?? [],
       ...(row.run_id
         ? {
             taskRun: mapAgentTaskRunRow({
@@ -148,10 +171,10 @@ export class PostgresTaskStore implements TaskStore {
     return withPostgresClient(this.pool, client => renewTaskRunOwnershipCommand(client, input));
   }
 
-  async markRecoveryRequired(
-    input: MarkTaskRecoveryRequiredInput
-  ): Promise<MarkTaskRecoveryRequiredResult> {
-    return withPostgresClient(this.pool, client => markTaskRecoveryRequiredCommand(client, input));
+  async reconcileInterrupted(
+    input: ReconcileInterruptedTaskInput
+  ): Promise<ReconcileInterruptedTaskResult> {
+    return withPostgresClient(this.pool, client => reconcileInterruptedTaskCommand(client, input));
   }
 
   async fail(input: FailTaskInput): Promise<FinishTaskResult> {

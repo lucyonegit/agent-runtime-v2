@@ -33,7 +33,7 @@ create table agent_tasks (
   client_request_id text,
   status text not null check (
     status in (
-      'created', 'running', 'waiting_for_user', 'recovery_required',
+      'created', 'running', 'waiting_for_user',
       'completed', 'failed', 'cancelled'
     )
   ),
@@ -55,7 +55,7 @@ create table agent_tasks (
 
 create unique index uniq_agent_tasks_active_session
   on agent_tasks(session_id)
-  where status in ('created', 'running', 'waiting_for_user', 'recovery_required');
+  where status in ('created', 'running', 'waiting_for_user');
 
 create unique index uniq_agent_tasks_client_request
   on agent_tasks(session_id, client_request_id)
@@ -207,8 +207,8 @@ create table agent_tool_calls (
   unique (task_id, model_tool_call_id),
   unique (task_id, idempotency_key),
   check (
-    (status in ('completed', 'failed') and result_message_id is not null
-      and completed_at_ms is not null)
+    (status = 'completed' and result_message_id is not null and completed_at_ms is not null)
+    or (status = 'failed' and completed_at_ms is not null)
     or status not in ('completed', 'failed')
   )
 );

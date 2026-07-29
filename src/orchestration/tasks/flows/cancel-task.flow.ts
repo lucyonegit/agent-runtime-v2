@@ -42,7 +42,7 @@ export class CancelTaskFlow {
           planCleared: false,
         };
       }
-      if (!['created', 'running', 'waiting_for_user', 'recovery_required'].includes(latest.status)) {
+      if (!['created', 'running', 'waiting_for_user'].includes(latest.status)) {
         throw mapped;
       }
       try {
