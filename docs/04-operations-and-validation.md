@@ -63,5 +63,5 @@ PostgreSQL 集成测试覆盖：
 - ToolMessage 作为唯一工具结果事实。
 - Task 终态事务清理 ActivePlan。
 - 普通 HITL 回答创建 `user_input_answered` TaskRun，过期则安全终止。
-- 崩溃对账不自动重跑：只读工具失败，有副作用工具进入 `outcome_unknown` 并请求用户确认。
-- 未知副作用的三种回答、超时和原始结果不可恢复语义。
+- 崩溃对账不自动重跑：只读工具失败，有副作用工具进入 `outcome_unknown`，原 Task 直接失败且不创建 HITL。
+- 后续用户消息创建新 Task，Context 向模型投影未知副作用事实，由模型决定是否读取状态或调用普通 `request_user_input`。

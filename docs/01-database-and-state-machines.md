@@ -30,7 +30,7 @@ erDiagram
 | `agent_tool_calls` | `unique(task_id, model_tool_call_id)` | 工具意图与唯一执行状态 |
 | `agent_active_plans` | `session_id` 主键；`task_id` 唯一 | 当前临时计划 |
 | `agent_artifacts` | 逻辑路径 + revision | ToolCall 结果生成的资源索引 |
-| `agent_user_input_requests` | `tool_call_id` 唯一 | HITL 请求与答案状态 |
+| `agent_user_input_requests` | `tool_call_id` 唯一 | 模型发起的 HITL 请求与答案状态 |
 | `agent_context_compactions` | `session_id` 主键 | 单调推进的摘要缓存 |
 | `agent_model_calls` | `unique(task_run_id, logical_call_key)` | 模型输入输出审计 |
 | `agent_model_usage_stats` | `session_id` 主键 | 聚合 Token 用量 |
@@ -88,4 +88,4 @@ stateDiagram-v2
 
 `completed` 必须关联 ToolMessage。正常的 `failed` 也会写失败 ToolMessage；服务崩溃时可能只有 `startedAtMs` 而没有原始结果，重启对账会将只读/幂等 ToolCall 标为 `failed`，Context 排除不完整的 ToolCall/ToolMessage 配对。
 
-已开始的 `side_effecting` ToolCall 若没有可信结果则进入 `outcome_unknown`，创建 `side_effect_confirmation`，不自动重放。Artifact 只关联 ToolCall 与产生它的结果 Message，不再存在额外的工具执行尝试实体。
+已开始的 `side_effecting` ToolCall 若没有可信结果则进入 `outcome_unknown`，原 Task 失败，不创建 UserInputRequest，也不自动重放。用户之后创建新 Task 时，Context 将这项审计事实提供给模型。Artifact 只关联 ToolCall 与产生它的结果 Message，不再存在额外的工具执行尝试实体。

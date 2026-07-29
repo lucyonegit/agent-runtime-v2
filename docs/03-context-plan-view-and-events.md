@@ -6,7 +6,7 @@
 
 ```mermaid
 flowchart TD
-    A["读取 Session MessageList"] --> B["按 contextScope 过滤"]
+    A["读取 Message 与 outcome_unknown ToolCall"] --> B["按 contextScope 过滤"]
     B --> C["组合完整 ToolCall 消息组"]
     C --> D["加入 System Prompt、稳定环境、摘要和 ActivePlan"]
     D --> E["投影超大 ToolMessage"]
@@ -30,7 +30,8 @@ flowchart TD
 - `progress` 消息永不进入输入。
 - 当前目标消息始终保留。
 - AssistantMessage(tool_calls) 与其全部 ToolMessage 作为不可拆分消息组。
-- 缺少任意 ToolMessage 的不完整工具批次整体排除，不在 Context 层伪造结果。
+- 缺少任意 ToolMessage 的不完整工具批次整体排除，不伪造原始结果。
+- `outcome_unknown` ToolCall 另外投影为权威系统事实，明确包含工具名、参数、执行已开始和原结果不可用；Context 只提供事实，是否发起 HITL 由模型决定。
 - ToolCall/ToolMessage 按 `taskId + modelToolCallId` 配对，并校验先后顺序、工具名和唯一性；被排除的调用消息 ID 写入模型输入 manifest 供审计。
 - `update_plan` 的调用与结果使用 `task` scope，下一 Task 不会看到。
 

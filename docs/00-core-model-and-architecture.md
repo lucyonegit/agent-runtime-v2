@@ -71,7 +71,7 @@ flowchart TD
 
 ### UserInputRequest
 
-唯一的暂停/继续协议。`tool_input` 收集工具所需输入，`side_effect_confirmation` 只确认一次未知副作用是否发生。回答会写入 ToolMessage，并在全部请求完成时创建新的 TaskRun 继续同一个 Task。
+模型通过 `request_user_input` 明确发起的暂停/继续协议。回答会写入 ToolMessage，并在全部请求完成时创建新的 TaskRun 继续同一个 Task。Runtime 不会自行创建 UserInputRequest。
 
 ### ActivePlan
 

@@ -57,7 +57,7 @@ function buildFlat(
       artifacts: toolArtifacts,
       status,
       ...(status === 'outcome_unknown'
-        ? { warning: 'Tool outcome is unknown and requires recovery confirmation.' }
+        ? { warning: 'Tool outcome is unknown. No automatic retry or confirmation was started.' }
         : {}),
     });
   }

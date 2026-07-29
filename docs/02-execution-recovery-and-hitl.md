@@ -51,14 +51,14 @@ Task 进入终态时，Store 在一个事务中收口 Task、TaskRun、活动 To
 - 长时间停在 `created` 的 Task：标记 `failed/execution_interrupted`。
 - 租约过期的 TaskRun：标记 `interrupted` 并清空 owner。
 - 已开始的 `read_only/idempotent` ToolCall：标记 `failed/execution_interrupted`，Task 失败，不自动重跑。
-- 已开始且结果未知的 `side_effecting` ToolCall：标记 `outcome_unknown`，创建 `side_effect_confirmation`，Task 进入 `waiting_for_user`。
+- 已开始且结果未知的 `side_effecting` ToolCall：标记 `outcome_unknown`，Task 失败，不创建 UserInputRequest。
 - 尚未开始的兄弟 ToolCall：取消。
 
-只读工具的原始结果并不存在，因此系统不会伪造 ToolMessage。Context 会排除不完整的 Assistant ToolCall/ToolMessage 组。用户下一条消息是正常继续工作的唯一驱动，模型再根据当前上下文决定是否重新查询。
+不存在的原始结果不会被写成 ToolMessage。Context 会排除不完整的 Assistant ToolCall/ToolMessage 组，并把 `outcome_unknown` ToolCall 作为单独的权威系统事实投影给后续模型输入。用户下一条消息是正常继续工作的唯一驱动，模型再决定是否查询当前状态、调用 `request_user_input` 或停止。
 
 ## 5. 普通 HITL
 
-`request_user_input` 产生 kind=`tool_input` 的 UserInputRequest，一个 ToolCall 最多一个 Request。
+`request_user_input` 产生 UserInputRequest，一个 ToolCall 最多一个 Request。
 
 触发时：
 
@@ -76,17 +76,18 @@ Task 进入终态时，Store 在一个事务中收口 Task、TaskRun、活动 To
 
 输入过期时会写失败 ToolMessage，将 ToolCall、TaskRun 和 Task 收敛为失败，不创建新的 TaskRun，也不让模型自动继续。
 
-## 6. 未知副作用确认
+## 6. 后续 Task 如何处理未知副作用
 
-`side_effect_confirmation` 只询问事实，不承诺恢复原始 ToolResult。用户有三个选项：
+Runtime 只保存 `ToolCall.status=outcome_unknown`，不会替模型追加确认请求，也不会根据用户意见改写原 ToolCall 的历史状态。
 
-- `confirmed_succeeded`：写入“用户确认已成功”的 ToolMessage，ToolCall=`completed`，创建新的 TaskRun，让模型自行判断是否需要读取当前状态。
-- `confirmed_not_applied`：写入明确失败的 ToolMessage，ToolCall=`failed`，创建新的 TaskRun，让模型决定是否产生一个新的 ToolCall。
-- `cannot_confirm_and_stop`：ToolCall 与 Task 失败，不再执行。
+用户发送“继续”或其他新消息后：
 
-确认超时与“无法确认”一样安全停止。确认消息会明确标记 `originalToolResultUnavailable=true`；如果后续操作依赖原始返回值，模型必须重新使用读取类工具获取当前事实，不能从确认结果中猜测数据。
+1. 新消息创建新的 Task。
+2. Context 将工具名、参数及“原始 ToolResult 不可用”作为权威事实加入模型输入。
+3. 模型可以使用只读工具观察当前状态；确实需要人工确认时，模型自行调用普通 `request_user_input`；无法安全继续时直接停止。
+4. HITL 若发生，属于新 Task 的普通 ToolCall，不是 Runtime 恢复旧 ToolCall。
 
-这套闭环不提供同一 ToolCall 的自动重放：新的真实工具执行必须来自模型新产生的 ToolCall。
+同一 ToolCall 永远不会自动重放。任何新的真实工具执行都必须来自模型新产生的 ToolCall。
 
 ## 7. Session 删除
 
