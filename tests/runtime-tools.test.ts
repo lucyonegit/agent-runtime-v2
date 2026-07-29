@@ -114,6 +114,36 @@ describe('LangChain runtime tools', () => {
     });
   });
 
+  it('accepts JSON-encoded HITL input from OpenAI-compatible providers', async () => {
+    const artifact = await invoke('request_user_input', {
+      title: 'Tarot reading',
+      prompt: 'What would you like to ask?',
+      input: JSON.stringify({
+        type: 'text',
+        placeholder: 'Enter a topic',
+      }),
+    }) as RuntimeUserInputArtifact;
+
+    expect(artifact).toEqual({
+      type: 'requires_user_input',
+      request: {
+        title: 'Tarot reading',
+        prompt: 'What would you like to ask?',
+        inputSchema: {
+          type: 'text',
+          placeholder: 'Enter a topic',
+        },
+      },
+    });
+  });
+
+  it('rejects malformed JSON-encoded HITL input', async () => {
+    await expect(invoke('request_user_input', {
+      prompt: 'What would you like to ask?',
+      input: '{not-json}',
+    })).rejects.toThrow('input contains invalid JSON');
+  });
+
   it('rejects HITL schemas with impossible bounds or duplicate values', async () => {
     await expect(invoke('request_user_input', {
       prompt: 'Select values',

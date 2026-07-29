@@ -60,6 +60,14 @@ export function createHitlTools(): RuntimeTool[] {
               required: ['type', 'options'],
               additionalProperties: false,
             },
+            {
+              type: 'string',
+              minLength: 2,
+              description: [
+                'Compatibility form for OpenAI-compatible providers that JSON-encode nested tool arguments.',
+                'The string must contain one of the input objects described above.',
+              ].join(' '),
+            },
           ],
         },
       },
@@ -102,8 +110,12 @@ const optionSchema = {
 } as const;
 
 function parseInputSchema(value: unknown): AgentUserInputSchema {
-  if (!value || typeof value !== 'object') return { type: 'text' };
-  const input = value as Record<string, unknown>;
+  if (value === undefined) return { type: 'text' };
+  const normalized = parseJsonEncodedInput(value);
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    throw new Error('request_user_input input must be an object.');
+  }
+  const input = normalized as Record<string, unknown>;
   if (input.type === 'text') {
     return validated({
       type: 'text',
@@ -125,6 +137,15 @@ function parseInputSchema(value: unknown): AgentUserInputSchema {
         });
   }
   throw new Error('request_user_input received an invalid input schema.');
+}
+
+function parseJsonEncodedInput(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new Error('request_user_input input contains invalid JSON.');
+  }
 }
 
 function validated(schema: AgentUserInputSchema): AgentUserInputSchema {
