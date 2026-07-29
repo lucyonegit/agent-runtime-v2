@@ -256,17 +256,24 @@ describe('PostgresAgentStore converged model', () => {
       content: 'Old completed answer',
       nowMs: 21,
     });
-    const retry = await store.tasks.createRetry({
+    const followUp = await store.tasks.createWithUserMessage({
       sessionId: firstTask.sessionId,
-      taskId: 'task_retry',
-      retryOfTaskId: firstTask.id,
-      clientRequestId: 'context_retry',
+      taskId: 'task_follow_up',
+      userMessageId: 'message_follow_up',
+      content: 'Continue with the new request.',
+      clientRequestId: 'context_follow_up',
       nowMs: 22,
     });
-    const started = await startRun(retry.task.id, retry.task.version, 'task_run_2', 'initial', 23);
+    const started = await startRun(
+      followUp.task.id,
+      followUp.task.version,
+      'task_run_2',
+      'initial',
+      23
+    );
     await store.plans.apply({
-      sessionId: retry.task.sessionId,
-      taskId: retry.task.id,
+      sessionId: followUp.task.sessionId,
+      taskId: followUp.task.id,
       taskRunId: started.taskRun.id,
       ownerId: 'worker_1',
       title: 'Context plan',
@@ -274,8 +281,8 @@ describe('PostgresAgentStore converged model', () => {
       nowMs: 24,
     });
     const compaction = await store.context.replaceCompaction({
-      sessionId: retry.task.sessionId,
-      taskId: retry.task.id,
+      sessionId: followUp.task.sessionId,
+      taskId: followUp.task.id,
       taskRunId: started.taskRun.id,
       ownerId: 'worker_1',
       expectedVersion: null,
@@ -284,8 +291,8 @@ describe('PostgresAgentStore converged model', () => {
       nowMs: 25,
     });
     await expect(store.context.replaceCompaction({
-      sessionId: retry.task.sessionId,
-      taskId: retry.task.id,
+      sessionId: followUp.task.sessionId,
+      taskId: followUp.task.id,
       taskRunId: started.taskRun.id,
       ownerId: 'worker_1',
       expectedVersion: null,
@@ -294,8 +301,8 @@ describe('PostgresAgentStore converged model', () => {
       nowMs: 26,
     })).rejects.toMatchObject({ code: 'CONCURRENCY_CONFLICT' });
     await expect(store.context.replaceCompaction({
-      sessionId: retry.task.sessionId,
-      taskId: retry.task.id,
+      sessionId: followUp.task.sessionId,
+      taskId: followUp.task.id,
       taskRunId: started.taskRun.id,
       ownerId: 'worker_2',
       expectedVersion: compaction.version,
@@ -305,15 +312,15 @@ describe('PostgresAgentStore converged model', () => {
     })).rejects.toMatchObject({ code: 'TASK_OWNERSHIP_LOST' });
 
     const snapshot = await store.context.loadInputSnapshot({
-      sessionId: retry.task.sessionId,
-      taskId: retry.task.id,
-      goalMessageId: retry.task.goalMessageId,
+      sessionId: followUp.task.sessionId,
+      taskId: followUp.task.id,
+      goalMessageId: followUp.task.goalMessageId,
     });
     expect(snapshot).toMatchObject({
-      activePlan: { taskId: retry.task.id, title: 'Context plan' },
+      activePlan: { taskId: followUp.task.id, title: 'Context plan' },
       compaction: { throughMessageRowId: 2, summary: 'Earlier work' },
     });
-    expect(snapshot.messages.map(message => message.id)).toEqual(['message_goal']);
+    expect(snapshot.messages.map(message => message.id)).toEqual(['message_follow_up']);
   });
 
   it('advances the Session revision when model usage becomes visible', async () => {
@@ -375,7 +382,7 @@ describe('PostgresAgentStore converged model', () => {
   });
 
   it('persists Task, TaskRun, ToolCall and ToolRun while Message owns the result fact', async () => {
-    const { task, message: goal } = await createTask();
+    const { task } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
     const calls = await store.execution.saveToolCalls({
       sessionId: task.sessionId,
@@ -472,18 +479,19 @@ describe('PostgresAgentStore converged model', () => {
     });
     await expect(store.plans.getActive(task.sessionId)).resolves.toBeUndefined();
 
-    const retry = await store.tasks.createRetry({
+    const followUp = await store.tasks.createWithUserMessage({
       sessionId: task.sessionId,
-      taskId: 'task_retry',
-      retryOfTaskId: task.id,
-      clientRequestId: 'retry_1',
+      taskId: 'task_follow_up',
+      userMessageId: 'message_follow_up',
+      content: 'Continue with another request.',
+      clientRequestId: 'follow_up_1',
       nowMs: 40,
     });
-    expect(retry.task).toMatchObject({
-      status: 'created', retryOfTaskId: task.id, goalMessageId: goal.id,
+    expect(followUp.task).toMatchObject({
+      status: 'created', goalMessageId: 'message_follow_up',
     });
     const messages = await store.sessions.listMessages(task.sessionId);
-    expect(messages.filter(item => item.role === 'user')).toHaveLength(1);
+    expect(messages.filter(item => item.role === 'user')).toHaveLength(2);
   });
 
   it('pauses for one ToolCall and resumes through a new user_input_answered TaskRun', async () => {

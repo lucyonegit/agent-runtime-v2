@@ -94,20 +94,6 @@ export interface CreateTaskWithUserMessageResult {
   message: AgentMessage;
 }
 
-export interface CreateRetryTaskInput {
-  sessionId: string;
-  taskId: string;
-  retryOfTaskId: string;
-  clientRequestId?: string;
-  taskMetadata?: Record<string, unknown>;
-  nowMs: number;
-}
-
-export interface CreateRetryTaskResult {
-  session: AgentSession;
-  task: AgentTask;
-}
-
 export interface StartTaskRunInput {
   taskId: string;
   expectedTaskVersion: number;
@@ -464,7 +450,6 @@ export interface TaskStore {
   getRun(taskRunId: string): Promise<AgentTaskRun | undefined>;
   listNeedingRecovery(input: ListTasksNeedingRecoveryInput): Promise<TaskRecoveryCandidate[]>;
   createWithUserMessage(input: CreateTaskWithUserMessageInput): Promise<CreateTaskWithUserMessageResult>;
-  createRetry(input: CreateRetryTaskInput): Promise<CreateRetryTaskResult>;
   startRun(input: StartTaskRunInput): Promise<StartTaskRunResult>;
   renewRunOwnership(input: RenewTaskRunOwnershipInput): Promise<AgentTaskRun>;
   markRecoveryRequired(input: MarkTaskRecoveryRequiredInput): Promise<MarkTaskRecoveryRequiredResult>;

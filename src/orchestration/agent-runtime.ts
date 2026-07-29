@@ -124,37 +124,6 @@ export class AgentRuntime {
     return this.#tasks.cancelTask(taskId, expectedVersion);
   }
 
-  async retryTask(input: { sourceTaskId: string; clientRequestId: string }) {
-    assertAgentRequestText(
-      input.clientRequestId,
-      'clientRequestId',
-      AGENT_REQUEST_LIMITS.idempotencyKeyCharacters
-    );
-    return this.#tasks.retryTask(input);
-  }
-
-  async continueAsNewTask(input: {
-    sourceTaskId: string;
-    clientRequestId: string;
-    message: string;
-  }) {
-    assertAgentRequestText(
-      input.message,
-      'message',
-      AGENT_REQUEST_LIMITS.taskMessageCharacters
-    );
-    assertAgentRequestText(
-      input.clientRequestId,
-      'clientRequestId',
-      AGENT_REQUEST_LIMITS.idempotencyKeyCharacters
-    );
-    return this.#tasks.continueAsNewTask(input);
-  }
-
-  async resumeTask(taskId: string, expectedVersion: number) {
-    return this.#tasks.resumeTask(taskId, expectedVersion);
-  }
-
   async answerUserInputRequest(input: {
     requestId: string;
     expectedVersion: number;

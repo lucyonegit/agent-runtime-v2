@@ -5,8 +5,6 @@ import {
   type BeginSessionDeletionInput,
   type BeginSessionDeletionResult,
   type CancelTaskInput,
-  type CreateRetryTaskInput,
-  type CreateRetryTaskResult,
   type CreateSessionInput,
   type CreateTaskWithUserMessageInput,
   type CreateTaskWithUserMessageResult,
@@ -166,55 +164,6 @@ export async function createTaskWithUserMessageCommand(
         session: mapAgentSessionRow(requireRow(sessionResult.rows[0], 'touch session')),
         task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'create task')),
         message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'create goal message')),
-      };
-    } catch (error) {
-      throw mapTaskCreateError(error, input.sessionId, input.taskId, input.clientRequestId);
-    }
-  });
-}
-
-export async function createRetryTaskCommand(
-  client: PoolClient,
-  input: CreateRetryTaskInput
-): Promise<CreateRetryTaskResult> {
-  return withPostgresTransaction(client, async () => {
-    await lockAgentSession(client, input.sessionId);
-    const source = await selectTask(client, input.retryOfTaskId, true);
-    if (!source || source.session_id !== input.sessionId) throw taskNotFound(input.retryOfTaskId);
-    if (!['completed', 'failed', 'cancelled'].includes(source.status)) {
-      throw new AgentStoreError(
-        'INVALID_TASK_RETRY',
-        `Task ${JSON.stringify(source.id)} must be terminal before it can be retried.`,
-        { taskId: source.id, status: source.status }
-      );
-    }
-    try {
-      const taskResult = await client.query<AgentTaskRow>(
-        `insert into agent_tasks(
-           id, session_id, goal_message_id, retry_of_task_id, client_request_id,
-           status, version, metadata, created_at_ms, updated_at_ms
-         ) values ($1, $2, $3, $4, $5, 'created', 0, $6, $7, $7)
-         returning *`,
-        [
-          input.taskId,
-          input.sessionId,
-          source.goal_message_id,
-          source.id,
-          input.clientRequestId ?? null,
-          input.taskMetadata ?? null,
-          input.nowMs,
-        ]
-      );
-      const sessionResult = await client.query<AgentSessionRow>(
-        `update agent_sessions
-         set version = version + 1, updated_at_ms = $2
-         where id = $1
-         returning *`,
-        [input.sessionId, input.nowMs]
-      );
-      return {
-        session: mapAgentSessionRow(requireRow(sessionResult.rows[0], 'touch session')),
-        task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'create retry task')),
       };
     } catch (error) {
       throw mapTaskCreateError(error, input.sessionId, input.taskId, input.clientRequestId);

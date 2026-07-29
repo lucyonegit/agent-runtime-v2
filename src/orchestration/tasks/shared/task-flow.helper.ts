@@ -1,10 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { isTerminalTaskStatus, type AgentTask } from '../../../domain/index.js';
-import type {
-  AgentStore,
-  CreateRetryTaskResult,
-  CreateTaskWithUserMessageResult,
-} from '../../../storage/agent-store.js';
+import type { AgentStore, CreateTaskWithUserMessageResult } from '../../../storage/agent-store.js';
 import { RuntimeError } from '../../../runtime/errors/runtime-error.js';
 
 export interface TaskFlowClock {
@@ -22,27 +17,6 @@ export const randomTaskFlowIds: TaskFlowIds = {
   messageId: () => `message_${randomUUID()}`,
   taskRunId: () => `task_run_${randomUUID()}`,
 };
-
-/** Retry and Continue-as-new may only branch from an already finished Task. */
-export async function loadTerminalTask(
-  store: AgentStore,
-  sourceTaskId: string
-): Promise<AgentTask> {
-  const source = await store.tasks.get(sourceTaskId);
-  if (!source) {
-    throw new RuntimeError(
-      'invalid_task_state',
-      `Source Task ${JSON.stringify(sourceTaskId)} was not found.`
-    );
-  }
-  if (!isTerminalTaskStatus(source.status)) {
-    throw new RuntimeError(
-      'invalid_task_state',
-      `Source Task ${JSON.stringify(source.id)} must be terminal, not ${source.status}.`
-    );
-  }
-  return source;
-}
 
 /** Reconstructs the committed result of an idempotent create request. */
 export async function resolveIdempotentTaskCreate(
@@ -69,34 +43,4 @@ export async function resolveIdempotentTaskCreate(
     );
   }
   return { session, task, message };
-}
-
-/** Reconstructs the committed result of an idempotent retry request. */
-export async function resolveIdempotentTaskRetry(
-  store: AgentStore,
-  input: { source: AgentTask; clientRequestId: string }
-): Promise<CreateRetryTaskResult> {
-  const [session, task] = await Promise.all([
-    store.sessions.get(input.source.sessionId),
-    store.tasks.getByClientRequestId(input.source.sessionId, input.clientRequestId),
-  ]);
-  if (!session || !task) {
-    throw new RuntimeError(
-      'storage_error',
-      'Idempotent Task retry replay could not load its committed entities.'
-    );
-  }
-  if (task.retryOfTaskId !== input.source.id) {
-    throw new RuntimeError(
-      'idempotency_conflict',
-      `clientRequestId ${JSON.stringify(input.clientRequestId)} was reused with a different request.`,
-      {
-        details: {
-          sessionId: input.source.sessionId,
-          clientRequestId: input.clientRequestId,
-        },
-      }
-    );
-  }
-  return { session, task };
 }

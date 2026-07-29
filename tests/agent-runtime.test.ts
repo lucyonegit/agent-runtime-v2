@@ -32,14 +32,8 @@ describe('AgentRuntime application facade', () => {
       message: 'x'.repeat(AGENT_REQUEST_LIMITS.taskMessageCharacters + 1),
       clientRequestId: 'request_1',
     })).rejects.toThrow('message must not exceed');
-    await expect(runtime.retryTask({
-      sourceTaskId: 'task_1',
-      clientRequestId: 'x'.repeat(AGENT_REQUEST_LIMITS.idempotencyKeyCharacters + 1),
-    })).rejects.toThrow('clientRequestId must not exceed');
-
     expect(create).not.toHaveBeenCalled();
     expect(tasks.createTask).not.toHaveBeenCalled();
-    expect(tasks.retryTask).not.toHaveBeenCalled();
   });
 
   it('replays client-owned Session creation and rejects changed payloads', async () => {
@@ -155,9 +149,6 @@ function taskManager(): TaskManagerPort {
     prepareSessionDeletion: vi.fn(async () => false),
     createTask: vi.fn<TaskManagerPort['createTask']>(),
     cancelTask: vi.fn<TaskManagerPort['cancelTask']>(),
-    retryTask: vi.fn<TaskManagerPort['retryTask']>(),
-    continueAsNewTask: vi.fn<TaskManagerPort['continueAsNewTask']>(),
-    resumeTask: vi.fn<TaskManagerPort['resumeTask']>(),
     answerUserInputRequest: vi.fn<TaskManagerPort['answerUserInputRequest']>(),
   };
 }

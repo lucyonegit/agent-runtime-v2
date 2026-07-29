@@ -62,33 +62,6 @@ export class AgentController {
     return this.runtime.cancelTask(taskId, body.expectedVersion);
   }
 
-  @Post('tasks/:taskId/retry')
-  retryTask(
-    @Param('taskId') taskId: string,
-    @Body() body: { clientRequestId: string }
-  ) {
-    assertNonEmpty(body?.clientRequestId, 'clientRequestId');
-    return this.runtime.retryTask({ sourceTaskId: taskId, ...body });
-  }
-
-  @Post('tasks/:taskId/continue-as-new')
-  continueAsNewTask(
-    @Param('taskId') taskId: string,
-    @Body() body: { clientRequestId: string; message: string }
-  ) {
-    assertNonEmpty(body?.clientRequestId, 'clientRequestId');
-    assertNonEmpty(body?.message, 'message');
-    return this.runtime.continueAsNewTask({ sourceTaskId: taskId, ...body });
-  }
-
-  @Post('tasks/:taskId/resume')
-  resumeTask(
-    @Param('taskId') taskId: string,
-    @Body() body: { expectedVersion: number }
-  ) {
-    return this.runtime.resumeTask(taskId, body.expectedVersion);
-  }
-
   @Post('user-input-requests/:requestId/answer')
   answerUserInputRequest(
     @Param('requestId') requestId: string,

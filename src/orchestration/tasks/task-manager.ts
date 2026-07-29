@@ -2,17 +2,13 @@ import type { AgentTask } from '../../domain/index.js';
 import { mapStoreError } from '../../runtime/errors/runtime-error.js';
 import type {
   AgentStore,
-  CreateRetryTaskResult,
   CreateTaskWithUserMessageResult,
   SaveUserInputAnswerResult,
 } from '../../storage/agent-store.js';
 import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-publisher.js';
 import { AnswerUserInputFlow, type AnswerUserInputRequestInput } from './flows/answer-user-input.flow.js';
 import { CancelTaskFlow } from './flows/cancel-task.flow.js';
-import { ContinueAsNewTaskFlow, type ContinueAsNewTaskInput } from './flows/continue-as-new-task.flow.js';
 import { CreateTaskFlow, type CreateTaskInput } from './flows/create-task.flow.js';
-import { ResumeTaskFlow } from './flows/resume-task.flow.js';
-import { RetryTaskFlow, type RetryTaskInput } from './flows/retry-task.flow.js';
 import type { TaskExecutorPort } from './task-executor.js';
 import { TaskRunStarter } from './shared/task-run-starter.js';
 import { TaskEventPublisher } from './shared/task-event-publisher.js';
@@ -33,9 +29,6 @@ export interface TaskManagerPort {
   prepareSessionDeletion(sessionId: string): Promise<boolean>;
   createTask(input: CreateTaskInput): Promise<CreateTaskWithUserMessageResult>;
   cancelTask(taskId: string, expectedVersion: number): Promise<AgentTask>;
-  retryTask(input: RetryTaskInput): Promise<CreateRetryTaskResult>;
-  continueAsNewTask(input: ContinueAsNewTaskInput): Promise<CreateTaskWithUserMessageResult>;
-  resumeTask(taskId: string, expectedVersion: number): Promise<AgentTask>;
   answerUserInputRequest(input: Omit<AnswerUserInputRequestInput, 'answerMessageId'>): Promise<SaveUserInputAnswerResult>;
 }
 
@@ -44,9 +37,6 @@ export class TaskManager implements TaskManagerPort {
   readonly #clock: TaskFlowClock;
   readonly #events: TaskEventPublisher;
   readonly #create: CreateTaskFlow;
-  readonly #retry: RetryTaskFlow;
-  readonly #continueAsNew: ContinueAsNewTaskFlow;
-  readonly #resume: ResumeTaskFlow;
   readonly #cancel: CancelTaskFlow;
   readonly #answerUserInput: AnswerUserInputFlow;
 
@@ -66,11 +56,6 @@ export class TaskManager implements TaskManagerPort {
     );
     const dispatcher = new TaskExecutionDispatcher(options.execution);
     this.#create = new CreateTaskFlow(options.store, clock, ids.taskId, ids.messageId, taskRuns, events, dispatcher);
-    this.#retry = new RetryTaskFlow(options.store, clock, ids.taskId, taskRuns, events, dispatcher);
-    this.#continueAsNew = new ContinueAsNewTaskFlow(
-      options.store, clock, ids.taskId, ids.messageId, taskRuns, events, dispatcher
-    );
-    this.#resume = new ResumeTaskFlow(options.store, taskRuns, dispatcher);
     this.#cancel = new CancelTaskFlow(options.store, clock, events, options.execution);
     this.#answerUserInput = new AnswerUserInputFlow(
       options.store,
@@ -101,13 +86,10 @@ export class TaskManager implements TaskManagerPort {
     }
   }
   createTask(input: CreateTaskInput) { return this.#create.execute(input); }
-  retryTask(input: RetryTaskInput) { return this.#retry.execute(input); }
-  continueAsNewTask(input: ContinueAsNewTaskInput) { return this.#continueAsNew.execute(input); }
-  resumeTask(taskId: string, expectedVersion: number) { return this.#resume.execute(taskId, expectedVersion); }
   cancelTask(taskId: string, expectedVersion: number) { return this.#cancel.execute(taskId, expectedVersion); }
   answerUserInputRequest(input: Omit<AnswerUserInputRequestInput, 'answerMessageId'>) {
     return this.#answerUserInput.execute(input);
   }
 }
 
-export type { AnswerUserInputRequestInput, ContinueAsNewTaskInput, CreateTaskInput, RetryTaskInput };
+export type { AnswerUserInputRequestInput, CreateTaskInput };

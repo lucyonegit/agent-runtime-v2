@@ -2,8 +2,6 @@ import type { Pool } from 'pg';
 import type { AgentTask, AgentTaskRun } from '../../../domain/index.js';
 import type {
   CancelTaskInput,
-  CreateRetryTaskInput,
-  CreateRetryTaskResult,
   CreateTaskWithUserMessageInput,
   CreateTaskWithUserMessageResult,
   FailTaskInput,
@@ -19,7 +17,6 @@ import type {
 } from '../../agent-store.js';
 import {
   cancelTaskCommand,
-  createRetryTaskCommand,
   createTaskWithUserMessageCommand,
   failTaskCommand,
   markTaskRecoveryRequiredCommand,
@@ -141,10 +138,6 @@ export class PostgresTaskStore implements TaskStore {
     input: CreateTaskWithUserMessageInput
   ): Promise<CreateTaskWithUserMessageResult> {
     return withPostgresClient(this.pool, client => createTaskWithUserMessageCommand(client, input));
-  }
-
-  async createRetry(input: CreateRetryTaskInput): Promise<CreateRetryTaskResult> {
-    return withPostgresClient(this.pool, client => createRetryTaskCommand(client, input));
   }
 
   async startRun(input: StartTaskRunInput): Promise<StartTaskRunResult> {
