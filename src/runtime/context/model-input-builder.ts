@@ -21,9 +21,13 @@ import type { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { stableStringify } from '../helpers/stable-json.helper.js';
 import { createTaskPromptManifest } from '../prompting/task-agent-prompt.js';
 import { estimateTextTokens } from './helpers/token-budget.helper.js';
-import { buildCompleteMessageGroups } from './helpers/message-group.helper.js';
+import { projectMessageGroups } from './helpers/message-group.helper.js';
 import { MessageCompactor } from './message-compactor.js';
-import type { ModelInput, ModelMessageGroup } from './types/model-input.types.js';
+import {
+  MODEL_INPUT_CONTEXT_RULES_VERSION,
+  type ModelInput,
+  type ModelMessageGroup,
+} from './types/model-input.types.js';
 import { projectModelInput } from '../model/model-input-accounting.js';
 
 export interface ModelInputBuilderOptions {
@@ -104,11 +108,12 @@ export class ModelInputBuilder {
         });
       }
       const eligible = filterContextMessages(built.snapshot.messages, task);
+      const projection = projectMessageGroups(eligible);
       const previousCutoff = built.snapshot.compaction?.throughMessageRowId ?? 0;
       const updated = await this.#compactor.compact({
         task,
         taskRun,
-        groups: buildCompleteMessageGroups(eligible),
+        groups: projection.groups,
         current: built.snapshot.compaction,
         signal: options.signal,
       });
@@ -149,7 +154,8 @@ export class ModelInputBuilder {
       this.options.getStableContext(task.sessionId),
     ]);
     const eligible = filterContextMessages(snapshot.messages, task);
-    const rawGroups = buildCompleteMessageGroups(eligible);
+    const projection = projectMessageGroups(eligible);
+    const rawGroups = projection.groups;
     const groups = selectGroupsAfterCompaction(
       rawGroups,
       task,
@@ -186,6 +192,7 @@ export class ModelInputBuilder {
       compactionSummary: snapshot.compaction?.summary,
       estimatedTokens,
       stableContext,
+      excludedToolCallMessageIds: projection.excludedToolCallMessageIds,
       projectedToolResultMessageIds,
     });
     return {
@@ -211,6 +218,7 @@ export class ModelInputBuilder {
     compactionSummary?: string;
     estimatedTokens: number;
     stableContext: string;
+    excludedToolCallMessageIds: string[];
     projectedToolResultMessageIds: string[];
   }): AgentContextInputManifest {
     const systemTokens = estimateTextTokens(this.options.systemPrompt)
@@ -229,13 +237,16 @@ export class ModelInputBuilder {
     });
     return {
       purpose: 'task.react',
-      contextRulesVersion: 'model-input-v1',
+      contextRulesVersion: MODEL_INPUT_CONTEXT_RULES_VERSION,
       systemPromptVersion: this.options.systemPromptVersion,
       prompt,
       messageGroupIds: input.groups.map(group => group.id),
       summaryIds: input.compactionVersion === undefined
         ? []
         : [`context_compaction:${input.compactionVersion}`],
+      ...(input.excludedToolCallMessageIds.length > 0 ? {
+        excludedToolCallMessageIds: input.excludedToolCallMessageIds,
+      } : {}),
       ...(input.projectedToolResultMessageIds.length > 0 ? {
         truncatedToolResultMessageIds: input.projectedToolResultMessageIds,
       } : {}),

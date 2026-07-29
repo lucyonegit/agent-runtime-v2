@@ -1,6 +1,8 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import type { AgentContextInputManifest, AgentMessage } from '../../../domain/index.js';
 
+export const MODEL_INPUT_CONTEXT_RULES_VERSION = 'model-input-v2';
+
 export interface ModelInput {
   messages: BaseMessage[];
   estimatedTokens: number;

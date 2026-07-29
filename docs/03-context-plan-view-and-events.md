@@ -31,6 +31,7 @@ flowchart TD
 - 当前目标消息始终保留。
 - AssistantMessage(tool_calls) 与其全部 ToolMessage 作为不可拆分消息组。
 - 缺少任意 ToolMessage 的不完整工具批次整体排除，不在 Context 层伪造结果。
+- ToolCall/ToolMessage 按 `taskId + modelToolCallId` 配对，并校验先后顺序、工具名和唯一性；被排除的调用消息 ID 写入模型输入 manifest 供审计。
 - `update_plan` 的调用与结果使用 `task` scope，下一 Task 不会看到。
 
 Context 仅有三个策略参数：

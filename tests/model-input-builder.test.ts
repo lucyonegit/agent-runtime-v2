@@ -6,13 +6,21 @@ import type { AgentStore } from '../src/storage/agent-store.js';
 describe('ModelInputBuilder', () => {
   it('owns the lazy model messages and matching audit manifest for one TaskRun', async () => {
     const loadInputSnapshot = vi.fn(async () => ({
-      messages: [message({
-        rowId: 1,
-        id: 'goal',
-        role: 'user',
-        messageType: 'user_message',
-        content: 'current goal',
-      })],
+      messages: [
+        message({
+          rowId: 1,
+          id: 'goal',
+          role: 'user',
+          messageType: 'user_message',
+          content: 'current goal',
+        }),
+        message({
+          rowId: 2,
+          id: 'incomplete_call',
+          messageType: 'tool_call',
+          toolCalls: [{ id: 'missing', name: 'read_file', args: {}, type: 'tool_call' }],
+        }),
+      ],
     }));
     const builder = new ModelInputBuilder({
       store: {
@@ -44,6 +52,7 @@ describe('ModelInputBuilder', () => {
     expect(prepared.manifest()).toMatchObject({
       purpose: 'task.react',
       messageGroupIds: ['goal'],
+      excludedToolCallMessageIds: ['incomplete_call'],
     });
     expect(loadInputSnapshot).toHaveBeenCalledOnce();
   });

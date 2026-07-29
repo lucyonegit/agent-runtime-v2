@@ -12,7 +12,10 @@ import type { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { mapStoreError, RuntimeError } from '../errors/runtime-error.js';
 import { projectModelInput } from '../model/model-input-accounting.js';
 import { estimateTextTokens } from './helpers/token-budget.helper.js';
-import type { ModelMessageGroup } from './types/model-input.types.js';
+import {
+  MODEL_INPUT_CONTEXT_RULES_VERSION,
+  type ModelMessageGroup,
+} from './types/model-input.types.js';
 
 interface MessageCompactorOptions {
   store: AgentStore;
@@ -201,7 +204,7 @@ function compressionManifest(
   const summaryTokens = current ? estimateTextTokens(current.summary) : 0;
   return {
     purpose: 'context.compress',
-    contextRulesVersion: 'model-input-v1',
+    contextRulesVersion: MODEL_INPUT_CONTEXT_RULES_VERSION,
     systemPromptVersion,
     messageGroupIds: groups.map(group => group.id),
     summaryIds: current ? [`context_compaction:${current.version}`] : [],

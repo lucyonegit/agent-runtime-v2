@@ -32,6 +32,7 @@ export interface AgentContextInputManifest {
   prompt?: AgentPromptManifest;
   messageGroupIds: string[];
   summaryIds: string[];
+  excludedToolCallMessageIds?: string[];
   truncatedToolResultMessageIds?: string[];
   includedRowIdStart?: number;
   includedRowIdEnd?: number;
