@@ -487,12 +487,6 @@ describe('AgentLoop with LangChain messages', () => {
       limits: { maxIterations: 2, maxToolCalls: 2, signal: controller.signal },
     })))).result).toEqual({ type: 'cancelled' });
 
-    const superseded = new AbortController();
-    superseded.abort('task_run_superseded');
-    expect((await consume(deadline.run(loopInput({
-      limits: { maxIterations: 2, maxToolCalls: 2, signal: superseded.signal },
-    })))).result).toEqual({ type: 'cancelled', reason: 'task_run_superseded' });
-
     const ownershipLost = new AbortController();
     ownershipLost.abort('ownership_lost');
     expect((await consume(deadline.run(loopInput({

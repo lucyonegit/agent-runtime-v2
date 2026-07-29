@@ -6,7 +6,7 @@ export class TaskExecutionDispatcher {
 
   dispatch(command: ExecuteTaskRunCommand): void {
     void this.execution.execute(command).catch(() => {
-      // The in-process adapter leaves retry to durable startup recovery.
+      // Never retry here; startup reconciliation later closes abandoned state.
     });
   }
 }

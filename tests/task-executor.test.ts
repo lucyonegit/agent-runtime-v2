@@ -5,7 +5,7 @@ import { RuntimeError } from '../src/runtime/errors/runtime-error.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
 describe('TaskExecutor TaskRun identity', () => {
-  it('deduplicates one TaskRun but replaces a still-pending older TaskRun', async () => {
+  it('deduplicates one TaskRun and does not coordinate a later TaskRun', async () => {
     const task = {
       id: 'task_1',
       sessionId: 'session_1',
@@ -51,18 +51,18 @@ describe('TaskExecutor TaskRun identity', () => {
     expect(executions.map(item => item.taskRunId)).toEqual(['task_run_1']);
 
     runs.set('task_run_2', taskRun('task_run_2', 2));
-    const resumed = executor.execute({ taskId: task.id, taskRunId: 'task_run_2' });
+    const continued = executor.execute({ taskId: task.id, taskRunId: 'task_run_2' });
     await vi.waitFor(() => expect(executions.map(item => item.taskRunId)).toEqual([
       'task_run_1',
       'task_run_2',
     ]));
 
-    expect(executions[0]!.signal.aborted).toBe(true);
-    expect(executions[0]!.signal.reason).toBe('task_run_superseded');
+    expect(executions[0]!.signal.aborted).toBe(false);
     expect(executions[1]!.signal.aborted).toBe(false);
 
+    executions[0]!.complete();
     executions[1]!.complete();
-    await Promise.all([first, duplicate, resumed]);
+    await Promise.all([first, duplicate, continued]);
     expect(runTask).toHaveBeenCalledTimes(2);
   });
 
@@ -277,13 +277,13 @@ describe('TaskExecutor TaskRun identity', () => {
     await running;
   });
 
-  it('keeps superseded executions tracked until Session deletion can join them', async () => {
+  it('tracks separate TaskRun commands until Session deletion can join them', async () => {
     const activeTask = task('task_1', 'session_1');
     const runs = new Map<string, AgentTaskRun>([
       ['task_run_1', taskRunFor('task_run_1', activeTask.id)],
     ]);
     const signals = new Map<string, AbortSignal>();
-    let completeSuperseded!: () => void;
+    let completeFirst!: () => void;
     const executor = new TaskExecutor({
       store: {
         tasks: {
@@ -296,7 +296,7 @@ describe('TaskExecutor TaskRun identity', () => {
           new Promise<void>(resolve => {
             const signal = input.signal!;
             signals.set(input.taskRun.id, signal);
-            if (input.taskRun.id === 'task_run_1') completeSuperseded = resolve;
+            if (input.taskRun.id === 'task_run_1') completeFirst = resolve;
             else signal.addEventListener('abort', () => resolve(), { once: true });
           })
         )),
@@ -319,14 +319,14 @@ describe('TaskExecutor TaskRun identity', () => {
     });
     expect(signals.get('task_run_1')).toMatchObject({
       aborted: true,
-      reason: 'task_run_superseded',
+      reason: 'session_deletion',
     });
     expect(signals.get('task_run_2')).toMatchObject({
       aborted: true,
       reason: 'session_deletion',
     });
 
-    completeSuperseded();
+    completeFirst();
     await Promise.all([first, second]);
   });
 });

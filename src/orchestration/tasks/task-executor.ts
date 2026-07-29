@@ -29,15 +29,13 @@ export interface TaskExecutorOptions {
 interface ActiveExecution {
   taskId: string;
   sessionId: string;
-  taskRunId: string;
   controller: AbortController;
   completion: Promise<void>;
 }
 
-/** Owns process-local scheduling; durable lifecycle changes stay in stores/flows. */
+/** Consumes one TaskRun command; durable lifecycle changes stay in stores/flows. */
 export class TaskExecutor implements TaskExecutorPort {
-  readonly #activeExecutions = new Map<string, ActiveExecution>();
-  readonly #trackedExecutions = new Set<ActiveExecution>();
+  readonly #executionsByRunId = new Map<string, ActiveExecution>();
   readonly #options: Required<Omit<TaskExecutorOptions,
     'store' | 'reactExecution' | 'workerId'>> & TaskExecutorOptions;
   readonly #executionOwnership: ExecutionOwnershipService;
@@ -69,41 +67,40 @@ export class TaskExecutor implements TaskExecutorPort {
 
   async execute(command: ExecuteTaskRunCommand): Promise<void> {
     if (this.#stopping) return;
+    const existing = this.#executionsByRunId.get(command.taskRunId);
+    if (existing) return existing.completion;
+
     const selected = await this.#loadRunnableTask(command);
-    const existing = this.#activeExecutions.get(command.taskId);
-    if (existing?.taskRunId === selected.taskRun.id) return existing.completion;
+    if (this.#stopping) return;
+    const concurrentlyStarted = this.#executionsByRunId.get(command.taskRunId);
+    if (concurrentlyStarted) return concurrentlyStarted.completion;
 
     const execution = {
       taskId: command.taskId,
       sessionId: selected.task.sessionId,
-      taskRunId: command.taskRunId,
       controller: new AbortController(),
       completion: Promise.resolve(),
     };
-    this.#activeExecutions.set(command.taskId, execution);
-    this.#trackedExecutions.add(execution);
-    // 新任务运行终止旧任务runner
-    existing?.controller.abort('task_run_superseded');
+    this.#executionsByRunId.set(command.taskRunId, execution);
     execution.completion = this.#runOwnedTask(
-      command,
+      selected,
       execution.controller
     ).finally(() => {
-      this.#trackedExecutions.delete(execution);
-      if (this.#activeExecutions.get(command.taskId) === execution) {
-        this.#activeExecutions.delete(command.taskId);
+      if (this.#executionsByRunId.get(command.taskRunId) === execution) {
+        this.#executionsByRunId.delete(command.taskRunId);
       }
     });
     return execution.completion;
   }
 
   abortExecution(taskId: string): void {
-    for (const execution of this.#trackedExecutions) {
+    for (const execution of this.#executionsByRunId.values()) {
       if (execution.taskId === taskId) execution.controller.abort('task_cancelled');
     }
   }
 
   async abortSessionExecutions(sessionId: string): Promise<void> {
-    const active = [...this.#trackedExecutions]
+    const active = [...this.#executionsByRunId.values()]
       .filter(execution => execution.sessionId === sessionId);
     for (const execution of active) execution.controller.abort('session_deletion');
     if (active.length === 0) return;
@@ -122,7 +119,7 @@ export class TaskExecutor implements TaskExecutorPort {
 
   async shutdown(): Promise<void> {
     this.#stopping = true;
-    const active = [...this.#trackedExecutions];
+    const active = [...this.#executionsByRunId.values()];
     for (const execution of active) execution.controller.abort('runtime_shutdown');
     await settleWithin(
       active.map(execution => execution.completion),
@@ -131,15 +128,14 @@ export class TaskExecutor implements TaskExecutorPort {
   }
 
   async #runOwnedTask(
-    command: ExecuteTaskRunCommand,
+    runnable: { task: AgentTask; taskRun: AgentTaskRun },
     controller: AbortController
   ): Promise<void> {
     let stopRefreshing: () => void = () => undefined;
     let stopRefreshingOnAbort: (() => void) | undefined;
     try {
-      const runnable = await this.#loadRunnableTask(command);
       stopRefreshing = this.#executionOwnership.startRefreshing({
-        taskId: command.taskId,
+        taskId: runnable.task.id,
         taskRunId: runnable.taskRun.id,
         ownershipExpiresAtMs: runnable.taskRun.ownershipExpiresAtMs!,
         onOwnershipLost: () => controller.abort('ownership_lost'),

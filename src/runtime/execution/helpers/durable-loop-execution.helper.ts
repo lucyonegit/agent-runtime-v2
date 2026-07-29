@@ -116,7 +116,7 @@ async function handleLoopError(
 
 async function completeCancellation(
   input: ReActLoopExecutionInput,
-  reason: 'runtime_shutdown' | 'task_run_superseded' | 'ownership_lost' | undefined,
+  reason: 'runtime_shutdown' | 'ownership_lost' | undefined,
   options: DurableLoopExecutionOptions
 ): Promise<Extract<ReActTaskExecutionResult, { type: 'cancelled' }>> {
   if (reason) {
@@ -128,9 +128,7 @@ async function completeCancellation(
     }
     throw new RuntimeError(
       'aborted',
-      reason === 'runtime_shutdown'
-        ? `Task ${JSON.stringify(input.task.id)} was interrupted by shutdown.`
-        : `TaskRun ${JSON.stringify(input.taskRun.id)} was superseded by a newer run.`
+      `Task ${JSON.stringify(input.task.id)} was interrupted by shutdown.`
     );
   }
   const current = await options.store.tasks.get(input.task.id);

@@ -31,5 +31,5 @@ export type LoopResult =
     }
   | {
       type: 'cancelled';
-      reason?: 'runtime_shutdown' | 'task_run_superseded' | 'ownership_lost';
+      reason?: 'runtime_shutdown' | 'ownership_lost';
     };

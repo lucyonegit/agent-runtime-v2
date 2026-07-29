@@ -23,7 +23,7 @@ sequenceDiagram
 
 创建事实与取得执行权是两个独立事务。若事务 1 已提交而事务 2 失败，客户端以同一 `clientRequestId` 再次提交时会解析出既有 Task；只有仍为 `created` 的 Task 才会再次尝试首次启动，不会重复写用户消息。
 
-TaskExecutor 处理一条明确的 `(taskId, taskRunId)` 命令。它重新读取数据库状态，执行租约续期，并调用 ReActExecution；它不是队列、集群调度器或进程管理器。将来扩展多进程时，由消息队列投递同一种 TaskRun 命令，消费者本身保持可复制。
+TaskExecutor 处理一条明确的 `(taskId, taskRunId)` 命令。它重新读取数据库状态，执行租约续期，并调用 ReActExecution；它只按 `taskRunId` 去重，不比较、替换或调度不同 TaskRun。将来扩展多进程时，由消息队列投递同一种 TaskRun 命令，消费者本身保持可复制。
 
 ## 2. 租约、fence 与本地停止
 
