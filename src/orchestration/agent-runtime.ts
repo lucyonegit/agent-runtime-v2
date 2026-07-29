@@ -94,14 +94,6 @@ export class AgentRuntime {
     return this.#view.load(sessionId);
   }
 
-  async start(): Promise<void> {
-    await this.#tasks.start();
-  }
-
-  async stop(): Promise<void> {
-    await this.#tasks.shutdown();
-  }
-
   async deleteSession(sessionId: string) {
     const existed = await this.#tasks.prepareSessionDeletion(sessionId);
     await this.#beforeDeleteSession?.(sessionId);

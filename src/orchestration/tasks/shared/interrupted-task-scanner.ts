@@ -6,7 +6,7 @@ import type { AgentStore } from '../../../storage/agent-store.js';
 export interface InterruptedTaskScannerOptions {
   store: AgentStore;
   publisher: RuntimeEventPublisher;
-  scanIntervalMs: number;
+  createdTaskGraceMs: number;
   batchSize: number;
   clock: { nowMs(): number };
   ownerId: string;
@@ -14,52 +14,29 @@ export interface InterruptedTaskScannerOptions {
   onTaskReady(taskId: string): void;
 }
 
-/** Marks abandoned work as recovery_required. It never auto-resumes execution. */
+/** Runs startup reconciliation in bounded batches and never schedules itself. */
 export class InterruptedTaskScanner {
-  #timer?: ReturnType<typeof setInterval>;
-  #activeScan?: Promise<void>;
-  #stopping = false;
-
   constructor(private readonly options: InterruptedTaskScannerOptions) {}
 
-  async start(): Promise<void> {
-    this.#stopping = false;
-    await this.#scan();
-    if (this.#stopping || this.#timer) return;
-    this.#timer = setInterval(() => {
-      void this.#scan().catch(() => undefined);
-    }, this.options.scanIntervalMs);
-    this.#timer.unref();
-  }
-
-  async stop(): Promise<void> {
-    this.#stopping = true;
-    if (this.#timer) clearInterval(this.#timer);
-    this.#timer = undefined;
-    await this.#activeScan?.catch(() => undefined);
-  }
-
-  #scan(): Promise<void> {
-    if (this.#stopping) return Promise.resolve();
-    if (this.#activeScan) return this.#activeScan;
-    const scan = this.#processBatch().finally(() => {
-      if (this.#activeScan === scan) this.#activeScan = undefined;
-    });
-    this.#activeScan = scan;
-    return scan;
-  }
-
-  async #processBatch(): Promise<void> {
+  async scanOnce(): Promise<void> {
     const nowMs = this.options.clock.nowMs();
     await this.options.store.models.abandonStartedCalls(nowMs);
-    await this.#expireUserInputRequests(nowMs);
+    while (await this.#expireUserInputBatch(nowMs)) {
+      // Drain the startup backlog in bounded database batches.
+    }
+    while (await this.#recoverTaskBatch(nowMs)) {
+      // Drain the startup backlog in bounded database batches.
+    }
+  }
+
+  async #recoverTaskBatch(nowMs: number): Promise<boolean> {
     const candidates = await this.options.store.tasks.listNeedingRecovery({
       nowMs,
-      createdBeforeMs: nowMs - this.options.scanIntervalMs,
+      createdBeforeMs: nowMs - this.options.createdTaskGraceMs,
       limit: this.options.batchSize,
     });
+    let recovered = 0;
     for (const candidate of candidates) {
-      if (this.#stopping) break;
       try {
         const result = await this.options.store.tasks.markRecoveryRequired({
           taskId: candidate.task.id,
@@ -85,6 +62,7 @@ export class InterruptedTaskScanner {
           })),
         ];
         for (const event of events) await this.#publish(event);
+        recovered += 1;
       } catch (error) {
         const mapped = mapStoreError(error);
         if (!(mapped instanceof RuntimeError
@@ -93,15 +71,16 @@ export class InterruptedTaskScanner {
         }
       }
     }
+    return candidates.length === this.options.batchSize && recovered > 0;
   }
 
-  async #expireUserInputRequests(nowMs: number): Promise<void> {
+  async #expireUserInputBatch(nowMs: number): Promise<boolean> {
     const requests = await this.options.store.execution.listExpiredUserInputRequests(
       nowMs,
       this.options.batchSize
     );
+    let expired = 0;
     for (const request of requests) {
-      if (this.#stopping) break;
       try {
         const result = await this.options.store.execution.expireUserInput({
           requestId: request.id,
@@ -141,6 +120,7 @@ export class InterruptedTaskScanner {
           });
         }
         if (result.shouldResume) this.options.onTaskReady(result.task.id);
+        expired += 1;
       } catch (error) {
         const mapped = mapStoreError(error);
         if (!(mapped instanceof RuntimeError
@@ -149,6 +129,7 @@ export class InterruptedTaskScanner {
         }
       }
     }
+    return requests.length === this.options.batchSize && expired > 0;
   }
 
   async #publish(event: Parameters<RuntimeEventPublisher['publish']>[0]): Promise<void> {

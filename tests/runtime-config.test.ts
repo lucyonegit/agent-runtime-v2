@@ -14,6 +14,7 @@ describe('runtime configuration', () => {
       AGENT_SERVER_TOOL_CAPABILITIES: 'filesystem,shell',
       TASK_OWNERSHIP_TIMEOUT_MS: '45000',
       TASK_OWNERSHIP_REFRESH_MS: '15000',
+      TASK_STARTUP_RECOVERY_GRACE_MS: '7500',
       AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS: 'true',
       AGENT_BROWSER_MAX_RESPONSE_BYTES: '262144',
       AWS_ACCESS_KEY_ID: 'aws-access-key',
@@ -38,7 +39,11 @@ describe('runtime configuration', () => {
         outputTokenLimit: 4_096,
         inputTokenLimit: 995_904,
       },
-      execution: { ownershipTimeoutMs: 45_000, ownershipRefreshMs: 15_000 },
+      execution: {
+        ownershipTimeoutMs: 45_000,
+        ownershipRefreshMs: 15_000,
+        startupRecoveryGraceMs: 7_500,
+      },
       tools: {
         browser: {
           allowProxyFakeIps: true,

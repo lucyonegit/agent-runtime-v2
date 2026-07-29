@@ -5,17 +5,6 @@ import type { TaskManagerPort } from '../src/orchestration/tasks/task-manager.js
 import { AgentStoreError, type AgentStore } from '../src/storage/agent-store.js';
 
 describe('AgentRuntime application facade', () => {
-  it('delegates process startup and shutdown to TaskManager', async () => {
-    const tasks = taskManager();
-    const runtime = createRuntime({} as AgentStore, tasks);
-
-    await runtime.start();
-    await runtime.stop();
-
-    expect(tasks.start).toHaveBeenCalledOnce();
-    expect(tasks.shutdown).toHaveBeenCalledOnce();
-  });
-
   it('delegates Task commands without knowing execution or persistence details', async () => {
     const tasks = taskManager();
     const cancelled = taskFixture({ status: 'cancelled', version: 2, completedAtMs: 1_000 });
@@ -163,8 +152,6 @@ function createRuntime(store: AgentStore, tasks: TaskManagerPort): AgentRuntime 
 
 function taskManager(): TaskManagerPort {
   return {
-    start: vi.fn(async () => undefined),
-    shutdown: vi.fn(async () => undefined),
     prepareSessionDeletion: vi.fn(async () => false),
     createTask: vi.fn<TaskManagerPort['createTask']>(),
     cancelTask: vi.fn<TaskManagerPort['cancelTask']>(),

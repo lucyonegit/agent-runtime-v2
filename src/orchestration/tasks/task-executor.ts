@@ -6,14 +6,11 @@ import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-w
 import { taskFinishEvents } from '../../runtime/events/helpers/task-finish-events.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import { ExecutionOwnershipService } from './shared/execution-ownership.service.js';
-import { InterruptedTaskScanner } from './shared/interrupted-task-scanner.js';
 
 export interface TaskExecutorPort {
-  start(): Promise<void>;
   startExecution(taskId: string): Promise<void>;
   abortExecution(taskId: string): void;
   abortSessionExecutions(sessionId: string): Promise<void>;
-  shutdown(): Promise<void>;
 }
 
 export interface TaskExecutorOptions {
@@ -23,8 +20,6 @@ export interface TaskExecutorOptions {
   publisher: RuntimeEventPublisher;
   ownershipTimeoutMs?: number;
   ownershipRefreshMs?: number;
-  recoveryIntervalMs?: number;
-  recoveryBatchSize?: number;
   terminationGraceMs?: number;
   clock?: { nowMs(): number };
 }
@@ -44,15 +39,12 @@ export class TaskExecutor implements TaskExecutorPort {
   readonly #options: Required<Omit<TaskExecutorOptions,
     'store' | 'reactExecution' | 'publisher' | 'workerId'>> & TaskExecutorOptions;
   readonly #executionOwnership: ExecutionOwnershipService;
-  readonly #interruptedTaskScanner: InterruptedTaskScanner;
   #stopping = false;
 
   constructor(options: TaskExecutorOptions) {
     this.#options = {
       ownershipTimeoutMs: DEFAULT_EXECUTION_CONFIG.ownershipTimeoutMs,
       ownershipRefreshMs: DEFAULT_EXECUTION_CONFIG.ownershipRefreshMs,
-      recoveryIntervalMs: DEFAULT_EXECUTION_CONFIG.recoveryScanIntervalMs,
-      recoveryBatchSize: DEFAULT_EXECUTION_CONFIG.recoveryBatchSize,
       terminationGraceMs: 5_000,
       clock: { nowMs: () => Date.now() },
       ...options,
@@ -71,21 +63,6 @@ export class TaskExecutor implements TaskExecutorPort {
       ownershipTimeoutMs: this.#options.ownershipTimeoutMs,
       clock: this.#options.clock,
     });
-    this.#interruptedTaskScanner = new InterruptedTaskScanner({
-      store: options.store,
-      publisher: options.publisher,
-      scanIntervalMs: this.#options.recoveryIntervalMs,
-      batchSize: this.#options.recoveryBatchSize,
-      clock: this.#options.clock,
-      ownerId: options.workerId,
-      ownershipTimeoutMs: this.#options.ownershipTimeoutMs,
-      onTaskReady: taskId => { void this.startExecution(taskId); },
-    });
-  }
-
-  async start(): Promise<void> {
-    this.#stopping = false;
-    await this.#interruptedTaskScanner.start();
   }
 
   async startExecution(taskId: string): Promise<void> {
@@ -141,7 +118,6 @@ export class TaskExecutor implements TaskExecutorPort {
 
   async shutdown(): Promise<void> {
     this.#stopping = true;
-    await this.#interruptedTaskScanner.stop();
     const active = [...this.#trackedExecutions];
     for (const execution of active) execution.controller.abort('runtime_shutdown');
     await settleWithin(

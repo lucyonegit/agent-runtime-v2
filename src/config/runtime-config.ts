@@ -71,7 +71,7 @@ export interface ExecutionConfig {
   deadlineMs: number;
   ownershipTimeoutMs: number;
   ownershipRefreshMs: number;
-  recoveryScanIntervalMs: number;
+  startupRecoveryGraceMs: number;
   recoveryBatchSize: number;
 }
 

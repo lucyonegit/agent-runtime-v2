@@ -46,7 +46,7 @@
     "deadlineMs": 900000,
     "ownershipTimeoutMs": 30000,
     "ownershipRefreshMs": 10000,
-    "recoveryScanIntervalMs": 5000,
+    "startupRecoveryGraceMs": 5000,
     "recoveryBatchSize": 32
   },
   "context": {

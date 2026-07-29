@@ -30,8 +30,6 @@ export interface TaskManagerOptions {
 }
 
 export interface TaskManagerPort {
-  start(): Promise<void>;
-  shutdown(): Promise<void>;
   prepareSessionDeletion(sessionId: string): Promise<boolean>;
   createTask(input: CreateTaskInput): Promise<CreateTaskWithUserMessageResult>;
   cancelTask(taskId: string, expectedVersion: number): Promise<AgentTask>;
@@ -86,8 +84,6 @@ export class TaskManager implements TaskManagerPort {
     );
   }
 
-  start(): Promise<void> { return this.options.execution.start(); }
-  shutdown(): Promise<void> { return this.options.execution.shutdown(); }
   async prepareSessionDeletion(sessionId: string): Promise<boolean> {
     try {
       const fenced = await this.options.store.sessions.beginDeletion({

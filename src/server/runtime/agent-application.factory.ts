@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 import type { RuntimeConfig } from '../../config/runtime-config.js';
 import { AgentRuntime } from '../../orchestration/agent-runtime.js';
+import { InterruptedTaskScanner } from '../../orchestration/tasks/shared/interrupted-task-scanner.js';
 import { TaskExecutor } from '../../orchestration/tasks/task-executor.js';
 import { TaskManager } from '../../orchestration/tasks/task-manager.js';
 import { ModelInputBuilder } from '../../runtime/context/model-input-builder.js';
@@ -128,9 +129,21 @@ export async function createAgentApplication(
       publisher: events,
       ownershipTimeoutMs: config.execution.ownershipTimeoutMs,
       ownershipRefreshMs: config.execution.ownershipRefreshMs,
-      recoveryIntervalMs: config.execution.recoveryScanIntervalMs,
-      recoveryBatchSize: config.execution.recoveryBatchSize,
       clock,
+    });
+    const interruptedTaskScanner = new InterruptedTaskScanner({
+      store,
+      publisher: events,
+      createdTaskGraceMs: config.execution.startupRecoveryGraceMs,
+      batchSize: config.execution.recoveryBatchSize,
+      clock,
+      ownerId: config.workerId,
+      ownershipTimeoutMs: config.execution.ownershipTimeoutMs,
+      onTaskReady: taskId => {
+        void taskExecutor.startExecution(taskId).catch(() => {
+          // Ownership checks or another committed transition may win the startup race.
+        });
+      },
     });
     const tasks = new TaskManager({
       store,
@@ -169,17 +182,18 @@ export async function createAgentApplication(
       contextPreview,
       managedProcesses,
       async start() {
-        await managedProcesses.start();
         try {
-          await runtime.start();
+          await managedProcesses.start();
+          await interruptedTaskScanner.scanOnce();
         } catch (error) {
+          await taskExecutor.shutdown();
           managedProcesses.shutdown();
           throw error;
         }
       },
       async stop() {
         try {
-          await runtime.stop();
+          await taskExecutor.shutdown();
         } finally {
           managedProcesses.shutdown();
         }

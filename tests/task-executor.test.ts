@@ -38,7 +38,6 @@ describe('TaskExecutor TaskRun identity', () => {
       publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 30_000,
       ownershipRefreshMs: 10_000,
-      recoveryIntervalMs: 60_000,
       clock: { nowMs: () => 100 },
     });
 
@@ -95,7 +94,6 @@ describe('TaskExecutor TaskRun identity', () => {
       publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 30_000,
       ownershipRefreshMs: 10_000,
-      recoveryIntervalMs: 60_000,
       terminationGraceMs: 100,
       clock: { nowMs: () => 100 },
     });
@@ -137,7 +135,6 @@ describe('TaskExecutor TaskRun identity', () => {
       publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 30_000,
       ownershipRefreshMs: 10_000,
-      recoveryIntervalMs: 60_000,
       terminationGraceMs: 10,
       clock: { nowMs: () => 100 },
     });
@@ -178,7 +175,6 @@ describe('TaskExecutor TaskRun identity', () => {
       publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 1_000,
       ownershipRefreshMs: 20,
-      recoveryIntervalMs: 60_000,
       terminationGraceMs: 10,
       clock: { nowMs: () => 100 },
     });
@@ -221,7 +217,6 @@ describe('TaskExecutor TaskRun identity', () => {
       publisher: { publish: vi.fn() },
       ownershipTimeoutMs: 30_000,
       ownershipRefreshMs: 10_000,
-      recoveryIntervalMs: 60_000,
       terminationGraceMs: 10,
       clock: { nowMs: () => 100 },
     });

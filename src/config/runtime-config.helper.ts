@@ -110,8 +110,8 @@ function applyEnvironmentOverrides(
   assignPositiveInteger(env, 'TASK_OWNERSHIP_REFRESH_MS', value => {
     config.execution.ownershipRefreshMs = value;
   });
-  assignPositiveInteger(env, 'TASK_RECOVERY_SCAN_MS', value => {
-    config.execution.recoveryScanIntervalMs = value;
+  assignPositiveInteger(env, 'TASK_STARTUP_RECOVERY_GRACE_MS', value => {
+    config.execution.startupRecoveryGraceMs = value;
   });
   assignBoolean(env, 'AGENT_RUNTIME_ALLOW_PROXY_FAKE_IPS', value => {
     config.tools.browser.allowProxyFakeIps = value;
