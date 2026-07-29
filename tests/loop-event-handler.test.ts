@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { LOOP_EVENT_TYPES } from '../src/runtime/loop/loop-events.js';
-import { RuntimeEventWriter } from '../src/runtime/events/runtime-event-writer.js';
-import type { AgentStore } from '../src/storage/agent-store.js';
 import type { AgentRealtimeEvent } from '../src/domain/index.js';
+import { LoopEventHandler } from '../src/runtime/events/loop-event-handler.js';
+import { LOOP_EVENT_TYPES } from '../src/runtime/loop/loop-events.js';
+import type { AgentStore } from '../src/storage/agent-store.js';
 
-describe('RuntimeEventWriter rejected model output', () => {
-  it('publishes message.discarded for an uncommitted streaming draft', async () => {
+describe('LoopEventHandler', () => {
+  it('persists a rejected output disposition before publishing its discarded projection', async () => {
     const publish = vi.fn(async (_event: AgentRealtimeEvent) => undefined);
     const setModelCallOutputDisposition = vi.fn(async () => ({}) as never);
-    const writer = new RuntimeEventWriter({
+    const handler = new LoopEventHandler({
       store: {
         models: { setCallOutputDisposition: setModelCallOutputDisposition },
       } as unknown as AgentStore,
@@ -23,7 +23,7 @@ describe('RuntimeEventWriter rejected model output', () => {
       },
     });
 
-    const result = await writer.record({
+    const feedback = await handler.handle({
       type: LOOP_EVENT_TYPES.ModelOutputRejected,
       outputId: 'output_1',
       reason: 'The durable plan is still active.',
@@ -31,7 +31,7 @@ describe('RuntimeEventWriter rejected model output', () => {
       sessionId: 'session_1', taskId: 'task_1', taskRunId: 'task_run_1',
     });
 
-    expect(result).toEqual({ type: 'discarded_output' });
+    expect(feedback).toBeUndefined();
     expect(setModelCallOutputDisposition).toHaveBeenCalledWith({
       taskId: 'task_1',
       outputId: 'output_1',
@@ -47,9 +47,11 @@ describe('RuntimeEventWriter rejected model output', () => {
       outputId: 'output_1',
       reason: 'The durable plan is still active.',
     });
+    expect(setModelCallOutputDisposition.mock.invocationCallOrder[0])
+      .toBeLessThan(publish.mock.invocationCallOrder[0]!);
   });
 
-  it('publishes recovery state when a started side effect has an unknown outcome', async () => {
+  it('returns control feedback only when a side-effect outcome requires recovery', async () => {
     const publish = vi.fn(async (_event: AgentRealtimeEvent) => undefined);
     const message = { id: 'message_result', sessionId: 'session_1' };
     const toolCall = { id: 'tool_call_1', sessionId: 'session_1', status: 'outcome_unknown' };
@@ -63,7 +65,7 @@ describe('RuntimeEventWriter rejected model output', () => {
       artifacts: [],
       recoveryRequired: { task, taskRun },
     }) as never);
-    const writer = new RuntimeEventWriter({
+    const handler = new LoopEventHandler({
       store: {
         execution: { completeToolCall },
       } as unknown as AgentStore,
@@ -78,7 +80,7 @@ describe('RuntimeEventWriter rejected model output', () => {
       },
     });
 
-    const result = await writer.record({
+    const feedback = await handler.handle({
       type: LOOP_EVENT_TYPES.ToolResultFailed,
       modelToolCallId: 'model_tool_call_1',
       toolName: 'run_shell',
@@ -90,7 +92,7 @@ describe('RuntimeEventWriter rejected model output', () => {
       sessionId: 'session_1', taskId: 'task_1', taskRunId: 'task_run_1',
     });
 
-    expect(result).toEqual({ type: 'recovery_required', task, message });
+    expect(feedback).toEqual({ recoveryRequired: task });
     expect(publish.mock.calls.map(([event]) => event.type)).toEqual([
       'message.upserted',
       'tool_call.upserted',

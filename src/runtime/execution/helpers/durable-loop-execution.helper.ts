@@ -1,13 +1,13 @@
 import { FatalToolExecutionError, type AgentLoop } from '../../loop/agent-loop.js';
 import { LOOP_EVENT_TYPES, type LoopEvent } from '../../loop/loop-events.js';
 import { mapStoreError, RuntimeError } from '../../errors/runtime-error.js';
-import { RuntimeEventWriter } from '../../events/runtime-event-writer.js';
+import { LoopEventHandler } from '../../events/loop-event-handler.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
 import type { ReActTaskExecutionResult, ReActLoopExecutionInput } from '../types/react-execution.types.js';
 
 interface DurableLoopExecutionOptions {
   loop: AgentLoop;
-  writer: RuntimeEventWriter;
+  eventHandler: LoopEventHandler;
   store: AgentStore;
   ownerId: string;
   clock: { nowMs(): number };
@@ -17,7 +17,7 @@ interface DurableLoopExecutionOptions {
 export async function executeDurableAgentLoop(
   options: DurableLoopExecutionOptions
 ): Promise<ReActTaskExecutionResult> {
-  const { input, loop, writer } = options;
+  const { input, loop, eventHandler } = options;
   const target = {
     sessionId: input.task.sessionId,
     taskId: input.task.id,
@@ -41,16 +41,20 @@ export async function executeDurableAgentLoop(
       throw error;
     }
     if (!next.done) {
-      const recorded = await writer.record(next.value, target);
-      if (recorded.type === 'final_candidate') finalCandidates.set(recorded.event.outputId, recorded.event);
-      else if (recorded.type === 'input_required') inputEvents.push(recorded.event);
-      else if (recorded.type === 'recovery_required') {
+      const event = next.value;
+      const feedback = await eventHandler.handle(event, target);
+      if (event.type === LOOP_EVENT_TYPES.ModelOutputCompleted && event.toolCalls.length === 0) {
+        finalCandidates.set(event.outputId, event);
+      } else if (event.type === LOOP_EVENT_TYPES.ToolInputRequired) {
+        inputEvents.push(event);
+      }
+      if (feedback?.recoveryRequired) {
         await iterator.return({
           type: 'failed',
           code: 'tool_state_unknown',
           message: 'A side-effecting tool outcome is unknown and requires manual recovery.',
         });
-        return { type: 'recovery_required', task: recorded.task };
+        return { type: 'recovery_required', task: feedback.recoveryRequired };
       }
       continue;
     }
@@ -64,7 +68,7 @@ export async function executeDurableAgentLoop(
           message: 'AgentLoop completed without a matching final model event.',
         });
       }
-      const committed = await writer.completeFinal(finalEvent, target);
+      const committed = await eventHandler.completeFinal(finalEvent, target);
       return { type: 'completed', ...committed };
     }
     if (result.type === 'waiting_for_user') {
@@ -76,7 +80,7 @@ export async function executeDurableAgentLoop(
           message: 'AgentLoop input events do not match its waiting result.',
         });
       }
-      const waiting = await writer.markWaitingForInput(inputEvents, target);
+      const waiting = await eventHandler.markWaitingForInput(inputEvents, target);
       return { type: 'waiting_for_user', task: waiting.task, requests: waiting.requests };
     }
     if (result.type === 'cancelled') return completeCancellation(input, result.reason, options);
@@ -133,7 +137,7 @@ async function completeCancellation(
     expectedTaskVersion: current.version,
     nowMs: options.clock.nowMs(),
   }).catch(error => { throw mapStoreError(error); });
-  await options.writer.publishTaskFinish(cancelled);
+  await options.eventHandler.publishTaskFinish(cancelled);
   return { type: 'cancelled', task: cancelled.task };
 }
 
@@ -150,6 +154,6 @@ async function failTask(
     error: failure,
     nowMs: options.clock.nowMs(),
   }).catch(error => { throw mapStoreError(error); });
-  await options.writer.publishTaskFinish(failed);
+  await options.eventHandler.publishTaskFinish(failed);
   return { type: 'failed', task: failed.task };
 }

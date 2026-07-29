@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mapStoreError, RuntimeError } from '../../../runtime/errors/runtime-error.js';
-import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-writer.js';
+import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-publisher.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
 import type { ExecuteTaskRunCommand } from '../task-executor.js';
 

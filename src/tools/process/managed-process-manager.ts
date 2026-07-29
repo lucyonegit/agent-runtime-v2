@@ -8,7 +8,7 @@ import {
   type ToolsConfig,
 } from '../../config/runtime-config.js';
 import type { AgentManagedProcess } from '../../domain/index.js';
-import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
+import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-publisher.js';
 import {
   RuntimeToolExecutionError,
   type RuntimeToolContext,

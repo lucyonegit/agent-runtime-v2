@@ -1,7 +1,7 @@
 import type { MessageEvent } from '@nestjs/common';
 import { EMPTY, Observable, Subject } from 'rxjs';
 import type { AgentRealtimeEvent } from '../../domain/index.js';
-import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
+import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-publisher.js';
 
 export interface RuntimeEventBusOptions {
   readSessionRevision?: (sessionId: string) => Promise<number | undefined>;

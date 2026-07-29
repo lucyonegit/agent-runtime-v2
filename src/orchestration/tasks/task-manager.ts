@@ -6,7 +6,7 @@ import type {
   CreateTaskWithUserMessageResult,
   SaveUserInputAnswerResult,
 } from '../../storage/agent-store.js';
-import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-writer.js';
+import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-publisher.js';
 import { AnswerUserInputFlow, type AnswerUserInputRequestInput } from './flows/answer-user-input.flow.js';
 import { CancelTaskFlow } from './flows/cancel-task.flow.js';
 import { ContinueAsNewTaskFlow, type ContinueAsNewTaskInput } from './flows/continue-as-new-task.flow.js';

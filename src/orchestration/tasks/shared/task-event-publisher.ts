@@ -1,5 +1,5 @@
 import type { AgentRealtimeEvent, AgentTask } from '../../../domain/index.js';
-import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-writer.js';
+import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-publisher.js';
 import { taskFinishEvents } from '../../../runtime/events/helpers/task-finish-events.js';
 import type { FinishTaskResult } from '../../../storage/agent-store.js';
 

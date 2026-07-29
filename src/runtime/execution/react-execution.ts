@@ -3,7 +3,8 @@ import type { AgentTask, AgentTaskRun } from '../../domain/index.js';
 import type { ModelInput } from '../context/types/model-input.types.js';
 import type { AgentStore } from '../../storage/agent-store.js';
 import type { ModelInputBuilder } from '../context/model-input-builder.js';
-import { RuntimeEventWriter, type RuntimeEventPublisher } from '../events/runtime-event-writer.js';
+import { LoopEventHandler } from '../events/loop-event-handler.js';
+import type { RuntimeEventPublisher } from '../events/runtime-event-publisher.js';
 import { AgentLoop } from '../loop/agent-loop.js';
 import { AuditedModelFactory } from '../model/audited-model.factory.js';
 import { executeDurableAgentLoop } from './helpers/durable-loop-execution.helper.js';
@@ -76,7 +77,7 @@ export class ReActExecution {
         createOutputId: () => `output_${randomUUID()}`,
         streaming: this.options.streaming,
       }),
-      writer: new RuntimeEventWriter({
+      eventHandler: new LoopEventHandler({
         store: this.options.store,
         ownerId: this.options.workerId,
         tools: this.options.tools,

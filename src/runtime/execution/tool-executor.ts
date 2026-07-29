@@ -15,7 +15,7 @@ import {
   type ToolExecutorPort,
 } from '../loop/agent-loop.js';
 import type { AgentStore } from '../../storage/agent-store.js';
-import type { RuntimeEventPublisher } from '../events/runtime-event-writer.js';
+import type { RuntimeEventPublisher } from '../events/runtime-event-publisher.js';
 import { mapStoreError } from '../errors/runtime-error.js';
 import { checksumToolArguments } from './helpers/tool-call-identity.helper.js';
 import { ToolResultLoader } from './tool-pipeline/tool-result-loader.js';

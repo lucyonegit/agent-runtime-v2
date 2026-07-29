@@ -13,7 +13,8 @@ export * from './orchestration/tasks/task-manager.js';
 
 // Extension ports
 export * from './runtime/errors/runtime-error.js';
-export * from './runtime/events/runtime-event-writer.js';
+export * from './runtime/events/loop-event-handler.js';
+export * from './runtime/events/runtime-event-publisher.js';
 export * from './runtime/execution/tool-executor.js';
 export * from './storage/agent-store.js';
 export * from './tools/index.js';
