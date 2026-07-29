@@ -12,8 +12,6 @@ import type {
   ExecutionStore,
   ExpireUserInputRequestInput,
   ExpireUserInputRequestResult,
-  PrepareToolCallsForResumeInput,
-  PrepareToolCallsForResumeResult,
   SaveToolCallsInput,
   SaveToolCallsResult,
   SaveUserInputAnswerInput,
@@ -28,7 +26,6 @@ import {
   expireUserInputCommand,
   completeTaskCommand,
   completeToolCallCommand,
-  prepareToolCallsForResumeCommand,
   saveToolCallsCommand,
   startToolRunCommand,
   waitForUserInputCommand,
@@ -70,15 +67,6 @@ export class PostgresExecutionStore implements ExecutionStore {
 
   async startToolRun(input: StartToolRunInput): Promise<StartToolRunResult> {
     return withPostgresClient(this.pool, client => startToolRunCommand(client, input));
-  }
-
-  async prepareToolCallsForResume(
-    input: PrepareToolCallsForResumeInput
-  ): Promise<PrepareToolCallsForResumeResult> {
-    return withPostgresClient(
-      this.pool,
-      client => prepareToolCallsForResumeCommand(client, input)
-    );
   }
 
   async completeToolCall(input: CompleteToolCallInput): Promise<CompleteToolCallResult> {

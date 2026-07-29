@@ -5,8 +5,6 @@ import {
   type CompleteTaskWithFinalMessageResult,
   type CompleteToolCallInput,
   type CompleteToolCallResult,
-  type PrepareToolCallsForResumeInput,
-  type PrepareToolCallsForResumeResult,
   type SaveToolCallsInput,
   type SaveToolCallsResult,
   type StartToolRunInput,
@@ -15,7 +13,6 @@ import {
 import {
   mapAgentArtifactRow,
   mapAgentMessageRow,
-  mapAgentTaskCheckpointRow,
   mapAgentTaskRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
@@ -215,38 +212,6 @@ export async function startToolRunCommand(
       toolCall: mapAgentToolCallRow(requireRow(callResult.rows[0], 'start tool call')),
       toolRun: mapAgentToolRunRow(requireRow(runResult.rows[0], 'start tool run')),
       started: true,
-    };
-  });
-}
-
-export async function prepareToolCallsForResumeCommand(
-  client: PoolClient,
-  input: PrepareToolCallsForResumeInput
-): Promise<PrepareToolCallsForResumeResult> {
-  return withPostgresTransaction(client, async () => {
-    await lockAgentSessionForTask(client, input.taskId);
-    const task = await selectTask(client, input.taskId, true);
-    if (!task) throw taskNotFound(input.taskId);
-    const taskRun = await selectTaskRun(client, input.taskRunId, true);
-    assertTaskRunOwnership(task, taskRun, input.ownerId, input.nowMs);
-    const checkpoint = await selectLatestTaskCheckpoint(client, input.taskId);
-    if (!checkpoint || !checkpoint.call_message_id) {
-      return { checkpoint: checkpoint ? mapAgentTaskCheckpointRow(checkpoint) : undefined, toolCalls: [], blockedToolCalls: [] };
-    }
-    const result = await client.query<AgentToolCallRow>(
-      `select * from agent_tool_calls
-       where task_id = $1 and call_message_id = $2
-       order by created_at_ms, id`,
-      [input.taskId, checkpoint.call_message_id]
-    );
-    const blocked = result.rows.filter(call => (
-      call.status === 'outcome_unknown' || call.status === 'waiting_for_user' || call.status === 'cancelled'
-    ));
-    const resumable = result.rows.filter(call => !blocked.includes(call));
-    return {
-      checkpoint: mapAgentTaskCheckpointRow(checkpoint),
-      toolCalls: resumable.map(mapAgentToolCallRow),
-      blockedToolCalls: blocked.map(mapAgentToolCallRow),
     };
   });
 }

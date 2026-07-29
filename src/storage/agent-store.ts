@@ -39,6 +39,7 @@ export type AgentStoreErrorCode =
   | 'INVALID_TASK_RETRY'
   | 'TASK_RUN_NOT_FOUND'
   | 'TASK_OWNERSHIP_LOST'
+  | 'UNSAFE_TOOL_RECOVERY'
   | 'TOOL_CALL_NOT_FOUND'
   | 'TOOL_CALL_CONFLICT'
   | 'INVALID_TOOL_CALL_STATE'
@@ -219,19 +220,6 @@ export interface StartToolRunResult {
   toolCall: AgentToolCall;
   toolRun?: AgentToolRun;
   started: boolean;
-}
-
-export interface PrepareToolCallsForResumeInput {
-  taskId: string;
-  taskRunId: string;
-  ownerId: string;
-  nowMs: number;
-}
-
-export interface PrepareToolCallsForResumeResult {
-  checkpoint?: AgentTaskCheckpoint;
-  toolCalls: AgentToolCall[];
-  blockedToolCalls: AgentToolCall[];
 }
 
 type CompletedToolOutcome =
@@ -489,7 +477,6 @@ export interface ExecutionStore {
   getLatestCheckpoint(taskId: string): Promise<AgentTaskCheckpoint | undefined>;
   saveToolCalls(input: SaveToolCallsInput): Promise<SaveToolCallsResult>;
   startToolRun(input: StartToolRunInput): Promise<StartToolRunResult>;
-  prepareToolCallsForResume(input: PrepareToolCallsForResumeInput): Promise<PrepareToolCallsForResumeResult>;
   completeToolCall(input: CompleteToolCallInput): Promise<CompleteToolCallResult>;
   completeTask(input: CompleteTaskWithFinalMessageInput): Promise<CompleteTaskWithFinalMessageResult>;
   waitForUserInput(input: WaitForUserInputInput): Promise<WaitForUserInputResult>;

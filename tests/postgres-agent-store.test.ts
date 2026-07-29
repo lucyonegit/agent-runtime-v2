@@ -664,7 +664,7 @@ describe('PostgresAgentStore converged model', () => {
       toolCalls: [{ status: 'outcome_unknown' }],
       toolRuns: [{ status: 'outcome_unknown' }],
     });
-    const resumed = await store.tasks.startRun({
+    await expect(store.tasks.startRun({
       taskId: task.id,
       expectedTaskVersion: recovery.task.version,
       taskRunId: 'task_run_2',
@@ -672,17 +672,65 @@ describe('PostgresAgentStore converged model', () => {
       ownerId: 'worker_1',
       nowMs: 22,
       ownershipExpiresAtMs: 1_000,
+    })).rejects.toMatchObject({
+      code: 'UNSAFE_TOOL_RECOVERY',
+      details: {
+        blockedToolCalls: [
+          expect.objectContaining({
+            toolCallId: 'tool_call_side_effect',
+            status: 'outcome_unknown',
+          }),
+        ],
+      },
     });
-    const prepared = await store.execution.prepareToolCallsForResume({
+    await expect(store.tasks.get(task.id)).resolves.toMatchObject({
+      status: 'recovery_required',
+      version: recovery.task.version,
+    });
+    await expect(store.tasks.getRun('task_run_2')).resolves.toBeUndefined();
+  });
+
+  it('atomically starts manual resume when the checkpoint contains only replay-safe work', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 10, 20);
+    await createPendingToolCall({
+      sessionId: task.sessionId,
       taskId: task.id,
-      taskRunId: resumed.taskRun.id,
-      ownerId: 'worker_1',
-      nowMs: 23,
+      taskRunId: started.taskRun.id,
+      suffix: 'replay_safe',
+      nowMs: 11,
     });
-    expect(prepared.toolCalls).toEqual([]);
-    expect(prepared.blockedToolCalls).toEqual([
-      expect.objectContaining({ id: 'tool_call_side_effect', status: 'outcome_unknown' }),
-    ]);
+    await store.execution.startToolRun({
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      modelToolCallId: 'model_tool_call_replay_safe',
+      toolRunId: 'tool_run_replay_safe',
+      workerId: 'worker_1',
+      nowMs: 12,
+    });
+    const recovery = await store.tasks.markRecoveryRequired({
+      taskId: task.id,
+      expectedTaskVersion: started.task.version,
+      nowMs: 21,
+    });
+    expect(recovery).toMatchObject({
+      task: { status: 'recovery_required' },
+      toolCalls: [{ status: 'pending' }],
+      toolRuns: [{ status: 'interrupted' }],
+    });
+
+    await expect(store.tasks.startRun({
+      taskId: task.id,
+      expectedTaskVersion: recovery.task.version,
+      taskRunId: 'task_run_2',
+      trigger: 'manual_resume',
+      ownerId: 'worker_1',
+      nowMs: 22,
+      ownershipExpiresAtMs: 1_000,
+    })).resolves.toMatchObject({
+      task: { status: 'running' },
+      taskRun: { id: 'task_run_2', trigger: 'manual_resume', status: 'running' },
+    });
   });
 
   it('requires recovery when a side-effecting tool fails after execution starts', async () => {

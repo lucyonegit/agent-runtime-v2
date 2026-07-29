@@ -38,6 +38,7 @@ import {
   assertTaskRunOwnership,
   isConstraint,
   requireRow,
+  selectLatestTaskCheckpoint,
   selectTask,
   selectTaskRun,
   taskNotFound,
@@ -243,6 +244,38 @@ export async function startTaskRunCommand(
         `Task ${JSON.stringify(task.id)} cannot start a ${input.trigger} run from ${task.status}.`,
         { taskId: task.id, status: task.status, trigger: input.trigger }
       );
+    }
+    if (input.trigger === 'manual_resume') {
+      const checkpoint = await selectLatestTaskCheckpoint(client, task.id);
+      if (checkpoint?.call_message_id) {
+        const blockedResult = await client.query<Pick<
+          AgentToolCallRow,
+          'id' | 'model_tool_call_id' | 'tool_name' | 'status'
+        >>(
+          `select id, model_tool_call_id, tool_name, status
+           from agent_tool_calls
+           where task_id = $1 and call_message_id = $2
+             and status not in ('pending', 'completed', 'failed')
+           order by created_at_ms, id`,
+          [task.id, checkpoint.call_message_id]
+        );
+        if (blockedResult.rows.length > 0) {
+          throw new AgentStoreError(
+            'UNSAFE_TOOL_RECOVERY',
+            `Task ${JSON.stringify(task.id)} has tool outcomes that cannot be replayed safely.`,
+            {
+              taskId: task.id,
+              checkpointId: checkpoint.id,
+              blockedToolCalls: blockedResult.rows.map(call => ({
+                toolCallId: call.id,
+                modelToolCallId: call.model_tool_call_id,
+                toolName: call.tool_name,
+                status: call.status,
+              })),
+            }
+          );
+        }
+      }
     }
     const runNoResult = await client.query<{ run_no: number }>(
       `select coalesce(max(run_no), 0)::integer + 1 as run_no

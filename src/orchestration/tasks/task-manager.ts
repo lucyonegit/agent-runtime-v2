@@ -70,7 +70,7 @@ export class TaskManager implements TaskManagerPort {
     this.#continueAsNew = new ContinueAsNewTaskFlow(
       options.store, clock, ids.taskId, ids.messageId, taskRuns, events, dispatcher
     );
-    this.#resume = new ResumeTaskFlow(options.store, options.workerId, clock, taskRuns, events, dispatcher);
+    this.#resume = new ResumeTaskFlow(options.store, taskRuns, dispatcher);
     this.#cancel = new CancelTaskFlow(options.store, clock, events, options.execution);
     this.#answerUserInput = new AnswerUserInputFlow(
       options.store,
