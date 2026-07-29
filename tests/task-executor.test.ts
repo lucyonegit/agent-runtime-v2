@@ -154,6 +154,47 @@ describe('TaskExecutor TaskRun identity', () => {
     await running;
   });
 
+  it('bounds shutdown and stops lease renewal when an execution ignores abort', async () => {
+    const activeTask = task('task_1', 'session_1');
+    const activeRun = taskRunFor('task_run_1', activeTask.id);
+    const renewRunOwnership = vi.fn(async () => undefined);
+    let signal: AbortSignal | undefined;
+    let complete!: () => void;
+    const executor = new TaskExecutor({
+      store: {
+        tasks: {
+          get: vi.fn(async () => activeTask),
+          getLatestRun: vi.fn(async () => activeRun),
+          renewRunOwnership,
+        },
+      } as unknown as AgentStore,
+      reactExecution: {
+        runTask: vi.fn((input: { signal?: AbortSignal }) => new Promise<void>(resolve => {
+          signal = input.signal;
+          complete = resolve;
+        })),
+      } as never,
+      workerId: 'worker_1',
+      publisher: { publish: vi.fn() },
+      ownershipTimeoutMs: 1_000,
+      ownershipRefreshMs: 20,
+      recoveryIntervalMs: 60_000,
+      terminationGraceMs: 10,
+      clock: { nowMs: () => 100 },
+    });
+    const running = executor.startExecution(activeTask.id);
+    await vi.waitFor(() => expect(signal).toBeDefined());
+
+    await expect(executor.shutdown()).resolves.toBeUndefined();
+    expect(signal).toMatchObject({ aborted: true, reason: 'runtime_shutdown' });
+    const renewalCountAtShutdown = renewRunOwnership.mock.calls.length;
+    await new Promise(resolve => setTimeout(resolve, 40));
+    expect(renewRunOwnership).toHaveBeenCalledTimes(renewalCountAtShutdown);
+
+    complete();
+    await running;
+  });
+
   it('keeps superseded executions tracked until Session deletion can join them', async () => {
     const activeTask = task('task_1', 'session_1');
     let latestRun = taskRunFor('task_run_1', activeTask.id);

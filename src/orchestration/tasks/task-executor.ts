@@ -144,7 +144,10 @@ export class TaskExecutor implements TaskExecutorPort {
     await this.#interruptedTaskScanner.stop();
     const active = [...this.#trackedExecutions];
     for (const execution of active) execution.controller.abort('runtime_shutdown');
-    await Promise.allSettled(active.map(execution => execution.completion));
+    await settleWithin(
+      active.map(execution => execution.completion),
+      this.#options.terminationGraceMs
+    );
   }
 
   async #runOwnedTask(
@@ -154,6 +157,7 @@ export class TaskExecutor implements TaskExecutorPort {
   ): Promise<void> {
     let runnable: { task: AgentTask; taskRun: AgentTaskRun } | undefined;
     let stopRefreshing: () => void = () => undefined;
+    let stopRefreshingOnAbort: (() => void) | undefined;
     try {
       runnable = await this.#loadRunnableTask(taskId, expectedTaskRunId);
       stopRefreshing = this.#executionOwnership.startRefreshing({
@@ -162,12 +166,18 @@ export class TaskExecutor implements TaskExecutorPort {
         ownershipExpiresAtMs: runnable.taskRun.ownershipExpiresAtMs!,
         onOwnershipLost: () => controller.abort('ownership_lost'),
       });
+      stopRefreshingOnAbort = () => stopRefreshing();
+      controller.signal.addEventListener('abort', stopRefreshingOnAbort, { once: true });
+      if (controller.signal.aborted) stopRefreshingOnAbort();
       await this.#options.reactExecution.runTask({ ...runnable, signal: controller.signal });
     } catch (error) {
       if (!(error instanceof RuntimeError && ['ownership_lost', 'aborted'].includes(error.code))) {
         await this.#failTaskIfStillOwned(runnable, error);
       }
     } finally {
+      if (stopRefreshingOnAbort) {
+        controller.signal.removeEventListener('abort', stopRefreshingOnAbort);
+      }
       stopRefreshing();
     }
   }
