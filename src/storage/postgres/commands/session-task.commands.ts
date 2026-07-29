@@ -20,7 +20,6 @@ import {
   mapAgentMessageRow,
   mapAgentSessionRow,
   mapAgentTaskRow,
-  mapAgentTaskCheckpointRow,
   mapAgentTaskRunRow,
   mapAgentToolCallRow,
   mapAgentUserInputRequestRow,
@@ -35,17 +34,14 @@ import { lockAgentSession, lockAgentSessionForTask, withPostgresTransaction } fr
 import {
   assertFutureOwnership,
   assertTaskRunOwnership,
-  appendTaskCheckpoint,
   isConstraint,
   requireRow,
-  selectLatestTaskCheckpoint,
   selectTask,
   selectTaskRun,
   taskNotFound,
   touchSession,
 } from './command-helpers.js';
 import {
-  appendTerminalTaskCheckpoint,
   cancelLockedTask,
   terminalizeTaskChildren,
 } from './task-terminalization.helper.js';
@@ -108,7 +104,6 @@ export async function beginSessionDeletionCommand(
       taskFinishes.push(await cancelLockedTask(client, {
         task,
         nowMs: input.nowMs,
-        checkpointMetadata: { reason: 'session_deletion' },
       }));
     }
     return { existed: true, taskFinishes };
@@ -281,7 +276,6 @@ export async function reconcileInterruptedTaskCommand(
 
     let taskRun: AgentTaskRunRow | undefined;
     let updatedTask: AgentTaskRow;
-    let checkpoint: ReconcileInterruptedTaskResult['checkpoint'];
     let planCleared = false;
     const toolCallRows: AgentToolCallRow[] = [];
     const requestRows: AgentUserInputRequestRow[] = [];
@@ -337,7 +331,6 @@ export async function reconcileInterruptedTaskCommand(
          for update`,
         [task.id]
       );
-      const unknownCallMessageIds: string[] = [];
       const unknownCalls: AgentToolCallRow[] = [];
       for (const call of runningCallsResult.rows) {
         const sideEffectUnknown = call.side_effect_level === 'side_effecting';
@@ -365,7 +358,6 @@ export async function reconcileInterruptedTaskCommand(
         toolCallRows.push(requireRow(callResult.rows[0], 'reconcile interrupted tool call'));
         if (!sideEffectUnknown) continue;
         unknownCalls.push(call);
-        unknownCallMessageIds.push(call.call_message_id);
       }
 
       terminalized = await terminalizeTaskChildren(client, {
@@ -417,22 +409,6 @@ export async function reconcileInterruptedTaskCommand(
           [task.id, input.nowMs]
         );
         updatedTask = requireRow(taskResult.rows[0], 'wait for side-effect confirmation');
-        const previous = await selectLatestTaskCheckpoint(client, task.id);
-        const checkpointRow = await appendTaskCheckpoint(client, {
-          sessionId: task.session_id,
-          taskId: task.id,
-          taskRunId: taskRun.id,
-          phase: 'waiting_for_user',
-          callMessageId: unknownCallMessageIds[0],
-          iterationNo: previous?.iteration_no ?? 0,
-          executedToolCalls: previous?.executed_tool_calls ?? 0,
-          metadata: {
-            requestIds: requestRows.map(row => row.id),
-            sideEffectOutcomeUnknown: true,
-          },
-          nowMs: input.nowMs,
-        });
-        checkpoint = mapAgentTaskCheckpointRow(checkpointRow);
       } else {
         const taskResult = await client.query<AgentTaskRow>(
           `update agent_tasks
@@ -445,14 +421,6 @@ export async function reconcileInterruptedTaskCommand(
           [task.id, input.nowMs]
         );
         updatedTask = requireRow(taskResult.rows[0], 'fail interrupted task');
-        checkpoint = await appendTerminalTaskCheckpoint(client, {
-          sessionId: task.session_id,
-          taskId: task.id,
-          taskRunId: taskRun.id,
-          phase: 'failed',
-          metadata: { errorCode: 'execution_interrupted' },
-          nowMs: input.nowMs,
-        });
         planCleared = await clearActivePlan(client, task.session_id, task.id);
       }
     } else {
@@ -475,7 +443,6 @@ export async function reconcileInterruptedTaskCommand(
         ...requestRows.map(mapAgentUserInputRequestRow),
         ...terminalized.userInputRequests,
       ],
-      ...(checkpoint ? { checkpoint } : {}),
       planCleared,
     };
   });
@@ -526,21 +493,12 @@ export async function failTaskCommand(
         input.nowMs,
       ]
     );
-    const checkpoint = await appendTerminalTaskCheckpoint(client, {
-      sessionId: task.session_id,
-      taskId: task.id,
-      taskRunId: taskRun.id,
-      phase: 'failed',
-      metadata: { errorCode: input.error.code },
-      nowMs: input.nowMs,
-    });
     const planCleared = await clearActivePlan(client, task.session_id, task.id);
     await touchSession(client, task.session_id, input.nowMs);
     return {
       task: mapAgentTaskRow(requireRow(taskResult.rows[0], 'fail task')),
       taskRun: mapAgentTaskRunRow(requireRow(runResult.rows[0], 'fail task run')),
       ...children,
-      ...(checkpoint ? { checkpoint } : {}),
       planCleared,
     };
   });

@@ -10,9 +10,9 @@ import { Runnable, type RunnableConfig } from '@langchain/core/runnables';
 import { DynamicStructuredTool, type StructuredToolInterface } from '@langchain/core/tools';
 import {
   AgentLoop as RuntimeAgentLoop,
-  type AgentLoopCheckpoint,
   type AgentLoopInput,
   type AgentLoopOptions,
+  type AgentLoopProgress,
   type ToolExecutorPort,
 } from '../src/runtime/loop/agent-loop.js';
 import { LOOP_EVENT_TYPES, type LoopEvent } from '../src/runtime/loop/loop-events.js';
@@ -240,34 +240,25 @@ describe('AgentLoop with LangChain messages', () => {
     expect(executed).toEqual(['call_1', 'call_2']);
   });
 
-  it('continues Task-wide checkpoint counters without executing beyond the tool budget', async () => {
-    const order: string[] = [];
+  it('continues Task-wide durable progress without executing beyond the tool budget', async () => {
     const execute = vi.fn<ToolExecutorPort['execute']>(async () => ({
       type: 'completed', content: 'must not execute',
     }));
     const loop = new AgentLoop({
       streaming: false,
-      model: invokeModel(() => {
-        order.push('model');
-        return toolChunk([{ id: 'call_after_hitl', name: 'lookup', args: {} }]);
-      }),
+      model: invokeModel(() => toolChunk([
+        { id: 'call_after_hitl', name: 'lookup', args: {} },
+      ])),
     });
     const run = await consume(loop.run(loopInput({
-      checkpoint: {
-        iterationNo: 3,
-        executedToolCalls: 4,
-      },
-      context: {
-        loadMessages: async iteration => {
-          order.push(`context:${iteration}`);
-          return [];
-        },
+      progress: {
+        modelCalls: 3,
+        toolCalls: 4,
       },
       tools: { executor: { execute } },
       limits: { maxIterations: 8, maxToolCalls: 4 },
     })));
 
-    expect(order).toEqual(['context:3', 'model']);
     expect(execute).not.toHaveBeenCalled();
     expect(run.events.map(event => event.type)).toEqual([
       LOOP_EVENT_TYPES.ModelOutputCompleted,
@@ -276,8 +267,37 @@ describe('AgentLoop with LangChain messages', () => {
       type: 'failed',
       code: 'max_tool_calls',
       message: 'Tool-call limit 4 would be exceeded.',
-      details: { executedToolCalls: 4, requestedToolCalls: 1 },
+      details: { toolCallsUsed: 4, requestedToolCalls: 1 },
     });
+  });
+
+  it('does not call Context or Model after durable model-call progress reaches the limit', async () => {
+    const invoke = vi.fn(async () => chunk('must not run'));
+    const loadMessages = vi.fn(async () => []);
+    const loop = new AgentLoop({ streaming: false, model: invokeModel(invoke) });
+
+    const run = await consume(loop.run(loopInput({
+      progress: { modelCalls: 8, toolCalls: 0 },
+      context: { loadMessages },
+      limits: { maxIterations: 8, maxToolCalls: 16 },
+    })));
+
+    expect(loadMessages).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(run.events).toEqual([]);
+    expect(run.result).toEqual({
+      type: 'failed',
+      code: 'max_iterations',
+      message: 'Agent loop reached its 8-iteration limit.',
+    });
+  });
+
+  it('rejects invalid durable progress before executing the loop', async () => {
+    const loop = new AgentLoop({ streaming: false, model: invokeModel(() => chunk('unused')) });
+
+    await expect(consume(loop.run(loopInput({
+      progress: { modelCalls: -1 },
+    })))).rejects.toThrow('progress.modelCalls must be a non-negative safe integer.');
   });
 
   it('uses AIMessageChunk.concat to assemble streamed tool calls', async () => {
@@ -625,12 +645,12 @@ function toolChunk(toolCalls: Array<{ id?: string; name: string; args: Record<st
 }
 
 type AgentLoopInputOverrides = Partial<
-  Omit<AgentLoopInput, 'context' | 'tools' | 'policy' | 'checkpoint'>
+  Omit<AgentLoopInput, 'context' | 'tools' | 'policy' | 'progress'>
 > & {
   context?: Partial<AgentLoopInput['context']>;
   tools?: Partial<AgentLoopInput['tools']>;
   policy?: AgentLoopInput['policy'];
-  checkpoint?: Partial<AgentLoopCheckpoint>;
+  progress?: Partial<AgentLoopProgress>;
 };
 
 function loopInput(overrides: AgentLoopInputOverrides = {}): AgentLoopInput {
@@ -638,7 +658,7 @@ function loopInput(overrides: AgentLoopInputOverrides = {}): AgentLoopInput {
     context,
     tools,
     policy,
-    checkpoint,
+    progress,
     ...topLevel
   } = overrides;
   const defaultExecutor: ToolExecutorPort = {
@@ -660,11 +680,11 @@ function loopInput(overrides: AgentLoopInputOverrides = {}): AgentLoopInput {
     limits: { maxIterations: 8, maxToolCalls: 16 },
     ...topLevel,
     ...(policy ? { policy } : {}),
-    ...(checkpoint ? {
-      checkpoint: {
-        iterationNo: 0,
-        executedToolCalls: 0,
-        ...checkpoint,
+    ...(progress ? {
+      progress: {
+        modelCalls: 0,
+        toolCalls: 0,
+        ...progress,
       },
     } : {}),
   };

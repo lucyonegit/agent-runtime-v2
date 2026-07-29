@@ -5,7 +5,6 @@ export const AGENT_RUNTIME_TABLES = [
   'agent_tasks',
   'agent_task_runs',
   'agent_messages',
-  'agent_task_checkpoints',
   'agent_tool_calls',
   'agent_active_plans',
   'agent_artifacts',
@@ -147,30 +146,6 @@ create index idx_agent_messages_session_timeline
 
 create index idx_agent_messages_task
   on agent_messages(task_id, row_id asc);
-
-create table agent_task_checkpoints (
-  id text primary key,
-  session_id text not null references agent_sessions(id) on delete cascade,
-  task_id text not null references agent_tasks(id) on delete cascade,
-  task_run_id text not null references agent_task_runs(id) on delete cascade,
-  sequence_no integer not null check (sequence_no > 0),
-  phase text not null check (
-    phase in ('ready_for_model', 'tool_batch', 'waiting_for_user', 'completed', 'failed', 'cancelled')
-  ),
-  call_message_id text references agent_messages(id) on delete restrict,
-  iteration_no integer not null check (iteration_no >= 0),
-  executed_tool_calls integer not null check (executed_tool_calls >= 0),
-  metadata jsonb,
-  created_at_ms bigint not null,
-  unique (task_id, sequence_no),
-  check (
-    (phase in ('tool_batch', 'waiting_for_user') and call_message_id is not null)
-    or (phase not in ('tool_batch', 'waiting_for_user') and call_message_id is null)
-  )
-);
-
-create index idx_agent_task_checkpoints_latest
-  on agent_task_checkpoints(task_id, sequence_no desc);
 
 create table agent_tool_calls (
   id text primary key,
@@ -371,14 +346,6 @@ alter table agent_messages
     foreign key (task_id, session_id) references agent_tasks(id, session_id),
   add constraint fk_agent_messages_run_task
     foreign key (task_run_id, task_id) references agent_task_runs(id, task_id);
-
-alter table agent_task_checkpoints
-  add constraint fk_agent_checkpoints_task_session
-    foreign key (task_id, session_id) references agent_tasks(id, session_id),
-  add constraint fk_agent_checkpoints_run_task
-    foreign key (task_run_id, task_id) references agent_task_runs(id, task_id),
-  add constraint fk_agent_checkpoints_message_task
-    foreign key (call_message_id, task_id) references agent_messages(id, task_id);
 
 alter table agent_tool_calls
   add constraint fk_agent_tool_calls_task_session

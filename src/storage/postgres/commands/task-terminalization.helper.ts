@@ -1,7 +1,5 @@
 import type { PoolClient } from 'pg';
 import type {
-  AgentTaskCheckpoint,
-  AgentTaskCheckpointPhase,
   AgentToolCall,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
@@ -9,7 +7,6 @@ import { AgentStoreError, type FinishTaskResult } from '../../agent-store.js';
 import {
   mapAgentTaskRow,
   mapAgentTaskRunRow,
-  mapAgentTaskCheckpointRow,
   mapAgentToolCallRow,
   mapAgentUserInputRequestRow,
   type AgentTaskRow,
@@ -17,10 +14,6 @@ import {
   type AgentToolCallRow,
   type AgentUserInputRequestRow,
 } from '../row-mappers.js';
-import {
-  appendTaskCheckpoint,
-  selectLatestTaskCheckpoint,
-} from './command-helpers.js';
 
 export interface TerminalizedTaskChildren {
   toolCalls: AgentToolCall[];
@@ -106,38 +99,11 @@ export async function assertNoActiveTaskChildren(
   }
 }
 
-export async function appendTerminalTaskCheckpoint(
-  client: PoolClient,
-  input: {
-    sessionId: string;
-    taskId: string;
-    taskRunId?: string;
-    phase: Extract<AgentTaskCheckpointPhase, 'completed' | 'failed' | 'cancelled'>;
-    metadata?: Record<string, unknown>;
-    nowMs: number;
-  }
-): Promise<AgentTaskCheckpoint | undefined> {
-  if (!input.taskRunId) return undefined;
-  const previous = await selectLatestTaskCheckpoint(client, input.taskId);
-  const checkpoint = await appendTaskCheckpoint(client, {
-    sessionId: input.sessionId,
-    taskId: input.taskId,
-    taskRunId: input.taskRunId,
-    phase: input.phase,
-    iterationNo: previous?.iteration_no ?? 0,
-    executedToolCalls: previous?.executed_tool_calls ?? 0,
-    ...(input.metadata ? { metadata: input.metadata } : {}),
-    nowMs: input.nowMs,
-  });
-  return mapAgentTaskCheckpointRow(checkpoint);
-}
-
 export async function cancelLockedTask(
   client: PoolClient,
   input: {
     task: AgentTaskRow;
     nowMs: number;
-    checkpointMetadata?: Record<string, unknown>;
   }
 ): Promise<FinishTaskResult> {
   if (['completed', 'failed', 'cancelled'].includes(input.task.status)) {
@@ -168,21 +134,6 @@ export async function cancelLockedTask(
      where id = $1 returning *`,
     [input.task.id, input.nowMs]
   );
-  const latestRunResult = await client.query<AgentTaskRunRow>(
-    `select * from agent_task_runs
-     where task_id = $1
-     order by run_no desc
-     limit 1`,
-    [input.task.id]
-  );
-  const checkpoint = await appendTerminalTaskCheckpoint(client, {
-    sessionId: input.task.session_id,
-    taskId: input.task.id,
-    taskRunId: taskRunResult.rows[0]?.id ?? latestRunResult.rows[0]?.id,
-    phase: 'cancelled',
-    ...(input.checkpointMetadata ? { metadata: input.checkpointMetadata } : {}),
-    nowMs: input.nowMs,
-  });
   const planResult = await client.query(
     `delete from agent_active_plans where session_id = $1 and task_id = $2`,
     [input.task.session_id, input.task.id]
@@ -191,7 +142,6 @@ export async function cancelLockedTask(
     task: mapAgentTaskRow(requireTaskRow(taskResult.rows[0], input.task.id)),
     ...(taskRunResult.rows[0] ? { taskRun: mapAgentTaskRunRow(taskRunResult.rows[0]) } : {}),
     ...children,
-    ...(checkpoint ? { checkpoint } : {}),
     planCleared: planResult.rowCount === 1,
   };
 }

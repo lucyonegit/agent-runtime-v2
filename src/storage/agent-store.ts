@@ -16,7 +16,6 @@ import type {
   AgentPlanStep,
   AgentSession,
   AgentTask,
-  AgentTaskCheckpoint,
   AgentTaskRun,
   AgentTaskRunTrigger,
   AgentToolCall,
@@ -148,7 +147,6 @@ export interface ReconcileInterruptedTaskResult {
   taskRun?: AgentTaskRun;
   toolCalls: AgentToolCall[];
   userInputRequests: AgentUserInputRequest[];
-  checkpoint?: AgentTaskCheckpoint;
   planCleared: boolean;
 }
 
@@ -166,8 +164,12 @@ export interface FinishTaskResult {
   taskRun?: AgentTaskRun;
   toolCalls: AgentToolCall[];
   userInputRequests: AgentUserInputRequest[];
-  checkpoint?: AgentTaskCheckpoint;
   planCleared: boolean;
+}
+
+export interface TaskExecutionProgress {
+  modelCalls: number;
+  toolCalls: number;
 }
 
 export interface CancelTaskInput {
@@ -461,7 +463,7 @@ export interface TaskStore {
 
 export interface ExecutionStore {
   getToolCall(taskId: string, modelToolCallId: string): Promise<AgentToolCall | undefined>;
-  getLatestCheckpoint(taskId: string): Promise<AgentTaskCheckpoint | undefined>;
+  getTaskProgress(taskId: string): Promise<TaskExecutionProgress>;
   saveToolCalls(input: SaveToolCallsInput): Promise<SaveToolCallsResult>;
   startToolCall(input: StartToolCallInput): Promise<StartToolCallResult>;
   completeToolCall(input: CompleteToolCallInput): Promise<CompleteToolCallResult>;

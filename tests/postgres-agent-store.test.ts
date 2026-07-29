@@ -124,9 +124,6 @@ describe('PostgresAgentStore converged model', () => {
       'fk_agent_artifacts_call_task',
       'fk_agent_artifacts_result_message_task',
       'fk_agent_artifacts_task_session',
-      'fk_agent_checkpoints_message_task',
-      'fk_agent_checkpoints_run_task',
-      'fk_agent_checkpoints_task_session',
       'fk_agent_compactions_message_session',
       'fk_agent_input_requests_answer_message_task',
       'fk_agent_input_requests_call_task',
@@ -167,12 +164,6 @@ describe('PostgresAgentStore converged model', () => {
         constraint: 'fk_agent_messages_run_task',
         run: () => pool.query(
           `update agent_messages set task_run_id = 'task_run_2' where id = 'message_call_1'`
-        ),
-      },
-      {
-        constraint: 'fk_agent_checkpoints_task_session',
-        run: () => pool.query(
-          `update agent_task_checkpoints set session_id = 'session_2' where task_id = 'task_1'`
         ),
       },
       {
@@ -358,6 +349,10 @@ describe('PostgresAgentStore converged model', () => {
     await expect(store.sessions.get(task.sessionId)).resolves.toMatchObject({
       version: revisionBeforeUsage + 1,
     });
+    await expect(store.execution.getTaskProgress(task.id)).resolves.toEqual({
+      modelCalls: 1,
+      toolCalls: 0,
+    });
     await expect(store.sessions.loadSnapshot(task.sessionId)).resolves.toMatchObject({
       modelUsage: { latestModelCallId: 'model_call_1', totalTokens: 5 },
     });
@@ -454,7 +449,6 @@ describe('PostgresAgentStore converged model', () => {
       task: { status: 'completed' },
       taskRun: { status: 'completed' },
       message: { role: 'assistant', channel: 'final', contextScope: 'conversation' },
-      checkpoint: { phase: 'completed', executedToolCalls: 1 },
       toolCalls: [],
       userInputRequests: [],
       planCleared: true,
@@ -1015,7 +1009,6 @@ describe('PostgresAgentStore converged model', () => {
     expect(cancelled).toMatchObject({
       task: { status: 'cancelled' },
       taskRun: { status: 'cancelled' },
-      checkpoint: { phase: 'cancelled', executedToolCalls: 2 },
       userInputRequests: [],
       toolCalls: expect.arrayContaining([
         expect.objectContaining({ id: 'tool_call_side_effect', status: 'outcome_unknown' }),
@@ -1024,7 +1017,7 @@ describe('PostgresAgentStore converged model', () => {
     });
   });
 
-  it('atomically closes active children and appends a failed checkpoint', async () => {
+  it('atomically closes active children and derives Task-wide execution progress', async () => {
     const { task } = await createTask();
     const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
     await store.execution.saveToolCalls({
@@ -1083,11 +1076,6 @@ describe('PostgresAgentStore converged model', () => {
     expect(failed).toMatchObject({
       task: { status: 'failed' },
       taskRun: { status: 'failed' },
-      checkpoint: {
-        phase: 'failed',
-        executedToolCalls: 2,
-        metadata: { errorCode: 'runtime_error' },
-      },
       planCleared: true,
       toolCalls: expect.arrayContaining([
         expect.objectContaining({ id: 'tool_call_side_effect', status: 'outcome_unknown' }),
@@ -1096,8 +1084,9 @@ describe('PostgresAgentStore converged model', () => {
       userInputRequests: [],
     });
     await expect(store.plans.getActive(task.sessionId)).resolves.toBeUndefined();
-    await expect(store.execution.getLatestCheckpoint(task.id)).resolves.toMatchObject({
-      phase: 'failed',
+    await expect(store.execution.getTaskProgress(task.id)).resolves.toEqual({
+      modelCalls: 0,
+      toolCalls: 2,
     });
   });
 
@@ -1138,7 +1127,6 @@ describe('PostgresAgentStore converged model', () => {
     expect(cancelled).toMatchObject({
       task: { status: 'cancelled' },
       taskRun: { status: 'cancelled' },
-      checkpoint: { phase: 'cancelled', executedToolCalls: 1 },
       planCleared: true,
       toolCalls: [expect.objectContaining({
         id: 'tool_call_input_1',
@@ -1195,7 +1183,6 @@ describe('PostgresAgentStore converged model', () => {
       taskFinishes: [{
         task: { id: task.id, status: 'cancelled' },
         taskRun: { id: started.taskRun.id, status: 'cancelled' },
-        checkpoint: { phase: 'cancelled', metadata: { reason: 'session_deletion' } },
         toolCalls: [{ id: 'tool_call_delete_side_effect', status: 'outcome_unknown' }],
       }],
     });

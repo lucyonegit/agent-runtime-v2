@@ -17,7 +17,7 @@ sequenceDiagram
     E->>S: 读取并校验活动 TaskRun
     E->>R: runTask(Task, TaskRun)
     R->>S: Context 为每次模型调用构建输入
-    R->>S: 记录 Message / ToolCall / Checkpoint
+    R->>S: 记录 ModelCall / Message / ToolCall
     R->>S: 最终回复 + TaskRun completed + Task completed + 清理 Plan
 ```
 
@@ -38,18 +38,11 @@ TaskExecutor 处理一条明确的 `(taskId, taskRunId)` 命令。它重新读�
 
 明确的 `TASK_OWNERSHIP_LOST` 会立即中止本地 loop。暂时性存储错误只在最后一次确认的租约仍有效时容忍；超过租约仍无法续期时，Worker 必须自我停止。
 
-## 3. Checkpoint 的边界
+## 3. 执行进度与额度
 
-Checkpoint 记录 `sequenceNo/phase/callMessageId/iterationNo/executedToolCalls`。主要 phase：
+Runtime 不保存独立 Checkpoint，也不从耐久记录重放待执行 ToolCall。HITL 创建新 TaskRun 后，Context 从 Message、ToolCall、Plan 和压缩记录重新构建输入；AgentLoop 从既有 `task.react` ModelCall 数和 ToolCall 数继续执行 Task 级额度。模型已实际调用但输出被校验拒绝的轮次也会被准确计数。
 
-- `tool_batch`：Assistant tool-call 消息已经持久化。
-- `waiting_for_user`：Task 正在等待 HITL。
-- `ready_for_model`：HITL 回答完成，下一步重新调用模型。
-- `completed/failed/cancelled`：Task 的终态边界。
-
-Checkpoint 是 ReAct 内部的耐久游标，不是通用 Task Resume API。它不复制消息，也不能恢复进程内存或未知工具结果；Context 始终从 Message、ToolCall、Plan 和压缩记录重建模型输入。HITL 创建新 TaskRun 后只延续 `iterationNo/executedToolCalls` 配额计数，不从 Checkpoint 重放待执行 ToolCall。
-
-Task 进入终态时，Store 在一个事务中收口 Task、TaskRun、活动 ToolCall、待处理 UserInputRequest、ActivePlan 和终态 Checkpoint。完成路径若仍存在活动子状态会拒绝提交，避免 Task=`completed` 但工具仍在运行。
+Task 进入终态时，Store 在一个事务中收口 Task、TaskRun、活动 ToolCall、待处理 UserInputRequest 和 ActivePlan。完成路径若仍存在活动子状态会拒绝提交，避免 Task=`completed` 但工具仍在运行。
 
 ## 4. 服务启动后的中断对账
 
@@ -71,7 +64,7 @@ Task 进入终态时，Store 在一个事务中收口 Task、TaskRun、活动 To
 
 1. Assistant ToolCall Message 与 ToolCall 已落库。
 2. ToolCall=`waiting_for_user`，Request=`pending`。
-3. 当前 TaskRun=`paused`，Task=`waiting_for_user`，Checkpoint=`waiting_for_user`。
+3. 当前 TaskRun=`paused`，Task=`waiting_for_user`。
 
 回答时：
 
@@ -79,7 +72,7 @@ Task 进入终态时，Store 在一个事务中收口 Task、TaskRun、活动 To
 2. Request=`answered`，答案写为 ToolMessage。
 3. ToolCall=`completed` 并关联 `resultMessageId`。
 4. 最后一个 pending Request 结束后，原子创建 TaskRun(`user_input_answered`)。
-5. Task=`running`，追加 `ready_for_model` Checkpoint，再投递 TaskRun 命令。
+5. Task=`running`，再投递新的 TaskRun 命令；模型输入由 Context 重建。
 
 输入过期时会写失败 ToolMessage，将 ToolCall、TaskRun 和 Task 收敛为失败，不创建新的 TaskRun，也不让模型自动继续。
 

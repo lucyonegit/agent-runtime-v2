@@ -23,8 +23,6 @@ import type {
   AgentSession,
   AgentSessionStatus,
   AgentTask,
-  AgentTaskCheckpoint,
-  AgentTaskCheckpointPhase,
   AgentTaskRun,
   AgentTaskRunStatus,
   AgentTaskRunTrigger,
@@ -101,20 +99,6 @@ export interface AgentMessageRow {
   model_tool_call_id: string | null;
   tool_name: string | null;
   tool_result: unknown;
-  metadata: unknown;
-  created_at_ms: DbBigint;
-}
-
-export interface AgentTaskCheckpointRow {
-  id: string;
-  session_id: string;
-  task_id: string;
-  task_run_id: string;
-  sequence_no: number;
-  phase: string;
-  call_message_id: string | null;
-  iteration_no: number;
-  executed_tool_calls: number;
   metadata: unknown;
   created_at_ms: DbBigint;
 }
@@ -328,22 +312,6 @@ export function mapAgentMessageRow(row: AgentMessageRow): AgentMessage {
     ...(row.tool_result === null ? {} : { toolResult: row.tool_result as AgentToolResult }),
     ...mapMetadata(row.metadata, 'agent_messages.metadata'),
     createdAtMs: mapBigint(row.created_at_ms, 'agent_messages.created_at_ms'),
-  };
-}
-
-export function mapAgentTaskCheckpointRow(row: AgentTaskCheckpointRow): AgentTaskCheckpoint {
-  return {
-    id: row.id,
-    sessionId: row.session_id,
-    taskId: row.task_id,
-    taskRunId: row.task_run_id,
-    sequenceNo: row.sequence_no,
-    phase: row.phase as AgentTaskCheckpointPhase,
-    ...(row.call_message_id === null ? {} : { callMessageId: row.call_message_id }),
-    iterationNo: row.iteration_no,
-    executedToolCalls: row.executed_tool_calls,
-    ...mapMetadata(row.metadata, 'agent_task_checkpoints.metadata'),
-    createdAtMs: mapBigint(row.created_at_ms, 'agent_task_checkpoints.created_at_ms'),
   };
 }
 

@@ -27,7 +27,6 @@ erDiagram
 | `agent_tasks` | `id`；每 Session 仅一个活动 Task | 用户目标与业务终态 |
 | `agent_task_runs` | `id`；`unique(task_id, run_no)` | 执行窗口、租约与 fence |
 | `agent_messages` | `row_id` 顺序；`id` 唯一 | LangChain 消息事实 |
-| `agent_task_checkpoints` | `unique(task_id, sequence_no)` | ReAct 的耐久游标 |
 | `agent_tool_calls` | `unique(task_id, model_tool_call_id)` | 工具意图与唯一执行状态 |
 | `agent_active_plans` | `session_id` 主键；`task_id` 唯一 | 当前临时计划 |
 | `agent_artifacts` | 逻辑路径 + revision | ToolCall 结果生成的资源索引 |
@@ -37,6 +36,8 @@ erDiagram
 | `agent_model_usage_stats` | `session_id` 主键 | 聚合 Token 用量 |
 
 重复保存父级 ID 的表使用组合外键校验完整归属链：Task 必须属于同一 Session；TaskRun、Message 和 ToolCall 必须属于同一 Task；Artifact 必须同时匹配 ToolCall 与结果 Message。命令层校验负责给出业务错误，数据库约束是最终防线。
+
+数据库不保存独立 Checkpoint。Task/TaskRun/ToolCall/UserInputRequest 已经表达状态边界；Task 级模型调用额度和工具调用额度分别从 `agent_model_calls(call_type='task.react')` 与 `agent_tool_calls` 精确统计，避免维护一份会漂移的重复进度。
 
 ## 3. Task 状态机
 

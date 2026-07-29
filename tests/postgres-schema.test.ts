@@ -11,7 +11,6 @@ describe('single destructive PostgreSQL schema', () => {
       'agent_tasks',
       'agent_task_runs',
       'agent_messages',
-      'agent_task_checkpoints',
       'agent_tool_calls',
       'agent_active_plans',
       'agent_artifacts',
@@ -31,6 +30,7 @@ describe('single destructive PostgreSQL schema', () => {
       'created_in_task_run_id text not null references agent_task_runs'
     );
     expect(AGENT_RUNTIME_SCHEMA_SQL).not.toContain('create table agent_tool_runs');
+    expect(AGENT_RUNTIME_SCHEMA_SQL).not.toContain('create table agent_task_checkpoints');
     const toolCallTable = AGENT_RUNTIME_SCHEMA_SQL.split('create table agent_tool_calls (')[1]
       ?.split('create index idx_agent_tool_calls_recovery')[0];
     expect(toolCallTable).toBeDefined();

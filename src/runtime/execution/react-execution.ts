@@ -44,7 +44,7 @@ export class ReActExecution {
       input.taskRun,
       { signal: input.signal }
     );
-    const latestCheckpoint = await this.options.store.execution.getLatestCheckpoint(input.task.id);
+    const progress = await this.options.store.execution.getTaskProgress(input.task.id);
     const toolExecutor = new ToolExecutor({
       store: this.options.store,
       workerId: this.options.workerId,
@@ -100,12 +100,7 @@ export class ReActExecution {
             deadlineMs: input.taskRun.startedAtMs + this.options.executionDeadlineMs,
             signal: input.signal,
           },
-          ...(latestCheckpoint ? {
-            checkpoint: {
-              iterationNo: latestCheckpoint.iterationNo,
-              executedToolCalls: latestCheckpoint.executedToolCalls,
-            },
-          } : {}),
+          progress,
         },
       },
     });

@@ -9,7 +9,6 @@ export * from './realtime-event.js';
 export * from './request-limits.js';
 export * from './session.js';
 export * from './task.js';
-export * from './task-checkpoint.js';
 export * from './task-run.js';
 export * from './tool-call.js';
 export * from './user-input-request.js';

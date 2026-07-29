@@ -1,9 +1,7 @@
 import type { PoolClient } from 'pg';
-import type { AgentTaskCheckpointPhase } from '../../../domain/index.js';
 import { AgentStoreError } from '../../agent-store.js';
 import type {
   AgentMessageRow,
-  AgentTaskCheckpointRow,
   AgentTaskRow,
   AgentTaskRunRow,
   AgentToolCallRow,
@@ -85,67 +83,6 @@ export async function selectToolCall(
     [taskId, modelToolCallId]
   );
   return result.rows[0];
-}
-
-export async function selectLatestTaskCheckpoint(
-  client: PoolClient,
-  taskId: string
-): Promise<AgentTaskCheckpointRow | undefined> {
-  const result = await client.query<AgentTaskCheckpointRow>(
-    `select *
-     from agent_task_checkpoints
-     where task_id = $1
-     order by sequence_no desc
-     limit 1`,
-    [taskId]
-  );
-  return result.rows[0];
-}
-
-export interface AppendTaskCheckpointInput {
-  sessionId: string;
-  taskId: string;
-  taskRunId: string;
-  phase: AgentTaskCheckpointPhase;
-  callMessageId?: string;
-  iterationNo: number;
-  executedToolCalls: number;
-  metadata?: Record<string, unknown>;
-  nowMs: number;
-}
-
-export async function appendTaskCheckpoint(
-  client: PoolClient,
-  input: AppendTaskCheckpointInput
-): Promise<AgentTaskCheckpointRow> {
-  const sequenceResult = await client.query<{ sequence_no: number }>(
-    `select coalesce(max(sequence_no), 0)::integer + 1 as sequence_no
-     from agent_task_checkpoints
-     where task_id = $1`,
-    [input.taskId]
-  );
-  const sequenceNo = requireRow(sequenceResult.rows[0], 'select checkpoint sequence').sequence_no;
-  const result = await client.query<AgentTaskCheckpointRow>(
-    `insert into agent_task_checkpoints(
-       id, session_id, task_id, task_run_id, sequence_no, phase,
-       call_message_id, iteration_no, executed_tool_calls, metadata, created_at_ms
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     returning *`,
-    [
-      `${input.taskId}:checkpoint:${sequenceNo}`,
-      input.sessionId,
-      input.taskId,
-      input.taskRunId,
-      sequenceNo,
-      input.phase,
-      input.callMessageId ?? null,
-      input.iterationNo,
-      input.executedToolCalls,
-      input.metadata ?? null,
-      input.nowMs,
-    ]
-  );
-  return requireRow(result.rows[0], 'append task checkpoint');
 }
 
 export async function selectUserInputRequest(

@@ -30,10 +30,8 @@ import {
   withPostgresTransaction,
 } from '../sql.js';
 import {
-  appendTaskCheckpoint,
   assertTaskRunOwnership,
   requireRow,
-  selectLatestTaskCheckpoint,
   selectTask,
   selectTaskRun,
   selectToolCall,
@@ -42,7 +40,6 @@ import {
   touchSession,
 } from './command-helpers.js';
 import {
-  appendTerminalTaskCheckpoint,
   assertNoActiveTaskChildren,
 } from './task-terminalization.helper.js';
 
@@ -133,18 +130,6 @@ export async function saveToolCallsCommand(
       );
       callRows.push(requireRow(callResult.rows[0], 'save tool call'));
     }
-    const previous = await selectLatestTaskCheckpoint(client, input.taskId);
-    await appendTaskCheckpoint(client, {
-      sessionId: input.sessionId,
-      taskId: input.taskId,
-      taskRunId: input.taskRunId,
-      phase: 'tool_batch',
-      callMessageId: input.messageId,
-      iterationNo: (previous?.iteration_no ?? -1) + 1,
-      executedToolCalls: (previous?.executed_tool_calls ?? 0) + input.toolCalls.length,
-      metadata: { modelToolCallIds: ids },
-      nowMs: input.nowMs,
-    });
     await touchSession(client, input.sessionId, input.nowMs);
     return {
       message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'save tool call message')),
@@ -422,21 +407,6 @@ export async function completeToolCallCommand(
           input.nowMs,
         ]
       );
-      const previous = await selectLatestTaskCheckpoint(client, input.taskId);
-      await appendTaskCheckpoint(client, {
-        sessionId: input.sessionId,
-        taskId: input.taskId,
-        taskRunId: input.taskRunId,
-        phase: 'waiting_for_user',
-        callMessageId: call.call_message_id,
-        iterationNo: previous?.iteration_no ?? 0,
-        executedToolCalls: previous?.executed_tool_calls ?? 0,
-        metadata: {
-          requestIds: [input.confirmationRequest.requestId],
-          sideEffectOutcomeUnknown: true,
-        },
-        nowMs: input.nowMs,
-      });
       confirmationRequired = {
         task: mapAgentTaskRow(requireRow(waitingTask.rows[0], 'wait for outcome confirmation')),
         taskRun: mapAgentTaskRunRow(requireRow(pausedRun.rows[0], 'pause unknown tool run')),
@@ -499,13 +469,6 @@ export async function completeTaskCommand(
        where id = $1 returning *`,
       [task.id, input.nowMs]
     );
-    const checkpoint = await appendTerminalTaskCheckpoint(client, {
-      sessionId: input.sessionId,
-      taskId: input.taskId,
-      taskRunId: input.taskRunId,
-      phase: 'completed',
-      nowMs: input.nowMs,
-    });
     const planResult = await client.query(
       `delete from agent_active_plans where session_id = $1 and task_id = $2`,
       [input.sessionId, input.taskId]
@@ -517,7 +480,6 @@ export async function completeTaskCommand(
       message: mapAgentMessageRow(requireRow(messageResult.rows[0], 'save final message')),
       toolCalls: [],
       userInputRequests: [],
-      ...(checkpoint ? { checkpoint } : {}),
       planCleared: planResult.rowCount === 1,
     };
   });

@@ -30,11 +30,9 @@ import {
 } from '../row-mappers.js';
 import { lockAgentSession, withPostgresTransaction } from '../sql.js';
 import {
-  appendTaskCheckpoint,
   assertFutureOwnership,
   assertTaskRunOwnership,
   requireRow,
-  selectLatestTaskCheckpoint,
   selectMessageById,
   selectTask,
   selectTaskRun,
@@ -46,7 +44,6 @@ import {
   userInputNotFound,
 } from './command-helpers.js';
 import {
-  appendTerminalTaskCheckpoint,
   terminalizeTaskChildren,
 } from './task-terminalization.helper.js';
 
@@ -139,18 +136,6 @@ export async function waitForUserInputCommand(
         { taskId: task.id, callMessageIds }
       );
     }
-    const previous = await selectLatestTaskCheckpoint(client, task.id);
-    await appendTaskCheckpoint(client, {
-      sessionId: input.sessionId,
-      taskId: task.id,
-      taskRunId: taskRun.id,
-      phase: 'waiting_for_user',
-      callMessageId: callMessageIds[0],
-      iterationNo: previous?.iteration_no ?? 0,
-      executedToolCalls: previous?.executed_tool_calls ?? 0,
-      metadata: { requestIds: requestRows.map(row => row.id) },
-      nowMs: input.nowMs,
-    });
     await touchSession(client, input.sessionId, input.nowMs);
     return {
       task: mapAgentTaskRow(requireRow(waitingTaskResult.rows[0], 'mark task waiting')),
@@ -355,17 +340,6 @@ export async function answerUserInputCommand(
         `update agent_messages set task_run_id = $2 where id = $1`,
         [input.answerMessageId, call.created_in_task_run_id]
       );
-      const checkpoint = await appendTerminalTaskCheckpoint(client, {
-        sessionId: task.session_id,
-        taskId: task.id,
-        taskRunId: call.created_in_task_run_id,
-        phase: 'failed',
-        metadata: {
-          errorCode: 'side_effect_outcome_unconfirmed',
-          requestId: request.id,
-        },
-        nowMs: input.nowMs,
-      });
       const planResult = await client.query(
         `delete from agent_active_plans where session_id = $1 and task_id = $2`,
         [task.session_id, task.id]
@@ -381,7 +355,6 @@ export async function answerUserInputCommand(
         ...(runResult.rows[0] ? { taskRun: mapAgentTaskRunRow(runResult.rows[0]) } : {}),
         toolCalls: [answeredCall, ...children.toolCalls],
         userInputRequests: [answeredRequest, ...children.userInputRequests],
-        ...(checkpoint ? { checkpoint } : {}),
         planCleared: planResult.rowCount === 1,
       };
     } else if (shouldResume) {
@@ -425,17 +398,6 @@ export async function answerUserInputCommand(
            and message.task_run_id is null`,
         [task.id, newTaskRun.id]
       );
-      const previous = await selectLatestTaskCheckpoint(client, task.id);
-      await appendTaskCheckpoint(client, {
-        sessionId: task.session_id,
-        taskId: task.id,
-        taskRunId: newTaskRun.id,
-        phase: 'ready_for_model',
-        iterationNo: (previous?.iteration_no ?? -1) + 1,
-        executedToolCalls: previous?.executed_tool_calls ?? 0,
-        metadata: { resumedAfterUserInput: true },
-        nowMs: input.nowMs,
-      });
     }
     await touchSession(client, task.session_id, input.nowMs);
     const returnedMessage = shouldResume || stopTask
@@ -569,14 +531,6 @@ export async function expireUserInputCommand(
        where id = $1 returning *`,
       [task.id, failureCode, failureMessage, input.nowMs]
     );
-    const checkpoint = await appendTerminalTaskCheckpoint(client, {
-      sessionId: task.session_id,
-      taskId: task.id,
-      taskRunId: call.created_in_task_run_id,
-      phase: 'failed',
-      metadata: { errorCode: failureCode, requestId: request.id },
-      nowMs: input.nowMs,
-    });
     const planResult = await client.query(
       `delete from agent_active_plans where session_id = $1 and task_id = $2`,
       [task.session_id, task.id]
@@ -598,7 +552,6 @@ export async function expireUserInputCommand(
       toolCall: failedCall,
       toolCalls: [failedCall, ...children.toolCalls],
       userInputRequests: [expiredRequest, ...children.userInputRequests],
-      ...(checkpoint ? { checkpoint } : {}),
       planCleared: planResult.rowCount === 1,
     };
   });

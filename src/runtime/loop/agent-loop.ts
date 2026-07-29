@@ -34,7 +34,7 @@ export interface AgentLoopLimits {
 }
 
 export interface AgentLoopContext {
-  loadMessages(iteration: number): Promise<BaseMessage[]>;
+  loadMessages(): Promise<BaseMessage[]>;
 }
 
 export interface AgentLoopToolRuntime {
@@ -47,9 +47,9 @@ export interface AgentLoopPolicy {
   validateToolCalls?: ToolCallsValidator;
 }
 
-export interface AgentLoopCheckpoint {
-  iterationNo: number;
-  executedToolCalls: number;
+export interface AgentLoopProgress {
+  modelCalls: number;
+  toolCalls: number;
 }
 
 export interface AgentLoopInput {
@@ -58,7 +58,7 @@ export interface AgentLoopInput {
   tools: AgentLoopToolRuntime;
   policy?: AgentLoopPolicy;
   limits: AgentLoopLimits;
-  checkpoint?: AgentLoopCheckpoint;
+  progress?: AgentLoopProgress;
 }
 
 export type ToolCallsValidation =
@@ -151,21 +151,22 @@ export class AgentLoop {
 
   async *run(input: AgentLoopInput): AsyncGenerator<LoopEvent, LoopResult> {
     assertLimits(input.limits);
+    assertProgress(input.progress);
     let correctionMessages: BaseMessage[] = [];
     const definitions = new Map(input.tools.definitions.map(tool => [tool.name, tool]));
-    let executedToolCalls = input.checkpoint?.executedToolCalls ?? 0;
+    let toolCallsUsed = input.progress?.toolCalls ?? 0;
 
     for (
-      let iteration = input.checkpoint?.iterationNo ?? 0;
-      iteration < input.limits.maxIterations;
-      iteration += 1
+      let modelCalls = input.progress?.modelCalls ?? 0;
+      modelCalls < input.limits.maxIterations;
+      modelCalls += 1
     ) {
       const preflight = this.#terminalPreflight(input.limits);
       if (preflight) return preflight;
 
       let messages: BaseMessage[];
       try {
-        messages = [...await input.context.loadMessages(iteration)];
+        messages = [...await input.context.loadMessages()];
       } catch (error) {
         if (input.limits.signal?.aborted || isAbortError(error)) {
           return cancelledResult(input.limits.signal);
@@ -282,18 +283,18 @@ export class AgentLoop {
       };
       appendAssistantToolCalls(messages, turn.content, turn.toolCalls);
 
-      if (executedToolCalls + turn.toolCalls.length > input.limits.maxToolCalls) {
+      if (toolCallsUsed + turn.toolCalls.length > input.limits.maxToolCalls) {
         return {
           type: 'failed',
           code: 'max_tool_calls',
           message: `Tool-call limit ${input.limits.maxToolCalls} would be exceeded.`,
           details: {
-            executedToolCalls,
+            toolCallsUsed,
             requestedToolCalls: turn.toolCalls.length,
           },
         };
       }
-      executedToolCalls += turn.toolCalls.length;
+      toolCallsUsed += turn.toolCalls.length;
 
       const conflictingChunk = turn.assemblyErrors.find(error => error.code === 'model_error');
       if (conflictingChunk) {
@@ -574,6 +575,15 @@ function assertLimits(limits: AgentLoopLimits): void {
   ] as const) {
     if (!Number.isSafeInteger(value) || value <= 0) {
       throw new RangeError(`${name} must be a positive safe integer.`);
+    }
+  }
+}
+
+function assertProgress(progress: AgentLoopProgress | undefined): void {
+  if (!progress) return;
+  for (const [name, value] of Object.entries(progress)) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`progress.${name} must be a non-negative safe integer.`);
     }
   }
 }

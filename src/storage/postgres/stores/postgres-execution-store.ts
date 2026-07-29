@@ -1,6 +1,5 @@
 import type { Pool } from 'pg';
 import type {
-  AgentTaskCheckpoint,
   AgentToolCall,
   AgentUserInputRequest,
 } from '../../../domain/index.js';
@@ -18,6 +17,7 @@ import type {
   SaveUserInputAnswerResult,
   StartToolCallInput,
   StartToolCallResult,
+  TaskExecutionProgress,
   WaitForUserInputInput,
   WaitForUserInputResult,
 } from '../../agent-store.js';
@@ -31,10 +31,8 @@ import {
   waitForUserInputCommand,
 } from '../transaction-commands.js';
 import {
-  mapAgentTaskCheckpointRow,
   mapAgentToolCallRow,
   mapAgentUserInputRequestRow,
-  type AgentTaskCheckpointRow,
   type AgentToolCallRow,
   type AgentUserInputRequestRow,
 } from '../row-mappers.js';
@@ -52,13 +50,20 @@ export class PostgresExecutionStore implements ExecutionStore {
     return result.rows[0] ? mapAgentToolCallRow(result.rows[0]) : undefined;
   }
 
-  async getLatestCheckpoint(taskId: string): Promise<AgentTaskCheckpoint | undefined> {
-    const result = await this.pool.query<AgentTaskCheckpointRow>(
-      `select * from agent_task_checkpoints
-       where task_id = $1 order by sequence_no desc limit 1`,
+  async getTaskProgress(taskId: string): Promise<TaskExecutionProgress> {
+    const result = await this.pool.query<{ model_calls: number; tool_calls: number }>(
+      `select
+         (select count(*)::integer from agent_model_calls
+          where task_id = $1 and call_type = 'task.react') as model_calls,
+         (select count(*)::integer from agent_tool_calls
+          where task_id = $1) as tool_calls`,
       [taskId]
     );
-    return result.rows[0] ? mapAgentTaskCheckpointRow(result.rows[0]) : undefined;
+    const progress = result.rows[0];
+    return {
+      modelCalls: progress?.model_calls ?? 0,
+      toolCalls: progress?.tool_calls ?? 0,
+    };
   }
 
   async saveToolCalls(input: SaveToolCallsInput): Promise<SaveToolCallsResult> {
