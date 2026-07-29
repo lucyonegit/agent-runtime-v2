@@ -36,7 +36,6 @@ export type AgentStoreErrorCode =
   | 'CLIENT_REQUEST_CONFLICT'
   | 'CONCURRENCY_CONFLICT'
   | 'INVALID_TASK_STATE'
-  | 'INVALID_TASK_RETRY'
   | 'TASK_RUN_NOT_FOUND'
   | 'TASK_OWNERSHIP_LOST'
   | 'UNSAFE_TOOL_RECOVERY'
@@ -81,7 +80,6 @@ export interface CreateTaskWithUserMessageInput {
   taskId: string;
   userMessageId: string;
   content: string;
-  retryOfTaskId?: string;
   clientRequestId?: string;
   taskMetadata?: Record<string, unknown>;
   messageMetadata?: Record<string, unknown>;

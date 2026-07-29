@@ -58,7 +58,6 @@ export function mapStoreError(error: unknown): RuntimeError {
     case 'INVALID_SESSION_STATE':
       return new RuntimeError('invalid_session_state', error.message, { ...options, retryable: false });
     case 'INVALID_TASK_STATE':
-    case 'INVALID_TASK_RETRY':
     case 'TASK_NOT_FOUND':
     case 'TASK_RUN_NOT_FOUND':
     case 'INVALID_USER_INPUT_STATE':

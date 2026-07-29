@@ -138,7 +138,6 @@ describe('PostgresAgentStore converged model', () => {
       'fk_agent_model_calls_run_task',
       'fk_agent_model_calls_task_session',
       'fk_agent_tasks_goal_message',
-      'fk_agent_tasks_retry_session',
       'fk_agent_tool_calls_call_message_task',
       'fk_agent_tool_calls_result_message_task',
       'fk_agent_tool_calls_run_task',
@@ -156,12 +155,6 @@ describe('PostgresAgentStore converged model', () => {
     expect(installed.rows.map(row => row.conname)).toEqual(expectedConstraints);
 
     const violations = [
-      {
-        constraint: 'fk_agent_tasks_retry_session',
-        run: () => pool.query(
-          `update agent_tasks set retry_of_task_id = 'task_2' where id = 'task_1'`
-        ),
-      },
       {
         constraint: 'fk_agent_tasks_goal_message',
         run: () => pool.query(

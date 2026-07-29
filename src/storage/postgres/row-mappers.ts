@@ -55,7 +55,6 @@ export interface AgentTaskRow {
   id: string;
   session_id: string;
   goal_message_id: string;
-  retry_of_task_id: string | null;
   client_request_id: string | null;
   status: string;
   error_code: string | null;
@@ -291,7 +290,6 @@ export function mapAgentTaskRow(row: AgentTaskRow): AgentTask {
     id: row.id,
     sessionId: row.session_id,
     goalMessageId: row.goal_message_id,
-    ...(row.retry_of_task_id === null ? {} : { retryOfTaskId: row.retry_of_task_id }),
     ...(row.client_request_id === null ? {} : { clientRequestId: row.client_request_id }),
     status: row.status as AgentTaskStatus,
     ...mapExecutionError(row),

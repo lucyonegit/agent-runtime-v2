@@ -122,15 +122,14 @@ export async function createTaskWithUserMessageCommand(
     try {
       const taskResult = await client.query<AgentTaskRow>(
         `insert into agent_tasks(
-           id, session_id, goal_message_id, retry_of_task_id, client_request_id,
+           id, session_id, goal_message_id, client_request_id,
            status, version, metadata, created_at_ms, updated_at_ms
-         ) values ($1, $2, $3, $4, $5, 'created', 0, $6, $7, $7)
+         ) values ($1, $2, $3, $4, 'created', 0, $5, $6, $6)
          returning *`,
         [
           input.taskId,
           input.sessionId,
           input.userMessageId,
-          input.retryOfTaskId ?? null,
           input.clientRequestId ?? null,
           input.taskMetadata ?? null,
           input.nowMs,

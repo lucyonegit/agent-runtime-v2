@@ -31,7 +31,6 @@ export interface AgentTask {
   id: string;
   sessionId: string;
   goalMessageId: string;
-  retryOfTaskId?: string;
   clientRequestId?: string;
   status: AgentTaskStatus;
   error?: AgentExecutionError;

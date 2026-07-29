@@ -30,7 +30,6 @@ create table agent_tasks (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
   goal_message_id text not null,
-  retry_of_task_id text,
   client_request_id text,
   status text not null check (
     status in (
@@ -48,9 +47,6 @@ create table agent_tasks (
   started_at_ms bigint,
   completed_at_ms bigint,
   unique (id, session_id),
-  constraint fk_agent_tasks_retry_session
-    foreign key (retry_of_task_id, session_id) references agent_tasks(id, session_id)
-    on delete set null (retry_of_task_id),
   check (
     (status in ('completed', 'failed', 'cancelled') and completed_at_ms is not null)
     or status not in ('completed', 'failed', 'cancelled')

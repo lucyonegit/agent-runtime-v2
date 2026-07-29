@@ -35,7 +35,7 @@ export async function resolveIdempotentTaskCreate(
       'Idempotent Task replay could not load its committed entities.'
     );
   }
-  if (message.content !== input.content || task.retryOfTaskId !== undefined) {
+  if (message.content !== input.content) {
     throw new RuntimeError(
       'idempotency_conflict',
       `clientRequestId ${JSON.stringify(input.clientRequestId)} was reused with a different request.`,
