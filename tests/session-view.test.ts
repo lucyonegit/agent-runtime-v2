@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentSessionSnapshot, AgentStore } from '../src/storage/agent-store.js';
 import { SessionView } from '../src/view/session-view.js';
+import { AGENT_SESSION_VIEW_SCHEMA_VERSION } from '../src/view/view-contract.js';
 
 describe('SessionView durable snapshot', () => {
   it('builds the View from one storage snapshot and samples live processes separately', async () => {
@@ -14,6 +15,7 @@ describe('SessionView durable snapshot', () => {
     );
 
     await expect(view.load('session_1')).resolves.toMatchObject({
+      schemaVersion: AGENT_SESSION_VIEW_SCHEMA_VERSION,
       generatedAtMs: 1_000,
       session: snapshot.session,
       tasks: [],

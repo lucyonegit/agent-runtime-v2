@@ -7,7 +7,10 @@ import type {
 import { ACTIVE_TASK_STATUSES } from '../domain/index.js';
 import type { AgentStore } from '../storage/agent-store.js';
 import { TimelineBuilder } from './timeline-builder.js';
-import type { AgentSessionView } from './view-contract.js';
+import {
+  AGENT_SESSION_VIEW_SCHEMA_VERSION,
+  type AgentSessionView,
+} from './view-contract.js';
 
 export interface SessionProcessReader {
   listSessionProcesses(sessionId: string): Promise<AgentManagedProcess[]>;
@@ -41,7 +44,7 @@ export class SessionView {
     const activeStatuses = new Set<string>(ACTIVE_TASK_STATUSES);
     const activeTask = snapshot.tasks.find(task => activeStatuses.has(task.status));
     return {
-      schemaVersion: 5,
+      schemaVersion: AGENT_SESSION_VIEW_SCHEMA_VERSION,
       generatedAtMs: this.clock.nowMs(),
       session: snapshot.session,
       tasks: snapshot.tasks,

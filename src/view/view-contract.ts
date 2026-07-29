@@ -11,6 +11,8 @@ import type {
   AgentUserInputRequest,
 } from '../domain/index.js';
 
+export const AGENT_SESSION_VIEW_SCHEMA_VERSION = 6 as const;
+
 export type FlatTimelineItem =
   | { type: 'message'; rowId: number; message: AgentMessage }
   | {
@@ -26,7 +28,7 @@ export type FlatTimelineItem =
 
 /** Refresh-authoritative projection. ActivePlan is intentionally outside the timeline. */
 export interface AgentSessionView {
-  schemaVersion: 5;
+  schemaVersion: typeof AGENT_SESSION_VIEW_SCHEMA_VERSION;
   generatedAtMs: number;
   session: AgentSession;
   tasks: AgentTask[];
