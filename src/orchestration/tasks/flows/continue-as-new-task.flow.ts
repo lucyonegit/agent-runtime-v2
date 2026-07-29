@@ -40,7 +40,7 @@ export class ContinueAsNewTaskFlow {
         { type: 'message.upserted', sessionId: created.task.sessionId, message: created.message },
       ]);
       const started = await this.taskRuns.start(created.task, 'initial');
-      this.execution.dispatch(started.task.id);
+      this.execution.dispatch({ taskId: started.task.id, taskRunId: started.taskRun.id });
       return { ...created, task: started.task };
     } catch (error) {
       throw mapStoreError(error);

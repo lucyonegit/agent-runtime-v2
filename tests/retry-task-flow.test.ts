@@ -20,7 +20,10 @@ describe('RetryTaskFlow', () => {
     const createRetry = vi.fn(async () => {
       throw new AgentStoreError('CLIENT_REQUEST_CONFLICT', 'request already committed');
     });
-    const start = vi.fn(async () => ({ task: started, taskRun: {} }));
+    const start = vi.fn(async () => ({
+      task: started,
+      taskRun: { id: 'task_run_retry' },
+    }));
     const dispatch = vi.fn();
     const flow = new RetryTaskFlow(
       storeFixture({ source, replay, session: sessionFixture(), createRetry }),
@@ -37,7 +40,10 @@ describe('RetryTaskFlow', () => {
     })).resolves.toMatchObject({ task: started });
 
     expect(start).toHaveBeenCalledWith(replay, 'initial');
-    expect(dispatch).toHaveBeenCalledWith(started.id);
+    expect(dispatch).toHaveBeenCalledWith({
+      taskId: started.id,
+      taskRunId: 'task_run_retry',
+    });
   });
 
   it('returns an already-started retry without starting or dispatching it again', async () => {

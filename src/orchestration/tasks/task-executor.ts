@@ -7,8 +7,13 @@ import { taskFinishEvents } from '../../runtime/events/helpers/task-finish-event
 import type { AgentStore } from '../../storage/agent-store.js';
 import { ExecutionOwnershipService } from './shared/execution-ownership.service.js';
 
+export interface ExecuteTaskRunCommand {
+  taskId: string;
+  taskRunId: string;
+}
+
 export interface TaskExecutorPort {
-  startExecution(taskId: string): Promise<void>;
+  execute(command: ExecuteTaskRunCommand): Promise<void>;
   abortExecution(taskId: string): void;
   abortSessionExecutions(sessionId: string): Promise<void>;
 }
@@ -65,29 +70,30 @@ export class TaskExecutor implements TaskExecutorPort {
     });
   }
 
-  async startExecution(taskId: string): Promise<void> {
+  async execute(command: ExecuteTaskRunCommand): Promise<void> {
     if (this.#stopping) return;
-    const selected = await this.#loadRunnableTask(taskId);
-    const existing = this.#activeExecutions.get(taskId);
+    const selected = await this.#loadRunnableTask(command);
+    const existing = this.#activeExecutions.get(command.taskId);
     if (existing?.taskRunId === selected.taskRun.id) return existing.completion;
 
     const execution = {
-      taskId,
+      taskId: command.taskId,
       sessionId: selected.task.sessionId,
-      taskRunId: selected.taskRun.id,
+      taskRunId: command.taskRunId,
       controller: new AbortController(),
       completion: Promise.resolve(),
     };
-    this.#activeExecutions.set(taskId, execution);
+    this.#activeExecutions.set(command.taskId, execution);
     this.#trackedExecutions.add(execution);
     existing?.controller.abort('task_run_superseded');
     execution.completion = this.#runOwnedTask(
-      taskId,
-      selected.taskRun.id,
+      command,
       execution.controller
     ).finally(() => {
       this.#trackedExecutions.delete(execution);
-      if (this.#activeExecutions.get(taskId) === execution) this.#activeExecutions.delete(taskId);
+      if (this.#activeExecutions.get(command.taskId) === execution) {
+        this.#activeExecutions.delete(command.taskId);
+      }
     });
     return execution.completion;
   }
@@ -127,17 +133,16 @@ export class TaskExecutor implements TaskExecutorPort {
   }
 
   async #runOwnedTask(
-    taskId: string,
-    expectedTaskRunId: string,
+    command: ExecuteTaskRunCommand,
     controller: AbortController
   ): Promise<void> {
     let runnable: { task: AgentTask; taskRun: AgentTaskRun } | undefined;
     let stopRefreshing: () => void = () => undefined;
     let stopRefreshingOnAbort: (() => void) | undefined;
     try {
-      runnable = await this.#loadRunnableTask(taskId, expectedTaskRunId);
+      runnable = await this.#loadRunnableTask(command);
       stopRefreshing = this.#executionOwnership.startRefreshing({
-        taskId,
+        taskId: command.taskId,
         taskRunId: runnable.taskRun.id,
         ownershipExpiresAtMs: runnable.taskRun.ownershipExpiresAtMs!,
         onOwnershipLost: () => controller.abort('ownership_lost'),
@@ -158,21 +163,24 @@ export class TaskExecutor implements TaskExecutorPort {
     }
   }
 
-  async #loadRunnableTask(
-    taskId: string,
-    expectedTaskRunId?: string
-  ): Promise<{ task: AgentTask; taskRun: AgentTaskRun }> {
+  async #loadRunnableTask(command: ExecuteTaskRunCommand): Promise<{
+    task: AgentTask;
+    taskRun: AgentTaskRun;
+  }> {
     const [task, taskRun] = await Promise.all([
-      this.#options.store.tasks.get(taskId),
-      this.#options.store.tasks.getLatestRun(taskId),
+      this.#options.store.tasks.get(command.taskId),
+      this.#options.store.tasks.getRun(command.taskRunId),
     ]);
     const nowMs = this.#options.clock.nowMs();
     if (!task || task.status !== 'running' || !taskRun || taskRun.status !== 'running'
-      || expectedTaskRunId !== undefined && taskRun.id !== expectedTaskRunId
+      || taskRun.taskId !== command.taskId
       || taskRun.ownerId !== this.#options.workerId
       || !taskRun.ownershipExpiresAtMs
       || taskRun.ownershipExpiresAtMs <= nowMs) {
-      throw new RuntimeError('ownership_lost', `Task ${taskId} is not owned by this worker.`);
+      throw new RuntimeError(
+        'ownership_lost',
+        `TaskRun ${JSON.stringify(command.taskRunId)} is not owned by this worker.`
+      );
     }
     return { task, taskRun };
   }
@@ -184,7 +192,7 @@ export class TaskExecutor implements TaskExecutorPort {
     if (!runnable) return;
     const [task, taskRun] = await Promise.all([
       this.#options.store.tasks.get(runnable.task.id),
-      this.#options.store.tasks.getLatestRun(runnable.task.id),
+      this.#options.store.tasks.getRun(runnable.taskRun.id),
     ]);
     if (!task || task.status !== 'running' || !taskRun || taskRun.id !== runnable.taskRun.id
       || taskRun.status !== 'running' || taskRun.ownerId !== this.#options.workerId) return;

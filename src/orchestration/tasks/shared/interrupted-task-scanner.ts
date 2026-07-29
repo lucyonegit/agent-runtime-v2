@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mapStoreError, RuntimeError } from '../../../runtime/errors/runtime-error.js';
 import type { RuntimeEventPublisher } from '../../../runtime/events/runtime-event-writer.js';
 import type { AgentStore } from '../../../storage/agent-store.js';
+import type { ExecuteTaskRunCommand } from '../task-executor.js';
 
 export interface InterruptedTaskScannerOptions {
   store: AgentStore;
@@ -11,7 +12,7 @@ export interface InterruptedTaskScannerOptions {
   clock: { nowMs(): number };
   ownerId: string;
   ownershipTimeoutMs: number;
-  onTaskReady(taskId: string): void;
+  onTaskReady(command: ExecuteTaskRunCommand): void;
 }
 
 /** Runs startup reconciliation in bounded batches and never schedules itself. */
@@ -119,7 +120,18 @@ export class InterruptedTaskScanner {
             taskRun: result.taskRun,
           });
         }
-        if (result.shouldResume) this.options.onTaskReady(result.task.id);
+        if (result.shouldResume) {
+          if (!result.taskRun) {
+            throw new RuntimeError(
+              'storage_error',
+              'Input expiration committed a resumed Task without a TaskRun.'
+            );
+          }
+          this.options.onTaskReady({
+            taskId: result.task.id,
+            taskRunId: result.taskRun.id,
+          });
+        }
         expired += 1;
       } catch (error) {
         const mapped = mapStoreError(error);

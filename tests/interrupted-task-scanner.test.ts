@@ -54,6 +54,42 @@ describe('InterruptedTaskScanner startup recovery', () => {
     });
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('hands an expired-input resume to execution with its committed TaskRun id', async () => {
+    const resumed = task({ status: 'running', version: 2 });
+    const onTaskReady = vi.fn();
+    const scanner = new InterruptedTaskScanner({
+      store: {
+        models: { abandonStartedCalls: vi.fn(async () => []) },
+        execution: {
+          listExpiredUserInputRequests: vi.fn(async () => [{ id: 'input_1', version: 0 }]),
+          expireUserInput: vi.fn(async () => ({
+            request: { id: 'input_1' },
+            resultMessage: { id: 'message_expired' },
+            task: resumed,
+            taskRun: { id: 'task_run_resumed' },
+            toolCall: { id: 'tool_call_1' },
+            shouldResume: true,
+          })),
+        },
+        tasks: { listNeedingRecovery: vi.fn(async () => []) },
+      } as unknown as AgentStore,
+      publisher: { publish: vi.fn(async () => undefined) },
+      createdTaskGraceMs: 5_000,
+      batchSize: 2,
+      clock: { nowMs: () => 10_000 },
+      ownerId: 'worker_1',
+      ownershipTimeoutMs: 30_000,
+      onTaskReady,
+    });
+
+    await scanner.scanOnce();
+
+    expect(onTaskReady).toHaveBeenCalledWith({
+      taskId: resumed.id,
+      taskRunId: 'task_run_resumed',
+    });
+  });
 });
 
 function task(overrides: Partial<AgentTask>): AgentTask {

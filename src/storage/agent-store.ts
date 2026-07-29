@@ -473,7 +473,7 @@ export interface SessionStore {
 export interface TaskStore {
   get(taskId: string): Promise<AgentTask | undefined>;
   getByClientRequestId(sessionId: string, clientRequestId: string): Promise<AgentTask | undefined>;
-  getLatestRun(taskId: string): Promise<AgentTaskRun | undefined>;
+  getRun(taskRunId: string): Promise<AgentTaskRun | undefined>;
   listNeedingRecovery(input: ListTasksNeedingRecoveryInput): Promise<TaskRecoveryCandidate[]>;
   createWithUserMessage(input: CreateTaskWithUserMessageInput): Promise<CreateTaskWithUserMessageResult>;
   createRetry(input: CreateRetryTaskInput): Promise<CreateRetryTaskResult>;

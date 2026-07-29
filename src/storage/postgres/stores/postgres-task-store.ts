@@ -73,13 +73,10 @@ export class PostgresTaskStore implements TaskStore {
     return result.rows[0] ? mapAgentTaskRow(result.rows[0]) : undefined;
   }
 
-  async getLatestRun(taskId: string): Promise<AgentTaskRun | undefined> {
+  async getRun(taskRunId: string): Promise<AgentTaskRun | undefined> {
     const result = await this.pool.query<AgentTaskRunRow>(
-      `select * from agent_task_runs
-       where task_id = $1
-       order by run_no desc
-       limit 1`,
-      [taskId]
+      `select * from agent_task_runs where id = $1`,
+      [taskRunId]
     );
     return result.rows[0] ? mapAgentTaskRunRow(result.rows[0]) : undefined;
   }

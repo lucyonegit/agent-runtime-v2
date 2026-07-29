@@ -139,8 +139,8 @@ export async function createAgentApplication(
       clock,
       ownerId: config.workerId,
       ownershipTimeoutMs: config.execution.ownershipTimeoutMs,
-      onTaskReady: taskId => {
-        void taskExecutor.startExecution(taskId).catch(() => {
+      onTaskReady: command => {
+        void taskExecutor.execute(command).catch(() => {
           // Ownership checks or another committed transition may win the startup race.
         });
       },

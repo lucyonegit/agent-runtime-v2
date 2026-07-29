@@ -1,5 +1,5 @@
 import type { AgentStore, SaveUserInputAnswerResult } from '../../../storage/agent-store.js';
-import { mapStoreError } from '../../../runtime/errors/runtime-error.js';
+import { mapStoreError, RuntimeError } from '../../../runtime/errors/runtime-error.js';
 import { projectSensitiveAnswers } from '../../../view/session-view.js';
 import { TaskEventPublisher } from '../shared/task-event-publisher.js';
 import { TaskExecutionDispatcher } from '../shared/task-execution-dispatcher.js';
@@ -57,7 +57,15 @@ export class AnswerUserInputFlow {
         taskRun: result.taskRun,
       }] : []),
     ]);
-    if (result.shouldResume) this.execution.dispatch(result.task.id);
+    if (result.shouldResume) {
+      if (!result.taskRun) {
+        throw new RuntimeError(
+          'storage_error',
+          'User input resume committed without a TaskRun.'
+        );
+      }
+      this.execution.dispatch({ taskId: result.task.id, taskRunId: result.taskRun.id });
+    }
     return result;
   }
 }

@@ -11,7 +11,9 @@ describe('TaskExecutor TaskRun identity', () => {
       status: 'running',
       version: 1,
     } as AgentTask;
-    let latestRun = taskRun('task_run_1', 1);
+    const runs = new Map<string, AgentTaskRun>([
+      ['task_run_1', taskRun('task_run_1', 1)],
+    ]);
     const executions: Array<{
       taskRunId: string;
       signal: AbortSignal;
@@ -28,7 +30,7 @@ describe('TaskExecutor TaskRun identity', () => {
     const store = {
       tasks: {
         get: vi.fn(async () => task),
-        getLatestRun: vi.fn(async () => latestRun),
+        getRun: vi.fn(async (taskRunId: string) => runs.get(taskRunId)),
       },
     } as unknown as AgentStore;
     const executor = new TaskExecutor({
@@ -41,15 +43,15 @@ describe('TaskExecutor TaskRun identity', () => {
       clock: { nowMs: () => 100 },
     });
 
-    const first = executor.startExecution(task.id);
+    const first = executor.execute({ taskId: task.id, taskRunId: 'task_run_1' });
     await vi.waitFor(() => expect(executions.map(item => item.taskRunId)).toEqual(['task_run_1']));
 
-    const duplicate = executor.startExecution(task.id);
+    const duplicate = executor.execute({ taskId: task.id, taskRunId: 'task_run_1' });
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(executions.map(item => item.taskRunId)).toEqual(['task_run_1']);
 
-    latestRun = taskRun('task_run_2', 2);
-    const resumed = executor.startExecution(task.id);
+    runs.set('task_run_2', taskRun('task_run_2', 2));
+    const resumed = executor.execute({ taskId: task.id, taskRunId: 'task_run_2' });
     await vi.waitFor(() => expect(executions.map(item => item.taskRunId)).toEqual([
       'task_run_1',
       'task_run_2',
@@ -64,21 +66,50 @@ describe('TaskExecutor TaskRun identity', () => {
     expect(runTask).toHaveBeenCalledTimes(2);
   });
 
+  it('rejects a command whose Task and TaskRun identities do not match', async () => {
+    const activeTask = task('task_1', 'session_1');
+    const mismatchedRun = taskRunFor('task_run_2', 'task_2');
+    const runTask = vi.fn();
+    const getRun = vi.fn(async () => mismatchedRun);
+    const executor = new TaskExecutor({
+      store: {
+        tasks: {
+          get: vi.fn(async () => activeTask),
+          getRun,
+        },
+      } as unknown as AgentStore,
+      reactExecution: { runTask } as never,
+      workerId: 'worker_1',
+      publisher: { publish: vi.fn() },
+      ownershipTimeoutMs: 30_000,
+      ownershipRefreshMs: 10_000,
+      clock: { nowMs: () => 100 },
+    });
+
+    await expect(executor.execute({
+      taskId: activeTask.id,
+      taskRunId: mismatchedRun.id,
+    })).rejects.toMatchObject({ code: 'ownership_lost' });
+
+    expect(getRun).toHaveBeenCalledWith(mismatchedRun.id);
+    expect(runTask).not.toHaveBeenCalled();
+  });
+
   it('aborts and joins only executions owned by the deleted Session', async () => {
     const tasks = new Map([
       ['task_1', task('task_1', 'session_1')],
       ['task_2', task('task_2', 'session_2')],
     ]);
     const runs = new Map([
-      ['task_1', taskRunFor('task_run_1', 'task_1')],
-      ['task_2', taskRunFor('task_run_2', 'task_2')],
+      ['task_run_1', taskRunFor('task_run_1', 'task_1')],
+      ['task_run_2', taskRunFor('task_run_2', 'task_2')],
     ]);
     const executions = new Map<string, { signal: AbortSignal; complete(): void }>();
     const executor = new TaskExecutor({
       store: {
         tasks: {
           get: vi.fn(async (taskId: string) => tasks.get(taskId)),
-          getLatestRun: vi.fn(async (taskId: string) => runs.get(taskId)),
+          getRun: vi.fn(async (taskRunId: string) => runs.get(taskRunId)),
         },
       } as unknown as AgentStore,
       reactExecution: {
@@ -98,8 +129,8 @@ describe('TaskExecutor TaskRun identity', () => {
       clock: { nowMs: () => 100 },
     });
 
-    const first = executor.startExecution('task_1');
-    const second = executor.startExecution('task_2');
+    const first = executor.execute({ taskId: 'task_1', taskRunId: 'task_run_1' });
+    const second = executor.execute({ taskId: 'task_2', taskRunId: 'task_run_2' });
     await vi.waitFor(() => expect(executions.size).toBe(2));
 
     await executor.abortSessionExecutions('session_1');
@@ -122,7 +153,7 @@ describe('TaskExecutor TaskRun identity', () => {
       store: {
         tasks: {
           get: vi.fn(async () => activeTask),
-          getLatestRun: vi.fn(async () => activeRun),
+          getRun: vi.fn(async () => activeRun),
         },
       } as unknown as AgentStore,
       reactExecution: {
@@ -138,7 +169,7 @@ describe('TaskExecutor TaskRun identity', () => {
       terminationGraceMs: 10,
       clock: { nowMs: () => 100 },
     });
-    const running = executor.startExecution(activeTask.id);
+    const running = executor.execute({ taskId: activeTask.id, taskRunId: activeRun.id });
     await vi.waitFor(() => expect(signal).toBeDefined());
 
     await expect(executor.abortSessionExecutions('session_1')).rejects.toMatchObject({
@@ -161,7 +192,7 @@ describe('TaskExecutor TaskRun identity', () => {
       store: {
         tasks: {
           get: vi.fn(async () => activeTask),
-          getLatestRun: vi.fn(async () => activeRun),
+          getRun: vi.fn(async () => activeRun),
           renewRunOwnership,
         },
       } as unknown as AgentStore,
@@ -178,7 +209,7 @@ describe('TaskExecutor TaskRun identity', () => {
       terminationGraceMs: 10,
       clock: { nowMs: () => 100 },
     });
-    const running = executor.startExecution(activeTask.id);
+    const running = executor.execute({ taskId: activeTask.id, taskRunId: activeRun.id });
     await vi.waitFor(() => expect(signal).toBeDefined());
 
     await expect(executor.shutdown()).resolves.toBeUndefined();
@@ -193,14 +224,16 @@ describe('TaskExecutor TaskRun identity', () => {
 
   it('keeps superseded executions tracked until Session deletion can join them', async () => {
     const activeTask = task('task_1', 'session_1');
-    let latestRun = taskRunFor('task_run_1', activeTask.id);
+    const runs = new Map<string, AgentTaskRun>([
+      ['task_run_1', taskRunFor('task_run_1', activeTask.id)],
+    ]);
     const signals = new Map<string, AbortSignal>();
     let completeSuperseded!: () => void;
     const executor = new TaskExecutor({
       store: {
         tasks: {
           get: vi.fn(async () => activeTask),
-          getLatestRun: vi.fn(async () => latestRun),
+          getRun: vi.fn(async (taskRunId: string) => runs.get(taskRunId)),
         },
       } as unknown as AgentStore,
       reactExecution: {
@@ -221,10 +254,10 @@ describe('TaskExecutor TaskRun identity', () => {
       clock: { nowMs: () => 100 },
     });
 
-    const first = executor.startExecution(activeTask.id);
+    const first = executor.execute({ taskId: activeTask.id, taskRunId: 'task_run_1' });
     await vi.waitFor(() => expect(signals.has('task_run_1')).toBe(true));
-    latestRun = taskRunFor('task_run_2', activeTask.id);
-    const second = executor.startExecution(activeTask.id);
+    runs.set('task_run_2', taskRunFor('task_run_2', activeTask.id));
+    const second = executor.execute({ taskId: activeTask.id, taskRunId: 'task_run_2' });
     await vi.waitFor(() => expect(signals.has('task_run_2')).toBe(true));
 
     await expect(executor.abortSessionExecutions(activeTask.sessionId)).rejects.toMatchObject({

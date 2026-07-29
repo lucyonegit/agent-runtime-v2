@@ -525,7 +525,7 @@ describe('PostgresAgentStore converged model', () => {
     await expect(store.sessions.listUserInputRequests(task.sessionId)).resolves.toMatchObject([
       { id: 'input_1', status: 'pending', version: 0 },
     ]);
-    await expect(store.tasks.getLatestRun(task.id)).resolves.toMatchObject({
+    await expect(store.tasks.getRun('task_run_1')).resolves.toMatchObject({
       id: 'task_run_1', status: 'paused', runNo: 1,
     });
 
@@ -577,7 +577,7 @@ describe('PostgresAgentStore converged model', () => {
       nowMs: 32,
       ownershipExpiresAtMs: 1_000,
     })).rejects.toMatchObject({ code: 'USER_INPUT_ANSWER_CONFLICT' });
-    await expect(store.tasks.getLatestRun(task.id)).resolves.toMatchObject({
+    await expect(store.tasks.getRun('task_run_2')).resolves.toMatchObject({
       id: 'task_run_2', runNo: 2,
     });
   });

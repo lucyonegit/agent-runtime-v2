@@ -65,7 +65,7 @@ export class ResumeTaskFlow {
         return failed.task;
       }
 
-      this.execution.dispatch(started.task.id);
+      this.execution.dispatch({ taskId: started.task.id, taskRunId: started.taskRun.id });
       return started.task;
     } catch (error) {
       throw mapStoreError(error);
