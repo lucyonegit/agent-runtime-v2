@@ -223,6 +223,26 @@ describe('PostgresAgentStore converged model', () => {
     }
   });
 
+  it('installs indexes for the parent lookups used by long Session projections', async () => {
+    const expectedIndexes = [
+      'idx_agent_artifacts_tool_result',
+      'idx_agent_tool_calls_session_timeline',
+      'idx_agent_tool_runs_task_timeline',
+      'idx_agent_user_input_session_timeline',
+      'idx_agent_user_input_task_pending',
+      'uniq_agent_user_input_client_answer',
+    ];
+    const installed = await pool.query<{ indexname: string }>(
+      `select indexname from pg_indexes
+       where schemaname = current_schema()
+         and indexname = any($1::text[])
+       order by indexname`,
+      [expectedIndexes]
+    );
+
+    expect(installed.rows.map(row => row.indexname)).toEqual(expectedIndexes);
+  });
+
   it('loads all durable model-input sources through one context snapshot', async () => {
     const { task: firstTask } = await createTask();
     const firstRun = await startRun(firstTask.id, firstTask.version, 'task_run_1', 'initial', 20);

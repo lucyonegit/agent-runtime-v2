@@ -221,6 +221,9 @@ create index idx_agent_tool_calls_recovery
   on agent_tool_calls(status, updated_at_ms)
   where status in ('pending', 'running', 'waiting_for_user', 'outcome_unknown');
 
+create index idx_agent_tool_calls_session_timeline
+  on agent_tool_calls(session_id, created_at_ms asc, id asc);
+
 create table agent_tool_runs (
   id text primary key,
   tool_call_id text not null references agent_tool_calls(id) on delete cascade,
@@ -248,6 +251,9 @@ create table agent_tool_runs (
 create unique index uniq_agent_tool_runs_active
   on agent_tool_runs(tool_call_id)
   where status = 'running';
+
+create index idx_agent_tool_runs_task_timeline
+  on agent_tool_runs(task_id, started_at_ms asc, id asc);
 
 create table agent_active_plans (
   session_id text primary key references agent_sessions(id) on delete cascade,
@@ -284,6 +290,9 @@ create table agent_artifacts (
 create index idx_agent_artifacts_session
   on agent_artifacts(session_id, created_at_ms asc, id asc);
 
+create index idx_agent_artifacts_tool_result
+  on agent_artifacts(tool_call_id, result_message_id);
+
 create table agent_user_input_requests (
   id text primary key,
   session_id text not null references agent_sessions(id) on delete cascade,
@@ -311,6 +320,17 @@ create table agent_user_input_requests (
 create index idx_agent_user_input_pending
   on agent_user_input_requests(status, expires_at_ms)
   where status = 'pending';
+
+create index idx_agent_user_input_session_timeline
+  on agent_user_input_requests(session_id, created_at_ms asc, id asc);
+
+create index idx_agent_user_input_task_pending
+  on agent_user_input_requests(task_id)
+  where status = 'pending';
+
+create unique index uniq_agent_user_input_client_answer
+  on agent_user_input_requests(task_id, client_answer_id)
+  where client_answer_id is not null;
 
 create table agent_context_compactions (
   session_id text primary key references agent_sessions(id) on delete cascade,
