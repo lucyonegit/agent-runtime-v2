@@ -25,6 +25,10 @@ import {
   workspaceRoot,
 } from '../helpers/workspace-path.helper.js';
 import {
+  assertCodeProjectFilePath,
+  CODE_PROJECT_FILE_EXAMPLE,
+} from '../helpers/code-project-path.helper.js';
+import {
   jsonToolOutput,
   numberArgument,
   runtimeContext,
@@ -125,7 +129,7 @@ export function createFilesystemTools(
   };
   const listFiles = new DynamicStructuredTool({
     name: 'list_files',
-    description: 'List the shared Session workspace. Its standard areas are code, docs, artifacts, downloads, and tmp.',
+    description: 'List the shared Session workspace. Its standard areas are code, docs, artifacts, downloads, and tmp. code/ is a collection whose immediate children are separate project directories.',
     schema: {
       type: 'object',
       properties: {
@@ -158,7 +162,7 @@ export function createFilesystemTools(
 
   const readFileTool = new DynamicStructuredTool({
     name: 'read_file',
-    description: 'Read a UTF-8 file from the shared Session workspace, for example code/src/index.ts or docs/spec.md.',
+    description: `Read a UTF-8 file from the shared Session workspace, for example ${CODE_PROJECT_FILE_EXAMPLE} or docs/spec.md.`,
     schema: {
       type: 'object',
       properties: { path: { type: 'string', description: 'Workspace-relative file path.' } },
@@ -194,14 +198,15 @@ export function createFilesystemTools(
       `or ${filesystemConfig.maximumWriteEstimatedTokens} estimated tokens.`,
       'Prefer splitting large implementations into smaller modules/files.',
       'Never truncate content. For one indivisible large file, use start_file_write and append_file_chunk.',
-      'Use code/ for webpages, applications, scripts, and source code; use docs/, artifacts/, downloads/, or tmp/ only when their category matches the requested deliverable.',
+      'Use code/<project>/ for webpages, applications, scripts, and source code. code/ is only a collection root, so never write a project file directly under it.',
+      'Use docs/, artifacts/, downloads/, or tmp/ only when their category matches the requested deliverable.',
     ].join(' '),
     schema: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
-          description: 'Workspace-relative file path. Webpages and source code must use code/, for example code/index.html.',
+          description: `Workspace-relative file path. Webpages and source code must name a project, for example ${CODE_PROJECT_FILE_EXAMPLE}.`,
         },
         content: {
           type: 'string',
@@ -217,6 +222,7 @@ export function createFilesystemTools(
       const values = input as Record<string, unknown>;
       const path = stringArgument(values, 'path');
       const content = stringArgument(values, 'content');
+      assertCodeProjectFilePath(path);
       assertFileWriteContentLimit(content, filesystemConfig);
       const context = runtimeContext(config);
       const filePath = await resolveWorkspacePath(context, path);
@@ -258,6 +264,7 @@ export function createFilesystemTools(
       `Provide the first chunk only, limited to ${filesystemConfig.maximumWriteCharacters} characters`,
       `or ${filesystemConfig.maximumWriteEstimatedTokens} estimated tokens.`,
       'The destination file is not changed and no Artifact is created until append_file_chunk is called with finalize=true.',
+      `A code destination must name its project, for example ${CODE_PROJECT_FILE_EXAMPLE}.`,
       'Call this tool alone, wait for its ToolMessage, then use the returned writeId.',
     ].join(' '),
     schema: {
@@ -265,7 +272,7 @@ export function createFilesystemTools(
       properties: {
         path: {
           type: 'string',
-          description: 'Workspace-relative destination file path.',
+          description: `Workspace-relative destination file path. A code path must follow code/<project>/<file>, for example ${CODE_PROJECT_FILE_EXAMPLE}.`,
         },
         content: {
           type: 'string',
@@ -281,6 +288,7 @@ export function createFilesystemTools(
       const values = input as Record<string, unknown>;
       const path = stringArgument(values, 'path');
       const content = stringArgument(values, 'content');
+      assertCodeProjectFilePath(path);
       assertFileWriteContentLimit(content, filesystemConfig);
       const context = runtimeContext(config);
       const writeId = createFileWriteId(context.idempotencyKey);
@@ -570,6 +578,7 @@ async function appendChunkedFileWrite(input: {
       `Chunked file write ${input.writeId} belongs to another Session.`
     );
   }
+  assertCodeProjectFilePath(manifest.path);
   const chunk = fileWriteChunk(input.chunkIndex, input.content);
   if (manifest.status === 'completed') {
     const existing = manifest.chunks.find(candidate => candidate.index === input.chunkIndex);

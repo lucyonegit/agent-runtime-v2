@@ -26,6 +26,7 @@ describe('Task ReAct prompt', () => {
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('you MUST call request_user_input before continuing');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('do not ask the same question again');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('not a recovered ToolResult');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('code/<project>/');
   });
 
   it('keeps the cacheable environment prefix stable and versioned', () => {
@@ -35,6 +36,7 @@ describe('Task ReAct prompt', () => {
       shellPath: '/bin/zsh',
     });
     expect(stable).toContain('/tmp/runtime/sessions/session_1/workspace');
+    expect(stable).toContain('code/ is the project collection root');
     expect(stable).not.toContain(new Date().toISOString());
     const manifest = createTaskPromptManifest({
       systemPrompt: TASK_AGENT_SYSTEM_PROMPT,
@@ -42,7 +44,7 @@ describe('Task ReAct prompt', () => {
       promptVersion: TASK_AGENT_PROMPT_VERSION,
       stableContext: stable,
     });
-    expect(TASK_AGENT_PROMPT_VERSION).toBe(12);
+    expect(TASK_AGENT_PROMPT_VERSION).toBe(13);
     expect(manifest.components.map(component => component.cacheScope)).toEqual(['stable', 'stable']);
   });
 });

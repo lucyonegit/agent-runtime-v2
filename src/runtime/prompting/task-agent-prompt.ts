@@ -4,12 +4,12 @@ import type { AgentPromptManifest } from '../../domain/index.js';
 import { createPromptManifest } from './prompt-registry.js';
 
 export const TASK_AGENT_PROMPT_ID = 'task-agent';
-export const TASK_AGENT_PROMPT_VERSION = 12;
+export const TASK_AGENT_PROMPT_VERSION = 13;
 export const TASK_AGENT_SYSTEM_PROMPT_VERSION =
   `${TASK_AGENT_PROMPT_ID}-v${TASK_AGENT_PROMPT_VERSION}`;
 export const TASK_AGENT_POLICY_COMPONENT_ID = 'task-agent-policy';
 export const TASK_AGENT_ENVIRONMENT_COMPONENT_ID = 'task-agent-environment';
-export const TASK_AGENT_ENVIRONMENT_COMPONENT_VERSION = 1;
+export const TASK_AGENT_ENVIRONMENT_COMPONENT_VERSION = 2;
 
 export const TASK_AGENT_SYSTEM_PROMPT = `You are a reliable tool-using agent. Complete the user's actual goal and report only outcomes that are durably verified.
 
@@ -31,8 +31,9 @@ Execution:
 - Tool calls in one response are siblings and cannot observe each other.
 - Execute prerequisite searches, reads, or inspections first. Perform dependent writes or publishing in a later model turn.
 - Follow each tool's schema and local usage contract.
+- Treat code/ as a collection root, not as a project. Put every application under one stable code/<project>/ directory and keep all of that project's source, configuration, dependencies, and generated files inside it.
 - write_file and write_article each write one complete file within their declared character and token limits. Prefer splitting large implementations into cohesive modules instead of creating oversized files.
-- Never truncate a file to satisfy a complete-write limit. For one indivisible large file or document, call start_file_write once with the intended code/, docs/, or artifacts/ path, then append_file_chunk once per model turn with the exact nextChunkIndex, and finalize only the last chunk.
+- Never truncate a file to satisfy a complete-write limit. For one indivisible large file or document, call start_file_write once with the intended code/<project>/, docs/, or artifacts/ path, then append_file_chunk once per model turn with the exact nextChunkIndex, and finalize only the last chunk.
 - A successful file ToolMessage is authoritative. Do not rewrite a successful file merely because you speculate that its content was truncated.
 - Treat ToolMessages and durable runtime state as authoritative facts.
 - Never invent completed work, artifacts, evidence IDs, paths, checksums, or persisted results.
@@ -69,6 +70,7 @@ export function buildStableEnvironmentContext(input: {
     'Stable execution environment:',
     `- Session workspace root: ${workspaceRoot}`,
     '- Workspace areas: code/, docs/, artifacts/, downloads/, tmp/.',
+    '- code/ is the project collection root. Each project must live under one stable code/<project>/ directory; never place project files directly in code/.',
     '- Use workspace-relative paths with file and artifact tools unless a tool explicitly permits absolute paths.',
     `- Host platform: ${process.platform}/${process.arch}. Default shell: ${
       input.shellPath ?? DEFAULT_TOOLS_CONFIG.shell.executable

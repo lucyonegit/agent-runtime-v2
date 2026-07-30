@@ -192,13 +192,50 @@ describe('LangChain runtime tools', () => {
     expect(JSON.stringify(writeArticle.schema)).not.toContain('html');
 
     await invoke('write_file', {
-      path: 'code/index.html',
+      path: 'code/runtime-app/index.html',
       content: '<!doctype html><title>Runtime</title>',
     });
     await expect(readFile(
-      join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'index.html'),
+      join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'runtime-app', 'index.html'),
       'utf8'
     )).resolves.toContain('<title>Runtime</title>');
+  });
+
+  it('requires every code write to name a project below the code collection root', async () => {
+    const writeFile = tools.find(item => item.tool.name === 'write_file')!.tool;
+    const startFileWrite = tools.find(item => item.tool.name === 'start_file_write')!.tool;
+    expect(writeFile.description).toContain('code/<project>/');
+    expect(startFileWrite.description).toContain('code/todo-app/src/index.ts');
+
+    await expect(invoke('write_file', {
+      path: 'code/index.html',
+      content: '<!doctype html>',
+    })).rejects.toMatchObject({
+      code: 'code_project_path_required',
+      executionStarted: false,
+      details: {
+        path: 'code/index.html',
+        expectedPattern: 'code/<project>/<file>',
+      },
+    });
+    await expect(invoke('start_file_write', {
+      path: 'code/../index.html',
+      content: '<!doctype html>',
+    })).rejects.toMatchObject({
+      code: 'code_project_path_required',
+      executionStarted: false,
+    });
+    await expect(invoke('write_file', {
+      path: './code/index.html',
+      content: '<!doctype html>',
+    })).rejects.toMatchObject({
+      code: 'code_project_path_required',
+      executionStarted: false,
+    });
+    await expect(invoke('write_file', {
+      path: 'docs/index.md',
+      content: '# Index',
+    })).resolves.toMatchObject({ path: 'docs/index.md' });
   });
 
   it('publishes and enforces the single-call file content limits', async () => {
@@ -223,7 +260,7 @@ describe('LangChain runtime tools', () => {
     })]);
 
     await expect(invoke('write_file', {
-      path: 'code/too-large.ts',
+      path: 'code/runtime-app/too-large.ts',
       content: 'x'.repeat(FILE_WRITE_MAX_CHARACTERS + 1),
     })).rejects.toThrow();
     await expect(invoke('write_file', {
@@ -244,10 +281,11 @@ describe('LangChain runtime tools', () => {
       'session_1',
       'workspace',
       'code',
+      'runtime-app',
       'large.ts'
     );
     const started = await invoke('start_file_write', {
-      path: 'code/large.ts',
+      path: 'code/runtime-app/large.ts',
       content: 'export const first = 1;\n',
     }) as {
       writeId: string;
@@ -316,7 +354,7 @@ describe('LangChain runtime tools', () => {
       size: expect.any(Number),
       checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
       artifacts: [expect.objectContaining({
-        storagePath: '.revisions/tool_call_3/code/large.ts',
+        storagePath: '.revisions/tool_call_3/code/runtime-app/large.ts',
         metadata: expect.objectContaining({
           chunked: true,
           chunkCount: 3,
@@ -382,11 +420,11 @@ describe('LangChain runtime tools', () => {
 
   it('reads, writes, lists, searches and indexes the session workspace', async () => {
     await invoke('write_file', {
-      path: 'code/src/example.ts',
+      path: 'code/runtime-app/src/example.ts',
       content: 'export function hello() { return "runtime"; }\n',
     });
-    await expect(invoke('read_file', { path: 'code/src/example.ts' }))
-      .resolves.toMatchObject({ path: 'code/src/example.ts', content: expect.stringContaining('hello') });
+    await expect(invoke('read_file', { path: 'code/runtime-app/src/example.ts' }))
+      .resolves.toMatchObject({ path: 'code/runtime-app/src/example.ts', content: expect.stringContaining('hello') });
     const listed = await invoke('list_files', { directory: '.', recursive: true }) as {
       files: Array<{ path: string }>;
     };
@@ -396,33 +434,33 @@ describe('LangChain runtime tools', () => {
       expect.objectContaining({ path: 'artifacts', isDirectory: true }),
       expect.objectContaining({ path: 'downloads', isDirectory: true }),
       expect.objectContaining({ path: 'tmp', isDirectory: true }),
-      expect.objectContaining({ path: 'code/src/example.ts' }),
+      expect.objectContaining({ path: 'code/runtime-app/src/example.ts' }),
     ]));
     await expect(invoke('grep_files', { pattern: 'runtime' }))
-      .resolves.toMatchObject({ totalMatches: 1, matches: [{ path: 'code/src/example.ts', line: 1 }] });
+      .resolves.toMatchObject({ totalMatches: 1, matches: [{ path: 'code/runtime-app/src/example.ts', line: 1 }] });
     await expect(invoke('list_symbols', {}))
-      .resolves.toMatchObject({ symbols: [{ name: 'hello', kind: 'function', path: 'code/src/example.ts' }] });
+      .resolves.toMatchObject({ symbols: [{ name: 'hello', kind: 'function', path: 'code/runtime-app/src/example.ts' }] });
   });
 
   it('shares the same categorized workspace across tasks in one session', async () => {
-    await invoke('write_file', { path: 'code/app.ts', content: 'export const app = true;' });
+    await invoke('write_file', { path: 'code/runtime-app/app.ts', content: 'export const app = true;' });
     context = {
       ...context,
       taskId: 'task_2',
       toolCallId: 'tool_call_2',
       modelToolCallId: 'model_call_2',
     };
-    await expect(invoke('read_file', { path: 'code/app.ts' }))
+    await expect(invoke('read_file', { path: 'code/runtime-app/app.ts' }))
       .resolves.toMatchObject({ content: expect.stringContaining('app') });
     await expect(readFile(
-      join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'app.ts'),
+      join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'runtime-app', 'app.ts'),
       'utf8'
     )).resolves.toContain('app');
   });
 
   it('runs shell commands in the workspace with structured output', async () => {
     const result = await invoke('run_shell', {
-      command: "printf 'hello' > code/shell.txt; printf 'stdout'; printf 'stderr' >&2",
+      command: "mkdir -p code/runtime-app; printf 'hello' > code/runtime-app/shell.txt; printf 'stdout'; printf 'stderr' >&2",
     }) as {
       cwd: string;
       exitCode: number | null;
@@ -438,7 +476,7 @@ describe('LangChain runtime tools', () => {
       stderr: 'stderr',
     });
     await expect(readFile(
-      join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'shell.txt'),
+      join(sandboxRoot, 'sessions', 'session_1', 'workspace', 'code', 'runtime-app', 'shell.txt'),
       'utf8'
     )).resolves.toBe('hello');
   });
