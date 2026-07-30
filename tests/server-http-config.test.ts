@@ -11,7 +11,7 @@ import {
   RuntimeHttpAuthGuard,
 } from '../src/server/http/runtime-http-auth.guard.js';
 import { buildWorkspaceProcessEnv } from '../src/tools/process/helpers/process-environment.helper.js';
-import { createRuntimeTools } from '../src/tools/index.js';
+import { createRuntimeTools, type ManagedProcessManager } from '../src/tools/index.js';
 
 describe('Agent HTTP CORS configuration', () => {
   it('allows the browser methods used by the Session API', () => {
@@ -35,6 +35,7 @@ describe('Agent HTTP CORS configuration', () => {
       'artifacts',
       'filesystem',
       'shell',
+      'managedProcesses',
       'browser',
     ]);
   });
@@ -47,7 +48,7 @@ describe('Agent HTTP CORS configuration', () => {
     ]);
   });
 
-  it('permits one-shot build commands but keeps managed processes out of HTTP by default', () => {
+  it('exposes one-shot commands and managed development processes to HTTP by default', () => {
     const config = loadRuntimeConfig({ env: { DATABASE_URL: 'postgres://runtime' } });
     const restricted = restrictHttpToolCapabilities(config);
 
@@ -62,14 +63,18 @@ describe('Agent HTTP CORS configuration', () => {
       artifacts: true,
       filesystem: true,
       shell: true,
-      managedProcesses: false,
+      managedProcesses: true,
       browser: true,
     });
-    expect(createRuntimeTools({ config: restricted.tools }).map(tool => tool.tool.name))
-      .toContain('run_shell');
-    expect(httpModule(false, false).controllers).not.toContain(
-      AgentManagedProcessController
-    );
+    const toolNames = createRuntimeTools({
+      config: restricted.tools,
+      managedProcessManager: {} as ManagedProcessManager,
+    }).map(tool => tool.tool.name);
+    expect(toolNames).toContain('run_shell');
+    expect(toolNames).toContain('start_process');
+    expect(toolNames).toContain('get_process');
+    expect(toolNames).toContain('read_process_logs');
+    expect(toolNames).toContain('stop_process');
     expect(httpModule(false, true).controllers).toContain(
       AgentManagedProcessController
     );
