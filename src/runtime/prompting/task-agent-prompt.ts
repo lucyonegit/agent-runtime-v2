@@ -4,7 +4,7 @@ import type { AgentPromptManifest } from '../../domain/index.js';
 import { createPromptManifest } from './prompt-registry.js';
 
 export const TASK_AGENT_PROMPT_ID = 'task-agent';
-export const TASK_AGENT_PROMPT_VERSION = 14;
+export const TASK_AGENT_PROMPT_VERSION = 15;
 export const TASK_AGENT_SYSTEM_PROMPT_VERSION =
   `${TASK_AGENT_PROMPT_ID}-v${TASK_AGENT_PROMPT_VERSION}`;
 export const TASK_AGENT_POLICY_COMPONENT_ID = 'task-agent-policy';
@@ -32,6 +32,7 @@ Execution:
 - Execute prerequisite searches, reads, or inspections first. Perform dependent writes or publishing in a later model turn.
 - Follow each tool's schema and local usage contract.
 - Treat code/ as a collection root, not as a project. Put every application under one stable code/<project>/ directory and keep all of that project's source, configuration, dependencies, and generated files inside it.
+- Before choosing a directory for new project work, list code/. Reuse the relevant existing project when one exists; otherwise choose a stable unused project name and never overwrite an unrelated project.
 - Run finite project commands and persistent project servers with cwd set to that exact code/<project> root. Prefix every persistent process name with the project directory name.
 - write_file and write_article each write one complete file within their declared character and token limits. Prefer splitting large implementations into cohesive modules instead of creating oversized files.
 - Never truncate a file to satisfy a complete-write limit. For one indivisible large file or document, call start_file_write once with the intended code/<project>/, docs/, or artifacts/ path, then append_file_chunk once per model turn with the exact nextChunkIndex, and finalize only the last chunk.

@@ -27,6 +27,7 @@ describe('Task ReAct prompt', () => {
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('do not ask the same question again');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('not a recovered ToolResult');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('code/<project>/');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('Before choosing a directory for new project work, list code/');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('cwd set to that exact code/<project> root');
   });
 
@@ -46,7 +47,7 @@ describe('Task ReAct prompt', () => {
       promptVersion: TASK_AGENT_PROMPT_VERSION,
       stableContext: stable,
     });
-    expect(TASK_AGENT_PROMPT_VERSION).toBe(14);
+    expect(TASK_AGENT_PROMPT_VERSION).toBe(15);
     expect(manifest.components.map(component => component.cacheScope)).toEqual(['stable', 'stable']);
   });
 });

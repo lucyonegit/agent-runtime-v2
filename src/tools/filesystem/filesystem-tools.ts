@@ -129,7 +129,7 @@ export function createFilesystemTools(
   };
   const listFiles = new DynamicStructuredTool({
     name: 'list_files',
-    description: 'List the shared Session workspace. Its standard areas are code, docs, artifacts, downloads, and tmp. code/ is a collection whose immediate children are separate project directories.',
+    description: 'List the shared Session workspace. Its standard areas are code, docs, artifacts, downloads, and tmp. code/ is a collection whose immediate children are separate project directories. List code/ before choosing a directory for new project work so an existing relevant project can be reused and unrelated projects are not overwritten.',
     schema: {
       type: 'object',
       properties: {

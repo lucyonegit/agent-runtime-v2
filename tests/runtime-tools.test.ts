@@ -202,8 +202,10 @@ describe('LangChain runtime tools', () => {
   });
 
   it('requires every code write to name a project below the code collection root', async () => {
+    const listFiles = tools.find(item => item.tool.name === 'list_files')!.tool;
     const writeFile = tools.find(item => item.tool.name === 'write_file')!.tool;
     const startFileWrite = tools.find(item => item.tool.name === 'start_file_write')!.tool;
+    expect(listFiles.description).toContain('List code/ before choosing a directory');
     expect(writeFile.description).toContain('code/<project>/');
     expect(startFileWrite.description).toContain('code/todo-app/src/index.ts');
 
