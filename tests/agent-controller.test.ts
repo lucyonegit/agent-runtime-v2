@@ -71,36 +71,6 @@ describe('AgentController SSE', () => {
     subscription.unsubscribe();
   });
 
-  it('emits changed durable Session revisions and stops polling after close', async () => {
-    vi.useFakeTimers();
-    let revision = 3;
-    const readSessionRevision = vi.fn(async () => revision);
-    const events = new RuntimeEventBus({
-      readSessionRevision,
-      revisionPollIntervalMs: 100,
-    });
-    const received: unknown[] = [];
-    events.events('session_1').subscribe(event => received.push(event.data));
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(received).toEqual([
-      { type: 'session.revision', sessionId: 'session_1', revision: 3 },
-    ]);
-
-    revision = 4;
-    await vi.advanceTimersByTimeAsync(100);
-    expect(received.at(-1)).toEqual({
-      type: 'session.revision',
-      sessionId: 'session_1',
-      revision: 4,
-    });
-
-    events.closeSession('session_1');
-    const callsAtClose = readSessionRevision.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(500);
-    expect(readSessionRevision).toHaveBeenCalledTimes(callsAtClose);
-  });
-
   it('completes the SSE stream and heartbeat when a Session closes', () => {
     const events = new RuntimeEventBus();
     const controller = new AgentController(null as never, events);

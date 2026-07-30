@@ -3,16 +3,9 @@ import { EMPTY, Observable, Subject } from 'rxjs';
 import type { AgentRealtimeEvent } from '../../domain/index.js';
 import type { RuntimeEventPublisher } from '../../runtime/events/runtime-event-publisher.js';
 
-export interface RuntimeEventBusOptions {
-  readSessionRevision?: (sessionId: string) => Promise<number | undefined>;
-  revisionPollIntervalMs?: number;
-}
-
 export class RuntimeEventBus implements RuntimeEventPublisher {
   readonly #subjects = new Map<string, Subject<MessageEvent>>();
   readonly #closedSessions = new Set<string>();
-
-  constructor(private readonly options: RuntimeEventBusOptions = {}) {}
 
   publish(event: AgentRealtimeEvent): void {
     if (this.#closedSessions.has(event.sessionId)) return;
@@ -29,42 +22,7 @@ export class RuntimeEventBus implements RuntimeEventPublisher {
 
   events(sessionId: string): Observable<MessageEvent> {
     if (this.#closedSessions.has(sessionId)) return EMPTY;
-    const events = this.#subject(sessionId);
-    const revisionReader = this.options.readSessionRevision;
-    if (!revisionReader) return events.asObservable();
-    const pollIntervalMs = this.options.revisionPollIntervalMs
-      ?? DEFAULT_REVISION_POLL_INTERVAL_MS;
-    return new Observable(subscriber => {
-      let stopped = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let lastRevision: number | undefined;
-      const eventSubscription = events.subscribe(subscriber);
-      const poll = async (): Promise<void> => {
-        try {
-          const revision = await revisionReader(sessionId);
-          if (!stopped && !subscriber.closed && revision !== undefined && revision !== lastRevision) {
-            lastRevision = revision;
-            subscriber.next({
-              type: 'session.revision',
-              id: `session-revision:${revision}`,
-              data: { type: 'session.revision', sessionId, revision } satisfies AgentRealtimeEvent,
-            });
-          }
-        } catch {
-          // A later poll or the reconnect snapshot can restore convergence.
-        } finally {
-          if (!stopped && !subscriber.closed) {
-            timer = setTimeout(() => { void poll(); }, pollIntervalMs);
-          }
-        }
-      };
-      void poll();
-      return () => {
-        stopped = true;
-        if (timer) clearTimeout(timer);
-        eventSubscription.unsubscribe();
-      };
-    });
+    return this.#subject(sessionId).asObservable();
   }
 
   openSession(sessionId: string): void {
@@ -86,5 +44,3 @@ export class RuntimeEventBus implements RuntimeEventPublisher {
     return subject;
   }
 }
-
-const DEFAULT_REVISION_POLL_INTERVAL_MS = 5_000;

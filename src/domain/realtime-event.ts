@@ -9,7 +9,6 @@ import type { AgentToolCall } from './tool-call.js';
 import type { AgentUserInputRequest } from './user-input-request.js';
 
 export type AgentRealtimeEvent =
-  | { type: 'session.revision'; sessionId: string; revision: number }
   | {
       type: 'message.delta';
       eventId: string;
