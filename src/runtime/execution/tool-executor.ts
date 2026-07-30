@@ -65,12 +65,19 @@ export interface RuntimeUserInputArtifact {
 export class RuntimeToolExecutionError extends Error {
   readonly code: string;
   readonly details?: unknown;
+  readonly executionStarted: boolean;
 
-  constructor(code: string, message: string, details?: unknown) {
+  constructor(
+    code: string,
+    message: string,
+    details?: unknown,
+    options: { executionStarted?: boolean } = {}
+  ) {
     super(message);
     this.name = 'RuntimeToolExecutionError';
     this.code = code;
     this.details = details;
+    this.executionStarted = options.executionStarted ?? true;
   }
 }
 
@@ -181,7 +188,11 @@ export class ToolExecutor implements ToolExecutorPort {
       if (request.signal?.aborted || isAbortError(error)) throw error;
       return {
         type: 'failed',
-        executionStarted: true,
+        executionStarted: error instanceof ToolInputParsingException
+          ? false
+          : error instanceof RuntimeToolExecutionError
+            ? error.executionStarted
+            : true,
         code: error instanceof ToolInputParsingException
           ? 'invalid_tool_arguments'
           : error instanceof RuntimeToolExecutionError

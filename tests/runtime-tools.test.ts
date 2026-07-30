@@ -459,6 +459,23 @@ describe('LangChain runtime tools', () => {
     });
   });
 
+  it('rejects persistent development servers before run_shell starts them', async () => {
+    await expect(invoke('run_shell', {
+      command: 'cd code && npm run dev',
+      timeoutMs: 30_000,
+    })).rejects.toMatchObject({
+      code: 'persistent_process_requires_start_process',
+      executionStarted: false,
+      details: { command: 'cd code && npm run dev' },
+    });
+    await expect(invoke('run_shell', {
+      command: "printf 'npm run dev'",
+    })).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: 'npm run dev',
+    });
+  });
+
   it('terminates an in-flight shell process when the Task is cancelled', async () => {
     const controller = new AbortController();
     context = { ...context, signal: controller.signal };

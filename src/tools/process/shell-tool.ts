@@ -95,6 +95,7 @@ export function createShellTools(
       const args = input as Record<string, unknown>;
       const command = stringArgument(args, 'command');
       if (!command.trim()) throw new Error('Shell command is required.');
+      assertFiniteShellCommand(command);
       const cwd = stringArgument(args, 'cwd', '.').trim() || '.';
       const timeoutMs = normalizeTimeout(
         numberArgument(args, 'timeoutMs', shell.defaultTimeoutMs),
@@ -197,6 +198,36 @@ export function assertSuccessfulShellResult(result: ShellExecutionResult): void 
       result
     );
   }
+}
+
+function assertFiniteShellCommand(command: string): void {
+  if (!shellCommandSegments(command).some(isPersistentDevelopmentServerSegment)) return;
+  throw new RuntimeToolExecutionError(
+    'persistent_process_requires_start_process',
+    'Persistent development-server commands are not supported by run_shell. Use start_process instead.',
+    { command },
+    { executionStarted: false }
+  );
+}
+
+function shellCommandSegments(command: string): string[] {
+  return command
+    .split(/&&|\|\||;|\r?\n/u)
+    .map(segment => segment.trim())
+    .filter(Boolean);
+}
+
+function isPersistentDevelopmentServerSegment(segment: string): boolean {
+  const normalized = segment.replace(
+    /^(?:(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)+)/u,
+    ''
+  );
+  return [
+    /^(?:npm\s+(?:run\s+(?:dev|start)|start))(?:\s|$)/u,
+    /^(?:(?:pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start))(?:\s|$)/u,
+    /^(?:(?:npx|npm\s+exec|pnpm\s+(?:exec|dlx)|yarn\s+dlx)\s+)?vite(?:\s|$)/u,
+    /^(?:(?:npx|npm\s+exec|pnpm\s+(?:exec|dlx)|yarn\s+dlx)\s+)?next\s+dev(?:\s|$)/u,
+  ].some(pattern => pattern.test(normalized));
 }
 
 
