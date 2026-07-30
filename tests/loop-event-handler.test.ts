@@ -5,6 +5,47 @@ import { LOOP_EVENT_TYPES } from '../src/runtime/loop/loop-events.js';
 import type { AgentStore } from '../src/storage/agent-store.js';
 
 describe('LoopEventHandler', () => {
+  it('publishes a streamed ToolCall preview without writing durable state', async () => {
+    const publish = vi.fn(async (_event: AgentRealtimeEvent) => undefined);
+    const handler = new LoopEventHandler({
+      store: {} as AgentStore,
+      ownerId: 'worker_1',
+      tools: [],
+      publisher: { publish },
+      ids: {
+        eventId: () => 'event_1',
+        messageId: () => 'message_1',
+        toolCallId: () => 'tool_call_1',
+        userInputRequestId: () => 'request_1',
+      },
+    });
+
+    const feedback = await handler.handle({
+      type: LOOP_EVENT_TYPES.ModelToolCallPreview,
+      outputId: 'output_1',
+      toolCallIndex: 0,
+      modelToolCallId: 'model_tool_call_1',
+      toolName: 'write_file',
+      observedAtMs: 123,
+    }, {
+      sessionId: 'session_1', taskId: 'task_1', taskRunId: 'task_run_1',
+    });
+
+    expect(feedback).toBeUndefined();
+    expect(publish).toHaveBeenCalledWith({
+      type: 'tool_call.preview',
+      eventId: 'event_1',
+      sessionId: 'session_1',
+      taskId: 'task_1',
+      messageId: 'message_1',
+      outputId: 'output_1',
+      toolCallIndex: 0,
+      modelToolCallId: 'model_tool_call_1',
+      toolName: 'write_file',
+      observedAtMs: 123,
+    });
+  });
+
   it('persists a rejected output disposition before publishing its discarded projection', async () => {
     const publish = vi.fn(async (_event: AgentRealtimeEvent) => undefined);
     const setModelCallOutputDisposition = vi.fn(async () => ({}) as never);

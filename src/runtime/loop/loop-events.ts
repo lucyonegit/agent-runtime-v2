@@ -7,6 +7,7 @@ import type { UsageMetadata } from '@langchain/core/messages';
 
 export const LOOP_EVENT_TYPES = {
   ModelOutputDelta: 'model.output.delta',
+  ModelToolCallPreview: 'model.tool_call.preview',
   ModelOutputCompleted: 'model.output.completed',
   ModelOutputRejected: 'model.output.rejected',
   ToolResultCompleted: 'tool.result.completed',
@@ -30,6 +31,14 @@ export type LoopEvent =
       outputId: string;
       channel: LoopMessageChannel;
       delta: string;
+    }
+  | {
+      type: typeof LOOP_EVENT_TYPES.ModelToolCallPreview;
+      outputId: string;
+      toolCallIndex?: number;
+      modelToolCallId: string;
+      toolName: string;
+      observedAtMs: number;
     }
   | {
       type: typeof LOOP_EVENT_TYPES.ModelOutputCompleted;

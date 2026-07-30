@@ -46,6 +46,31 @@ describe('AgentController SSE', () => {
     reopened.unsubscribe();
   });
 
+  it('uses the ephemeral ToolCall preview event id as the SSE id', () => {
+    const events = new RuntimeEventBus();
+    const received: unknown[] = [];
+    const subscription = events.events('session_1').subscribe(event => received.push(event));
+
+    events.publish({
+      type: 'tool_call.preview',
+      eventId: 'event_preview_1',
+      sessionId: 'session_1',
+      taskId: 'task_1',
+      messageId: 'message_1',
+      outputId: 'output_1',
+      toolCallIndex: 0,
+      modelToolCallId: 'model_tool_call_1',
+      toolName: 'write_file',
+      observedAtMs: 123,
+    });
+
+    expect(received).toEqual([expect.objectContaining({
+      type: 'tool_call.preview',
+      id: 'event_preview_1',
+    })]);
+    subscription.unsubscribe();
+  });
+
   it('emits changed durable Session revisions and stops polling after close', async () => {
     vi.useFakeTimers();
     let revision = 3;

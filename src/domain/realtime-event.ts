@@ -21,6 +21,18 @@ export type AgentRealtimeEvent =
       delta: string;
     }
   | {
+      type: 'tool_call.preview';
+      eventId: string;
+      sessionId: string;
+      taskId: string;
+      messageId: string;
+      outputId: string;
+      toolCallIndex?: number;
+      modelToolCallId: string;
+      toolName: string;
+      observedAtMs: number;
+    }
+  | {
       type: 'message.discarded';
       eventId: string;
       sessionId: string;

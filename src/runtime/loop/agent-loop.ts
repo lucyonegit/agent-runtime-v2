@@ -373,11 +373,50 @@ export class AgentLoop {
     const outputId = this.#createOutputId();
     let content = '';
     let combined: AIMessageChunk | undefined;
+    const previewedUnindexedToolCallIds = new Set<string>();
+    const previewSignaturesByIndex = new Map<number, string>();
+    const toolCallChunksByIndex = new Map<number, { id: string; name: string }>();
     const stream = await this.#model.stream(messages, modelRunnableConfig(outputId, input.limits.signal));
     for await (const chunk of stream) {
       const cancelled = this.#terminalPreflight(input.limits);
       if (cancelled) throw new LoopTerminatedError(cancelled);
       combined = combined ? combined.concat(chunk) : chunk;
+      for (const toolCallChunk of chunk.tool_call_chunks ?? []) {
+        const index = toolCallChunk.index;
+        if (index === undefined) {
+          if (toolCallChunk.id && toolCallChunk.name
+            && !previewedUnindexedToolCallIds.has(toolCallChunk.id)) {
+            previewedUnindexedToolCallIds.add(toolCallChunk.id);
+            yield {
+              type: LOOP_EVENT_TYPES.ModelToolCallPreview,
+              outputId,
+              modelToolCallId: toolCallChunk.id,
+              toolName: toolCallChunk.name,
+              observedAtMs: this.#clock.nowMs(),
+            };
+          }
+          continue;
+        }
+        const current = toolCallChunksByIndex.get(index) ?? { id: '', name: '' };
+        const preview = {
+          id: `${current.id}${toolCallChunk.id ?? ''}`,
+          name: `${current.name}${toolCallChunk.name ?? ''}`,
+        };
+        toolCallChunksByIndex.set(index, preview);
+        const previewSignature = `${preview.id}\u0000${preview.name}`;
+        if (preview.id && preview.name
+          && previewSignaturesByIndex.get(index) !== previewSignature) {
+          previewSignaturesByIndex.set(index, previewSignature);
+          yield {
+            type: LOOP_EVENT_TYPES.ModelToolCallPreview,
+            outputId,
+            toolCallIndex: index,
+            modelToolCallId: preview.id,
+            toolName: preview.name,
+            observedAtMs: this.#clock.nowMs(),
+          };
+        }
+      }
       const delta = chunk.text;
       if (delta) {
         content += delta;

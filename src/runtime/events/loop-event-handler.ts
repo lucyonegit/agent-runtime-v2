@@ -58,6 +58,21 @@ export class LoopEventHandler {
   }
 
   async handle(event: LoopEvent, target: AgentLoopTarget): Promise<LoopEventFeedback | undefined> {
+    if (event.type === LOOP_EVENT_TYPES.ModelToolCallPreview) {
+      await this.#publish({
+        type: 'tool_call.preview',
+        eventId: this.#ids.eventId(),
+        sessionId: target.sessionId,
+        taskId: target.taskId,
+        messageId: this.#messageId(target.taskId, event.outputId),
+        outputId: event.outputId,
+        ...(event.toolCallIndex === undefined ? {} : { toolCallIndex: event.toolCallIndex }),
+        modelToolCallId: event.modelToolCallId,
+        toolName: event.toolName,
+        observedAtMs: event.observedAtMs,
+      });
+      return undefined;
+    }
     if (event.type === LOOP_EVENT_TYPES.ModelOutputDelta) {
       await this.#publish({
         type: 'message.delta',

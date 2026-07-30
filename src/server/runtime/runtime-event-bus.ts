@@ -18,7 +18,9 @@ export class RuntimeEventBus implements RuntimeEventPublisher {
     if (this.#closedSessions.has(event.sessionId)) return;
     this.#subject(event.sessionId).next({
       type: event.type,
-      id: event.type === 'message.delta' || event.type === 'message.discarded'
+      id: event.type === 'message.delta'
+        || event.type === 'message.discarded'
+        || event.type === 'tool_call.preview'
         ? event.eventId
         : undefined,
       data: event,

@@ -352,12 +352,20 @@ describe('AgentLoop with LangChain messages', () => {
     })));
 
     expect(run.events.map(event => event.type)).toEqual([
+      LOOP_EVENT_TYPES.ModelToolCallPreview,
       LOOP_EVENT_TYPES.ModelOutputCompleted,
       LOOP_EVENT_TYPES.ToolResultCompleted,
       LOOP_EVENT_TYPES.ModelOutputDelta,
       LOOP_EVENT_TYPES.ModelOutputCompleted,
     ]);
     expect(run.events[0]).toMatchObject({
+      type: LOOP_EVENT_TYPES.ModelToolCallPreview,
+      outputId: 'output_1',
+      toolCallIndex: 0,
+      modelToolCallId: 'call_1',
+      toolName: 'lookup',
+    });
+    expect(run.events[1]).toMatchObject({
       toolCalls: [{ id: 'call_1', name: 'lookup', args: { query: 'docs' } }],
     });
     expect(observedMessageCounts).toEqual([0, 2]);
@@ -384,10 +392,15 @@ describe('AgentLoop with LangChain messages', () => {
     })));
 
     expect(run.events[0]).toMatchObject({
+      type: LOOP_EVENT_TYPES.ModelToolCallPreview,
+      modelToolCallId: 'call_bad',
+      toolName: 'lookup',
+    });
+    expect(run.events[1]).toMatchObject({
       type: LOOP_EVENT_TYPES.ModelOutputCompleted,
       toolCalls: [{ id: 'call_bad', name: 'lookup', args: {} }],
     });
-    expect(run.events[1]).toMatchObject({
+    expect(run.events[2]).toMatchObject({
       type: LOOP_EVENT_TYPES.ToolResultFailed,
       modelToolCallId: 'call_bad',
       executionStarted: false,
