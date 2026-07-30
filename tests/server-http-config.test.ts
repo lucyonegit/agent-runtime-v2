@@ -11,6 +11,7 @@ import {
   RuntimeHttpAuthGuard,
 } from '../src/server/http/runtime-http-auth.guard.js';
 import { buildWorkspaceProcessEnv } from '../src/tools/process/helpers/process-environment.helper.js';
+import { createRuntimeTools } from '../src/tools/index.js';
 
 describe('Agent HTTP CORS configuration', () => {
   it('allows the browser methods used by the Session API', () => {
@@ -33,6 +34,7 @@ describe('Agent HTTP CORS configuration', () => {
     expect(DEFAULT_SERVER_CONFIG.toolCapabilities).toEqual([
       'artifacts',
       'filesystem',
+      'shell',
       'browser',
     ]);
   });
@@ -45,7 +47,7 @@ describe('Agent HTTP CORS configuration', () => {
     ]);
   });
 
-  it('keeps host process tools out of HTTP and permits public-web reads by default', () => {
+  it('permits one-shot build commands but keeps managed processes out of HTTP by default', () => {
     const config = loadRuntimeConfig({ env: { DATABASE_URL: 'postgres://runtime' } });
     const restricted = restrictHttpToolCapabilities(config);
 
@@ -59,10 +61,12 @@ describe('Agent HTTP CORS configuration', () => {
       basic: true,
       artifacts: true,
       filesystem: true,
-      shell: false,
+      shell: true,
       managedProcesses: false,
       browser: true,
     });
+    expect(createRuntimeTools({ config: restricted.tools }).map(tool => tool.tool.name))
+      .toContain('run_shell');
     expect(httpModule(false, false).controllers).not.toContain(
       AgentManagedProcessController
     );

@@ -16,6 +16,7 @@ export function createPlanTools(options: CreatePlanToolsOptions): RuntimeTool[] 
       'Include a concise user-facing progress note in the assistant content; never call this tool with empty assistant text.',
       'Send the complete plan each time. Keep exactly one step in_progress until all steps are completed.',
       'Mark a step completed only after its stated outcome is achieved; evidence-gathering steps require observed tool results.',
+      'Build, test, typecheck, install, executable, and runtime verification steps require a successful command or process tool result; file inspection alone is not execution evidence.',
       'A plan guides progress but does not block an honest final answer.',
     ].join(' '),
     schema: {

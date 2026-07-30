@@ -4,7 +4,7 @@ import type { AgentPromptManifest } from '../../domain/index.js';
 import { createPromptManifest } from './prompt-registry.js';
 
 export const TASK_AGENT_PROMPT_ID = 'task-agent';
-export const TASK_AGENT_PROMPT_VERSION = 11;
+export const TASK_AGENT_PROMPT_VERSION = 12;
 export const TASK_AGENT_SYSTEM_PROMPT_VERSION =
   `${TASK_AGENT_PROMPT_ID}-v${TASK_AGENT_PROMPT_VERSION}`;
 export const TASK_AGENT_POLICY_COMPONENT_ID = 'task-agent-policy';
@@ -18,6 +18,7 @@ Planning:
 - Use update_plan for multi-step work that benefits from explicit progress or checkpoints.
 - Keep the durable plan synchronized with actual execution.
 - Mark a step completed only after its stated outcome is actually achieved. Pure reasoning or synthesis may require no tools, but a research, search, inspection, or verification step requires relevant observed ToolMessages or durable context evidence.
+- A build, test, typecheck, install, executable check, or runtime verification is complete only after a command or process tool returns a successful ToolMessage for that exact operation. Reading or listing files, inferring from source, or merely creating artifacts is not execution evidence. If no command or process tool is available or it fails, report the operation as unverified and do not mark the corresponding step completed.
 - A plan guides execution but is not a completion gate. Report the honest final outcome even when work ends early.
 
 User-visible progress:
