@@ -39,7 +39,7 @@ describe('ManagedProcessManager', () => {
       command: [
         `node -e "const http=require('http');`,
         `console.log('runtime-port='+(process.env.AGENT_SERVER_PORT||'hidden'));`,
-        `http.createServer((q,r)=>r.end('ready')).listen(Number(process.env.PORT),'127.0.0.1')"`,
+        `http.createServer((q,r)=>r.end('ready')).listen(Number('{PORT}'),'{HOST}')"`,
       ].join(' '),
       port: 'auto',
       startupTimeoutMs: 10_000,
@@ -58,7 +58,7 @@ describe('ManagedProcessManager', () => {
         modelToolCallId: 'model_call_process_2',
       },
       name: 'test-server',
-      command: `node -e "require('http').createServer((q,r)=>r.end('ready')).listen(Number(process.env.PORT),'127.0.0.1')"`,
+      command: `node -e "require('http').createServer((q,r)=>r.end('ready')).listen(Number('{PORT}'),'{HOST}')"`,
       port: 'auto',
     })).rejects.toMatchObject({ code: 'managed_process_conflict' });
 
@@ -67,6 +67,28 @@ describe('ManagedProcessManager', () => {
     expect(events.some(event => (
       event.type === 'managed_process.upserted' && event.process.status === 'running'
     ))).toBe(true);
+  });
+
+  it('rejects an ambiguous automatic port before spawning the command', async () => {
+    const sandboxRoot = await temporarySandbox();
+    const manager = trackedManager(new ManagedProcessManager(
+      undefined,
+      undefined,
+      sandboxRoot,
+      testToolsConfig()
+    ));
+    await manager.start();
+
+    await expect(manager.startProcess({
+      context: toolContext(sandboxRoot),
+      name: 'vite-server',
+      command: 'npm run dev',
+      port: 'auto',
+    })).rejects.toMatchObject({
+      code: 'auto_process_port_requires_placeholder',
+      executionStarted: false,
+    });
+    await expect(manager.listSessionProcesses('session_process')).resolves.toEqual([]);
   });
 
   it('reports an exit-before-ready even when the command exits with code zero', async () => {
@@ -82,7 +104,7 @@ describe('ManagedProcessManager', () => {
     await expect(manager.startProcess({
       context: toolContext(sandboxRoot),
       name: 'not-a-server',
-      command: `node -e "console.log('Something is already running on a different port')"`,
+      command: `node -e "console.log('No server was started for allocated port {PORT}')"`,
       port: 'auto',
       startupTimeoutMs: 5_000,
     })).rejects.toMatchObject({ code: 'process_exited_before_ready' });
@@ -103,7 +125,7 @@ describe('ManagedProcessManager', () => {
     const started = await firstManager.startProcess({
       context: toolContext(sandboxRoot),
       name: 'surviving-server',
-      command: `node -e "require('http').createServer((q,r)=>r.end('adopted')).listen(Number(process.env.PORT),'127.0.0.1')"`,
+      command: `node -e "require('http').createServer((q,r)=>r.end('adopted')).listen(Number('{PORT}'),'{HOST}')"`,
       port: 'auto',
       startupTimeoutMs: 10_000,
     });

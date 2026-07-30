@@ -129,6 +129,20 @@ export class ManagedProcessManager {
     const rawCommand = input.command.trim();
     if (!name) throw new TypeError('Managed process name is required.');
     if (!rawCommand) throw new TypeError('Managed process command is required.');
+    if (
+      (input.port === undefined || input.port === 'auto')
+      && !declaresAutomaticPortBinding(rawCommand, input.env)
+    ) {
+      throw new RuntimeToolExecutionError(
+        'auto_process_port_requires_placeholder',
+        [
+          'port="auto" requires the command or an explicit env value to contain {PORT}.',
+          'For Vite, use: npm run dev -- --host {HOST} --port {PORT}',
+        ].join(' '),
+        { command: rawCommand },
+        { executionStarted: false }
+      );
+    }
     const host = input.host?.trim() || this.#processConfig.defaultHost;
     if (!this.#processConfig.allowedHosts.includes(host)) {
       throw new RuntimeToolExecutionError(
@@ -598,6 +612,14 @@ export class ManagedProcessManager {
 
 function processIdForToolCall(toolCallId: string): string {
   return `process_${createHash('sha256').update(toolCallId).digest('hex').slice(0, 32)}`;
+}
+
+function declaresAutomaticPortBinding(
+  command: string,
+  environment: Record<string, string> | undefined
+): boolean {
+  return command.includes('{PORT}')
+    || Object.values(environment ?? {}).some(value => value.includes('{PORT}'));
 }
 
 function processSpecPath(sandboxRoot: string, sessionId: string, processId: string): string {

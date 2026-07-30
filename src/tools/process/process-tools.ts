@@ -28,7 +28,8 @@ export function createManagedProcessTools(
       'Start and supervise a persistent local development server in the Session workspace.',
       'Use this instead of run_shell for npm start, npm run dev, vite, next dev, and other commands that keep running.',
       'The Runtime allocates a free port when port is auto, waits until the TCP port is reachable, captures logs, and returns a stable processId and URL.',
-      'Use {PORT} and {HOST} placeholders in the command or env values when the framework needs command-line arguments.',
+      'When port is auto, the command or an explicit env value must contain {PORT}; the Runtime rejects ambiguous commands before starting them.',
+      'For Vite, use: npm run dev -- --host {HOST} --port {PORT}. For an env-driven server, use: PORT={PORT} HOST={HOST} npm start.',
       'Do not kill operating-system PIDs directly; use stop_process with the returned processId.',
     ].join(' '),
     schema: {
@@ -49,7 +50,7 @@ export function createManagedProcessTools(
             { type: 'integer', minimum: 1, maximum: 65535 },
           ],
           default: 'auto',
-          description: 'Use auto unless the user explicitly requires a port.',
+          description: 'Use auto unless the user explicitly requires a port. Auto requires {PORT} in command or an explicit env value.',
         },
         startupTimeoutMs: {
           type: 'integer',
