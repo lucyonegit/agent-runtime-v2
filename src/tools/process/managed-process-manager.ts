@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { chmod, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { createConnection, createServer } from 'node:net';
@@ -875,10 +876,19 @@ function normalizeStartupTimeout(
 }
 
 function logicalPath(root: string, path: string): string {
-  const relation = relative(root, path);
+  const canonicalRoot = canonicalPath(root);
+  const relation = relative(canonicalRoot, path);
   return relation === '..' || relation.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
     ? path
     : relation || '.';
+}
+
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 function substitute(value: string, variables: Record<string, string>): string {

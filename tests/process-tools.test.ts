@@ -7,7 +7,11 @@ import {
   DEFAULT_TOOLS_CONFIG,
   type ToolsConfig,
 } from '../src/config/runtime-config.js';
-import type { RuntimeToolContext } from '../src/runtime/execution/tool-executor.js';
+import type {
+  RuntimeTool,
+  RuntimeToolContext,
+} from '../src/runtime/execution/tool-executor.js';
+import { createRuntimeTools } from '../src/tools/index.js';
 import { ManagedProcessManager } from '../src/tools/process/managed-process-manager.js';
 import { createManagedProcessTools } from '../src/tools/process/process-tools.js';
 
@@ -107,6 +111,75 @@ describe('managed process tool contract', () => {
     expect(readLogs).not.toHaveBeenCalled();
   });
 
+  it('keeps two projects in one Session independently writable and runnable', async () => {
+    const sandboxRoot = await temporarySandbox();
+    const config = testToolsConfig();
+    const manager = trackedManager(new ManagedProcessManager(
+      undefined,
+      undefined,
+      sandboxRoot,
+      config
+    ));
+    await manager.start();
+    const tools = createRuntimeTools({ managedProcessManager: manager, config });
+
+    await invoke(tools, 'write_file', {
+      path: 'code/alpha-app/server.mjs',
+      content: serverSource('alpha'),
+    }, toolContext(sandboxRoot, 'tool_call_write_alpha'));
+    await invoke(tools, 'write_file', {
+      path: 'code/beta-app/server.mjs',
+      content: serverSource('beta'),
+    }, toolContext(sandboxRoot, 'tool_call_write_beta'));
+
+    const alpha = await invoke(tools, 'start_process', {
+      name: 'alpha-app-dev-server',
+      cwd: 'code/alpha-app',
+      command: 'node server.mjs --host {HOST} --port {PORT}',
+      port: 'auto',
+    }, toolContext(sandboxRoot, 'tool_call_start_alpha')) as {
+      id: string;
+      cwd: string;
+      port: number;
+      status: string;
+      url: string;
+    };
+    const beta = await invoke(tools, 'start_process', {
+      name: 'beta-app-dev-server',
+      cwd: 'code/beta-app',
+      command: 'node server.mjs --host {HOST} --port {PORT}',
+      port: 'auto',
+    }, toolContext(sandboxRoot, 'tool_call_start_beta')) as typeof alpha;
+
+    expect(alpha).toMatchObject({ cwd: 'code/alpha-app', status: 'running' });
+    expect(beta).toMatchObject({ cwd: 'code/beta-app', status: 'running' });
+    expect(alpha.id).not.toBe(beta.id);
+    expect(alpha.port).not.toBe(beta.port);
+    await expect(fetch(alpha.url).then(response => response.text())).resolves.toBe('alpha');
+    await expect(fetch(beta.url).then(response => response.text())).resolves.toBe('beta');
+
+    await expect(invoke(tools, 'stop_process', {
+      processId: alpha.id,
+    }, toolContext(sandboxRoot, 'tool_call_stop_alpha'))).resolves.toMatchObject({
+      id: alpha.id,
+      status: 'stopped',
+    });
+    await expect(invoke(tools, 'get_process', {
+      processId: beta.id,
+    }, toolContext(sandboxRoot, 'tool_call_get_beta'))).resolves.toMatchObject({
+      id: beta.id,
+      cwd: 'code/beta-app',
+      status: 'running',
+    });
+    await expect(fetch(beta.url).then(response => response.text())).resolves.toBe('beta');
+    await expect(invoke(tools, 'stop_process', {
+      processId: beta.id,
+    }, toolContext(sandboxRoot, 'tool_call_stop_beta'))).resolves.toMatchObject({
+      id: beta.id,
+      status: 'stopped',
+    });
+  });
+
   async function temporarySandbox(): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'agent-process-tools-'));
     roots.push(root);
@@ -140,13 +213,13 @@ function toolContext(sandboxRoot: string, toolCallId: string): RuntimeToolContex
 }
 
 async function invoke(
-  tools: ReturnType<typeof createManagedProcessTools>,
+  tools: RuntimeTool[],
   name: string,
   args: Record<string, unknown>,
   context: RuntimeToolContext
 ): Promise<unknown> {
   const runtimeTool = tools.find(item => item.tool.name === name);
-  if (!runtimeTool) throw new Error(`Missing managed process tool: ${name}`);
+  if (!runtimeTool) throw new Error(`Missing runtime tool: ${name}`);
   const output = await runtimeTool.tool.invoke({
     type: 'tool_call',
     id: context.modelToolCallId,
@@ -157,4 +230,15 @@ async function invoke(
   });
   if (!isToolMessage(output)) throw new Error(`${name} did not return a ToolMessage.`);
   return output.artifact;
+}
+
+function serverSource(responseText: string): string {
+  return [
+    "import { createServer } from 'node:http';",
+    "const value = name => process.argv[process.argv.indexOf(name) + 1];",
+    "const host = value('--host');",
+    "const port = Number(value('--port'));",
+    `createServer((_request, response) => response.end(${JSON.stringify(responseText)}))`,
+    '  .listen(port, host);',
+  ].join('\n');
 }
