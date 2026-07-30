@@ -210,6 +210,76 @@ describe('ModelInputBuilder', () => {
     expect(input.includedMessageIds).toEqual(['goal']);
   });
 
+  it('projects structured failure details into model ToolMessages without mutating durable content', async () => {
+    const durableMessages: AgentMessage[] = [
+      message({
+        rowId: 1,
+        id: 'goal',
+        role: 'user',
+        messageType: 'user_message',
+        content: 'Start the project',
+      }),
+      message({
+        rowId: 2,
+        id: 'start_call',
+        messageType: 'tool_call',
+        toolCalls: [{
+          id: 'model_start_call',
+          name: 'start_process',
+          args: { command: 'npm run dev' },
+          type: 'tool_call',
+        }],
+      }),
+      message({
+        rowId: 3,
+        id: 'start_result',
+        role: 'tool',
+        messageType: 'tool_result',
+        modelToolCallId: 'model_start_call',
+        toolName: 'start_process',
+        content: 'Process did not listen on the allocated port.',
+        toolResult: {
+          status: 'failed',
+          code: 'process_start_timeout',
+          error: 'Process did not listen on the allocated port.',
+          details: {
+            process: { id: 'process_exact_id', port: 4100 },
+            logs: 'Vite listening on http://localhost:5173/',
+          },
+          durationMs: 60_000,
+        },
+      }),
+    ];
+    const builder = new ModelInputBuilder({
+      store: {
+        context: { loadInputSnapshot: vi.fn(async () => ({ messages: durableMessages })) },
+      } as unknown as AgentStore,
+      systemPrompt: 'system policy',
+      systemPromptVersion: 'task-agent-v1',
+      promptId: 'task-agent',
+      promptVersion: 1,
+      inputTokenLimit: 100_000,
+      reservedOutputTokens: 4_096,
+      contextConfig: {
+        keepRecentInputTokens: 8_000,
+        maxToolResultTokens: 1_000,
+        summaryMaxTokens: 1_000,
+      },
+      toolSchemas: [],
+      getStableContext: async () => 'stable environment',
+    });
+
+    const input = await builder.buildForTask(task(), taskRun());
+    const toolMessage = input.messages.find(item => item.getType() === 'tool');
+
+    expect(toolMessage?.text).toContain('process_start_timeout');
+    expect(toolMessage?.text).toContain('process_exact_id');
+    expect(toolMessage?.text).toContain('localhost:5173');
+    expect(toolMessage?.text).toContain('60000');
+    expect(durableMessages[2]?.content).toBe('Process did not listen on the allocated port.');
+    expect(input.inputManifest.contextRulesVersion).toBe('model-input-v4');
+  });
+
   it('counts assistant tool-call arguments in the model input budget', async () => {
     const messages: AgentMessage[] = [
       message({

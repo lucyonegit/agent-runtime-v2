@@ -22,6 +22,7 @@ import { stableStringify } from '../helpers/stable-json.helper.js';
 import { createTaskPromptManifest } from '../prompting/task-agent-prompt.js';
 import { estimateTextTokens } from './helpers/token-budget.helper.js';
 import { projectMessageGroups } from './helpers/message-group.helper.js';
+import { projectToolResultMessageForModel } from './helpers/tool-result-context.helper.js';
 import { MessageCompactor } from './message-compactor.js';
 import {
   MODEL_INPUT_CONTEXT_RULES_VERSION,
@@ -328,9 +329,12 @@ function projectToolResults(
   maxTokens: number,
   projectedIds: string[]
 ): ModelMessageGroup {
-  const messages = group.messages.map(message => {
-    if (message.role !== 'tool' || estimateTextTokens(message.content) <= maxTokens) return message;
-    projectedIds.push(message.id);
+  const messages = group.messages.map(durableMessage => {
+    const message = projectToolResultMessageForModel(durableMessage);
+    if (message.role !== 'tool' || estimateTextTokens(message.content) <= maxTokens) {
+      return message;
+    }
+    projectedIds.push(durableMessage.id);
     const maxCharacters = Math.max(256, maxTokens * 3);
     const headLength = Math.floor(maxCharacters * 0.7);
     const tailLength = maxCharacters - headLength;

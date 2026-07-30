@@ -2,7 +2,6 @@ import {
   AIMessage,
   AIMessageChunk,
   SystemMessage,
-  ToolMessage,
   type BaseMessage,
   type UsageMetadata,
 } from '@langchain/core/messages';
@@ -130,7 +129,6 @@ type ToolOutcome =
           | typeof LOOP_EVENT_TYPES.ToolResultCompleted
           | typeof LOOP_EVENT_TYPES.ToolResultFailed;
       }>;
-      toolMessageContent: string;
     }
   | {
       type: 'input';
@@ -301,7 +299,6 @@ export class AgentLoop {
       const conflictingChunk = turn.assemblyErrors.find(error => error.code === 'model_error');
       if (conflictingChunk) {
         yield assemblyFailureEvent(conflictingChunk);
-        appendToolMessage(messages, conflictingChunk.call.id, conflictingChunk.message);
         return {
           type: 'failed',
           code: 'model_error',
@@ -318,7 +315,6 @@ export class AgentLoop {
         const assemblyError = assemblyErrorsByCall.get(call.id);
         if (assemblyError) {
           yield assemblyFailureEvent(assemblyError);
-          appendToolMessage(messages, call.id, assemblyError.message);
           continue;
         }
 
@@ -344,7 +340,6 @@ export class AgentLoop {
         // Each stable tool result is durably recorded by the consumer before
         // the loop is resumed to execute the next sibling tool call.
         yield outcome.event;
-        appendToolMessage(messages, outcome.call.id, outcome.toolMessageContent);
       }
       for (const outcome of inputRequests) yield outcome.event;
       if (inputRequests.length > 0) {
@@ -496,7 +491,6 @@ export class AgentLoop {
           details: result.details,
           durationMs,
         },
-        toolMessageContent: result.message,
       };
     }
     return {
@@ -511,7 +505,6 @@ export class AgentLoop {
         artifacts: result.artifacts,
         durationMs,
       },
-      toolMessageContent: result.content,
     };
   }
 
@@ -607,10 +600,6 @@ function appendAssistantToolCalls(
     content,
     tool_calls: toolCalls.map(call => ({ ...call, type: 'tool_call' })),
   }));
-}
-
-function appendToolMessage(messages: BaseMessage[], modelToolCallId: string, content: string): void {
-  messages.push(new ToolMessage({ tool_call_id: modelToolCallId, content }));
 }
 
 function assertLimits(limits: AgentLoopLimits): void {
