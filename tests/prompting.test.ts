@@ -27,6 +27,7 @@ describe('Task ReAct prompt', () => {
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('do not ask the same question again');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('not a recovered ToolResult');
     expect(TASK_AGENT_SYSTEM_PROMPT).toContain('code/<project>/');
+    expect(TASK_AGENT_SYSTEM_PROMPT).toContain('cwd set to that exact code/<project> root');
   });
 
   it('keeps the cacheable environment prefix stable and versioned', () => {
@@ -37,6 +38,7 @@ describe('Task ReAct prompt', () => {
     });
     expect(stable).toContain('/tmp/runtime/sessions/session_1/workspace');
     expect(stable).toContain('code/ is the project collection root');
+    expect(stable).toContain('run_shell and start_process require cwd');
     expect(stable).not.toContain(new Date().toISOString());
     const manifest = createTaskPromptManifest({
       systemPrompt: TASK_AGENT_SYSTEM_PROMPT,
@@ -44,7 +46,7 @@ describe('Task ReAct prompt', () => {
       promptVersion: TASK_AGENT_PROMPT_VERSION,
       stableContext: stable,
     });
-    expect(TASK_AGENT_PROMPT_VERSION).toBe(13);
+    expect(TASK_AGENT_PROMPT_VERSION).toBe(14);
     expect(manifest.components.map(component => component.cacheScope)).toEqual(['stable', 'stable']);
   });
 });

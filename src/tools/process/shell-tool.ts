@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { lstat, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { lstat, mkdir } from 'node:fs/promises';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import {
   DEFAULT_TOOLS_CONFIG,
@@ -11,7 +10,12 @@ import {
   type RuntimeTool,
   type RuntimeToolContext,
 } from '../../runtime/execution/tool-executor.js';
-import { workspaceRoot } from '../helpers/workspace-path.helper.js';
+import {
+  CODE_PROJECT_ROOT_EXAMPLE,
+  CODE_PROJECT_ROOT_PATTERN,
+  requireCodeProjectRootPath,
+} from '../helpers/code-project-path.helper.js';
+import { resolveWorkspacePath } from '../helpers/workspace-path.helper.js';
 import {
   jsonToolOutput,
   numberArgument,
@@ -55,7 +59,7 @@ export function createShellTools(
       'Run a finite, non-interactive command with the same host permissions, network access, and filesystem access as the Runtime process.',
       'Use it for dependency installation, project scaffolding, builds, tests, scripts, and host filesystem operations.',
       'Do not use it for persistent servers such as npm start, npm run dev, vite, or next dev; use start_process instead.',
-      'Relative cwd values start from the current Session workspace; absolute paths and parent-directory paths are allowed.',
+      `cwd is required and must be the exact project root ${CODE_PROJECT_ROOT_PATTERN}, for example ${CODE_PROJECT_ROOT_EXAMPLE}. The directory is created when it does not exist.`,
       'Runtime-only HOST, PORT, database, and model-provider variables are removed; pass child variables explicitly with env.',
       'Commands are subject to the requested timeout, output limits, and Task cancellation.',
       'Never print or return secrets from the inherited environment.',
@@ -71,8 +75,8 @@ export function createShellTools(
         },
         cwd: {
           type: 'string',
-          default: '.',
-          description: 'Existing directory in which to run the command. Relative paths start at the Session workspace; absolute paths are allowed.',
+          pattern: '^code/[A-Za-z0-9][A-Za-z0-9._-]*$',
+          description: `Exact project root relative to the Session workspace, for example ${CODE_PROJECT_ROOT_EXAMPLE}.`,
         },
         timeoutMs: {
           type: 'integer',
@@ -87,7 +91,7 @@ export function createShellTools(
           description: 'Environment variables explicitly supplied to the command.',
         },
       },
-      required: ['command'],
+      required: ['command', 'cwd'],
       additionalProperties: false,
     } as const,
     responseFormat: 'content_and_artifact',
@@ -96,7 +100,7 @@ export function createShellTools(
       const command = stringArgument(args, 'command');
       if (!command.trim()) throw new Error('Shell command is required.');
       assertFiniteShellCommand(command);
-      const cwd = stringArgument(args, 'cwd', '.').trim() || '.';
+      const cwd = stringArgument(args, 'cwd');
       const timeoutMs = normalizeTimeout(
         numberArgument(args, 'timeoutMs', shell.defaultTimeoutMs),
         shell
@@ -126,23 +130,22 @@ export function createShellTools(
 export async function executeHostShell(input: {
   context: RuntimeToolContext;
   command: string;
-  cwd?: string;
+  cwd: string;
   timeoutMs?: number;
   env?: Record<string, string>;
   toolsConfig?: ToolsConfig;
 }): Promise<ShellExecutionResult> {
   const toolsConfig = input.toolsConfig ?? DEFAULT_TOOLS_CONFIG;
   const shell = resolveShellToolConfig(toolsConfig.shell);
-  const root = await realpath(await workspaceRoot(input.context));
-  const cwdInput = input.cwd?.trim() || '.';
-  const cwd = await realpath(isAbsolute(cwdInput) ? cwdInput : resolve(root, cwdInput));
+  const cwdInput = input.cwd.trim();
+  const project = requireCodeProjectRootPath(cwdInput);
+  const logicalCwd = `code/${project}`;
+  const unresolvedCwd = await resolveWorkspacePath(input.context, logicalCwd);
+  await mkdir(unresolvedCwd, { recursive: true });
+  const cwd = await resolveWorkspacePath(input.context, logicalCwd, { mustExist: true });
   if (!(await lstat(cwd)).isDirectory()) {
     throw new Error(`Shell cwd is not a directory: ${cwdInput}`);
   }
-  const relativeCwd = relative(root, cwd);
-  const logicalCwd = relativeCwd === '..' || relativeCwd.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
-    ? cwd
-    : relativeCwd || '.';
   const timeoutMs = normalizeTimeout(input.timeoutMs ?? shell.defaultTimeoutMs, shell);
   const startedAt = Date.now();
   const child = spawn(shell.executable, [

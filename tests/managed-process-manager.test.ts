@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -33,14 +33,16 @@ describe('ManagedProcessManager', () => {
     ));
     await manager.start();
     const context = toolContext(sandboxRoot);
+    const command = [
+      `node -e "const http=require('http');`,
+      `console.log('runtime-port='+(process.env.AGENT_SERVER_PORT||'hidden'));`,
+      `http.createServer((q,r)=>r.end('ready')).listen(Number('{PORT}'),'{HOST}')"`,
+    ].join(' ');
     const started = await manager.startProcess({
       context,
-      name: 'test-server',
-      command: [
-        `node -e "const http=require('http');`,
-        `console.log('runtime-port='+(process.env.AGENT_SERVER_PORT||'hidden'));`,
-        `http.createServer((q,r)=>r.end('ready')).listen(Number('{PORT}'),'{HOST}')"`,
-      ].join(' '),
+      name: 'test-app-server',
+      command,
+      cwd: 'code/test-app',
       port: 'auto',
       startupTimeoutMs: 10_000,
     });
@@ -51,14 +53,31 @@ describe('ManagedProcessManager', () => {
     await expect(manager.listSessionProcesses(context.sessionId)).resolves.toEqual([
       expect.objectContaining({ id: started.id, status: 'running' }),
     ]);
+    await rm(join(
+      sandboxRoot,
+      'sessions',
+      'session_process',
+      'workspace',
+      'code',
+      'test-app'
+    ), { recursive: true, force: true });
+    await expect(manager.startProcess({
+      context,
+      name: 'test-app-server',
+      command,
+      cwd: 'code/test-app',
+      port: 'auto',
+      startupTimeoutMs: 10_000,
+    })).resolves.toMatchObject({ id: started.id, status: 'running' });
     await expect(manager.startProcess({
       context: {
         ...context,
         toolCallId: 'tool_call_process_2',
         modelToolCallId: 'model_call_process_2',
       },
-      name: 'test-server',
+      name: 'test-app-server',
       command: `node -e "require('http').createServer((q,r)=>r.end('ready')).listen(Number('{PORT}'),'{HOST}')"`,
+      cwd: 'code/test-app',
       port: 'auto',
     })).rejects.toMatchObject({ code: 'managed_process_conflict' });
 
@@ -81,11 +100,56 @@ describe('ManagedProcessManager', () => {
 
     await expect(manager.startProcess({
       context: toolContext(sandboxRoot),
-      name: 'vite-server',
+      name: 'test-app-vite-server',
       command: 'npm run dev',
+      cwd: 'code/test-app',
       port: 'auto',
     })).rejects.toMatchObject({
       code: 'auto_process_port_requires_placeholder',
+      executionStarted: false,
+    });
+    await expect(manager.listSessionProcesses('session_process')).resolves.toEqual([]);
+  });
+
+  it('requires an existing project root and a project-prefixed process name', async () => {
+    const sandboxRoot = await temporarySandbox();
+    const manager = trackedManager(new ManagedProcessManager(
+      undefined,
+      undefined,
+      sandboxRoot,
+      testToolsConfig()
+    ));
+    await manager.start();
+    const command = `node -e "require('http').createServer((q,r)=>r.end('ready')).listen(Number('{PORT}'),'{HOST}')"`;
+
+    await expect(manager.startProcess({
+      context: toolContext(sandboxRoot),
+      name: 'test-app-server',
+      command,
+      cwd: 'code',
+      port: 'auto',
+    })).rejects.toMatchObject({
+      code: 'code_project_cwd_required',
+      executionStarted: false,
+    });
+    await expect(manager.startProcess({
+      context: toolContext(sandboxRoot),
+      name: 'dev-server',
+      command,
+      cwd: 'code/test-app',
+      port: 'auto',
+    })).rejects.toMatchObject({
+      code: 'managed_process_name_project_prefix_required',
+      executionStarted: false,
+    });
+    await expect(manager.startProcess({
+      context: toolContext(sandboxRoot),
+      name: 'missing-app-server',
+      command,
+      cwd: 'code/missing-app',
+      port: 'auto',
+    })).rejects.toMatchObject({
+      code: 'code_project_cwd_unavailable',
       executionStarted: false,
     });
     await expect(manager.listSessionProcesses('session_process')).resolves.toEqual([]);
@@ -103,8 +167,9 @@ describe('ManagedProcessManager', () => {
 
     await expect(manager.startProcess({
       context: toolContext(sandboxRoot),
-      name: 'not-a-server',
+      name: 'test-app-not-a-server',
       command: `node -e "console.log('No server was started for allocated port {PORT}')"`,
+      cwd: 'code/test-app',
       port: 'auto',
       startupTimeoutMs: 5_000,
     })).rejects.toMatchObject({ code: 'process_exited_before_ready' });
@@ -124,8 +189,9 @@ describe('ManagedProcessManager', () => {
     await firstManager.start();
     const started = await firstManager.startProcess({
       context: toolContext(sandboxRoot),
-      name: 'surviving-server',
+      name: 'test-app-surviving-server',
       command: `node -e "require('http').createServer((q,r)=>r.end('adopted')).listen(Number('{PORT}'),'{HOST}')"`,
+      cwd: 'code/test-app',
       port: 'auto',
       startupTimeoutMs: 10_000,
     });
@@ -150,6 +216,14 @@ describe('ManagedProcessManager', () => {
 
   async function temporarySandbox(): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'agent-managed-process-'));
+    await mkdir(join(
+      root,
+      'sessions',
+      'session_process',
+      'workspace',
+      'code',
+      'test-app'
+    ), { recursive: true });
     roots.push(root);
     return root;
   }

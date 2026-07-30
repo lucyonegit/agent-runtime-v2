@@ -459,8 +459,11 @@ describe('LangChain runtime tools', () => {
   });
 
   it('runs shell commands in the workspace with structured output', async () => {
+    const runShell = tools.find(item => item.tool.name === 'run_shell')!.tool;
+    expect(runShell.description).toContain('exact project root code/<project>');
     const result = await invoke('run_shell', {
-      command: "mkdir -p code/runtime-app; printf 'hello' > code/runtime-app/shell.txt; printf 'stdout'; printf 'stderr' >&2",
+      command: "printf 'hello' > shell.txt; printf 'stdout'; printf 'stderr' >&2",
+      cwd: 'code/runtime-app',
     }) as {
       cwd: string;
       exitCode: number | null;
@@ -469,7 +472,7 @@ describe('LangChain runtime tools', () => {
       stderr: string;
     };
     expect(result).toMatchObject({
-      cwd: '.',
+      cwd: 'code/runtime-app',
       exitCode: 0,
       timedOut: false,
       stdout: 'stdout',
@@ -481,15 +484,32 @@ describe('LangChain runtime tools', () => {
     )).resolves.toBe('hello');
   });
 
+  it('requires shell commands to declare one exact project root', async () => {
+    const runShell = tools.find(item => item.tool.name === 'run_shell')!.tool;
+    expect(JSON.stringify(runShell.schema)).toContain('^code/[A-Za-z0-9]');
+    expect(JSON.stringify(runShell.schema)).toContain('"required":["command","cwd"]');
+
+    await expect(invoke('run_shell', {
+      command: "printf 'not-run'",
+      cwd: 'code',
+    })).rejects.toThrow();
+    await expect(invoke('run_shell', {
+      command: "printf 'not-run'",
+      cwd: 'code/runtime-app/src',
+    })).rejects.toThrow();
+  });
+
   it('turns non-zero shell exits and timeouts into stable tool failures', async () => {
     await expect(invoke('run_shell', {
       command: "printf 'bad command' >&2; exit 7",
+      cwd: 'code/runtime-app',
     })).rejects.toMatchObject({
       code: 'shell_command_failed',
       details: expect.objectContaining({ exitCode: 7, stderr: 'bad command', timedOut: false }),
     });
     await expect(invoke('run_shell', {
       command: 'sleep 5',
+      cwd: 'code/runtime-app',
       timeoutMs: 100,
     })).rejects.toMatchObject({
       code: 'shell_timeout',
@@ -499,15 +519,17 @@ describe('LangChain runtime tools', () => {
 
   it('rejects persistent development servers before run_shell starts them', async () => {
     await expect(invoke('run_shell', {
-      command: 'cd code && npm run dev',
+      command: 'npm run dev',
+      cwd: 'code/runtime-app',
       timeoutMs: 30_000,
     })).rejects.toMatchObject({
       code: 'persistent_process_requires_start_process',
       executionStarted: false,
-      details: { command: 'cd code && npm run dev' },
+      details: { command: 'npm run dev' },
     });
     await expect(invoke('run_shell', {
       command: "printf 'npm run dev'",
+      cwd: 'code/runtime-app',
     })).resolves.toMatchObject({
       exitCode: 0,
       stdout: 'npm run dev',
@@ -517,7 +539,11 @@ describe('LangChain runtime tools', () => {
   it('terminates an in-flight shell process when the Task is cancelled', async () => {
     const controller = new AbortController();
     context = { ...context, signal: controller.signal };
-    const running = invoke('run_shell', { command: 'sleep 20', timeoutMs: 120_000 });
+    const running = invoke('run_shell', {
+      command: 'sleep 20',
+      cwd: 'code/runtime-app',
+      timeoutMs: 120_000,
+    });
     setTimeout(() => controller.abort(), 100).unref();
 
     await expect(running).rejects.toMatchObject({ name: 'AbortError' });
@@ -555,6 +581,7 @@ describe('LangChain runtime tools', () => {
           `/usr/bin/curl --fail --silent 'http://127.0.0.1:${address.port}/'`,
           `printf '|%s' "$WORKSPACE_EXPLICIT_VALUE"`,
         ].join('; '),
+        cwd: 'code/runtime-app',
         env: { WORKSPACE_EXPLICIT_VALUE: 'explicit-value' },
       })).resolves.toMatchObject({
         exitCode: 0,

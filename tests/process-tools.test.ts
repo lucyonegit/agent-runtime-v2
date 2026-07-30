@@ -30,7 +30,8 @@ describe('managed process tool contract', () => {
       'sessions',
       'session_process',
       'workspace',
-      'app'
+      'code',
+      'test-app'
     );
     await mkdir(workspace, { recursive: true });
     await writeFile(join(workspace, 'server.mjs'), [
@@ -50,10 +51,14 @@ describe('managed process tool contract', () => {
     ));
     await manager.start();
     const tools = createManagedProcessTools(manager, testToolsConfig().managedProcesses);
+    const startProcess = tools.find(item => item.tool.name === 'start_process')!.tool;
+    expect(startProcess.description).toContain('exact existing project root code/<project>');
+    expect(startProcess.description).toContain('todo-app-dev-server');
+    expect(JSON.stringify(startProcess.schema)).toContain('"required":["name","command","cwd"]');
 
     const started = await invoke(tools, 'start_process', {
-      name: 'test-server',
-      cwd: 'app',
+      name: 'test-app-server',
+      cwd: 'code/test-app',
       command: 'node server.mjs --host {HOST} --port {PORT}',
       port: 'auto',
     }, toolContext(sandboxRoot, 'tool_call_start')) as {

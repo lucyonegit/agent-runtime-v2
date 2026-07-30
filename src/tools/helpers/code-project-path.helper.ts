@@ -5,15 +5,15 @@ const CODE_PROJECT_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export const CODE_PROJECT_FILE_PATTERN = 'code/<project>/<file>';
 export const CODE_PROJECT_FILE_EXAMPLE = 'code/todo-app/src/index.ts';
+export const CODE_PROJECT_ROOT_PATTERN = 'code/<project>';
+export const CODE_PROJECT_ROOT_EXAMPLE = 'code/todo-app';
 
 /**
  * code/ is a collection of projects, never a project itself. Reads remain
  * backward-compatible, while every new code write must name its project.
  */
 export function assertCodeProjectFilePath(path: string): void {
-  const slashPath = path.replaceAll('\\', '/');
-  const canonicalInput = slashPath.replace(/^(?:\.\/)+/u, '');
-  const normalized = posix.normalize(slashPath);
+  const { canonicalInput, normalized } = normalizeCodePath(path);
   const usesCodeArea = canonicalInput === 'code'
     || canonicalInput.startsWith('code/')
     || normalized === 'code'
@@ -38,4 +38,37 @@ export function assertCodeProjectFilePath(path: string): void {
     { path, expectedPattern: CODE_PROJECT_FILE_PATTERN },
     { executionStarted: false }
   );
+}
+
+/** Returns the stable project key when cwd is exactly code/<project>. */
+export function requireCodeProjectRootPath(path: string): string {
+  const { canonicalInput, normalized } = normalizeCodePath(path);
+  const segments = normalized.split('/');
+  const project = segments[1];
+  if (
+    !path.includes('\\')
+    && normalized === canonicalInput
+    && segments.length === 2
+    && segments[0] === 'code'
+    && project !== undefined
+    && CODE_PROJECT_KEY_PATTERN.test(project)
+  ) return project;
+
+  throw new RuntimeToolExecutionError(
+    'code_project_cwd_required',
+    `Project commands must use cwd=${CODE_PROJECT_ROOT_PATTERN}, for example ${CODE_PROJECT_ROOT_EXAMPLE}.`,
+    { cwd: path, expectedPattern: CODE_PROJECT_ROOT_PATTERN },
+    { executionStarted: false }
+  );
+}
+
+function normalizeCodePath(path: string): {
+  canonicalInput: string;
+  normalized: string;
+} {
+  const slashPath = path.replaceAll('\\', '/');
+  return {
+    canonicalInput: slashPath.replace(/^(?:\.\/)+/u, ''),
+    normalized: posix.normalize(slashPath),
+  };
 }

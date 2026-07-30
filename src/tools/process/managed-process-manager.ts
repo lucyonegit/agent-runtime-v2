@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { chmod, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { createConnection, createServer } from 'node:net';
 import {
   DEFAULT_TOOLS_CONFIG,
@@ -15,7 +15,8 @@ import {
 } from '../../runtime/execution/tool-executor.js';
 import { buildWorkspaceProcessEnv } from './helpers/process-environment.helper.js';
 import { WORKSPACE_PROCESS_SUPERVISOR_SOURCE } from './helpers/process-supervisor-script.helper.js';
-import { workspaceRoot } from '../helpers/workspace-path.helper.js';
+import { requireCodeProjectRootPath } from '../helpers/code-project-path.helper.js';
+import { resolveWorkspacePath, workspaceRoot } from '../helpers/workspace-path.helper.js';
 
 const PROCESS_SPEC_VERSION = 1;
 const MANAGED_PROCESS_LIMITS = {
@@ -45,7 +46,7 @@ interface StartManagedProcessInput {
   context: RuntimeToolContext;
   name: string;
   command: string;
-  cwd?: string;
+  cwd: string;
   env?: Record<string, string>;
   host?: string;
   port?: number | 'auto';
@@ -129,6 +130,16 @@ export class ManagedProcessManager {
     const rawCommand = input.command.trim();
     if (!name) throw new TypeError('Managed process name is required.');
     if (!rawCommand) throw new TypeError('Managed process command is required.');
+    const cwdInput = input.cwd.trim();
+    const project = requireCodeProjectRootPath(cwdInput);
+    if (name !== project && !name.startsWith(`${project}-`)) {
+      throw new RuntimeToolExecutionError(
+        'managed_process_name_project_prefix_required',
+        `Managed process name must be ${JSON.stringify(project)} or start with ${JSON.stringify(`${project}-`)}.`,
+        { name, project, cwd: `code/${project}` },
+        { executionStarted: false }
+      );
+    }
     if (
       (input.port === undefined || input.port === 'auto')
       && !declaresAutomaticPortBinding(rawCommand, input.env)
@@ -150,7 +161,6 @@ export class ManagedProcessManager {
         'Managed development servers must bind to 127.0.0.1 or localhost.'
       );
     }
-
     const processId = processIdForToolCall(input.context.toolCallId);
     const existingForToolCall = this.#registry.get(processId)?.record;
     if (existingForToolCall && isActive(existingForToolCall.status)) {
@@ -168,6 +178,26 @@ export class ManagedProcessManager {
         { processId: conflictingName.record.id, name }
       );
     }
+    const root = await realpath(await workspaceRoot(input.context));
+    let cwd: string;
+    try {
+      cwd = await resolveWorkspacePath(
+        input.context,
+        `code/${project}`,
+        { mustExist: true }
+      );
+      if (!(await lstat(cwd)).isDirectory()) throw new Error('Path is not a directory.');
+    } catch (error) {
+      throw new RuntimeToolExecutionError(
+        'code_project_cwd_unavailable',
+        `Managed process project directory code/${project} does not exist or is not accessible.`,
+        {
+          cwd: `code/${project}`,
+          cause: error instanceof Error ? error.message : String(error),
+        },
+        { executionStarted: false }
+      );
+    }
 
     const port = input.port === undefined || input.port === 'auto'
       ? await findAvailablePort(host, this.#processConfig)
@@ -180,12 +210,6 @@ export class ManagedProcessManager {
       );
     }
 
-    const root = await realpath(await workspaceRoot(input.context));
-    const cwdInput = input.cwd?.trim() || '.';
-    const cwd = await realpath(isAbsolute(cwdInput) ? cwdInput : resolve(root, cwdInput));
-    if (!(await lstat(cwd)).isDirectory()) {
-      throw new Error(`Process cwd is not a directory: ${cwdInput}`);
-    }
     const processDirectory = resolve(root, '.runtime', 'processes', processId);
     await mkdir(processDirectory, { recursive: true });
     const supervisorPath = resolve(processDirectory, 'workspace-process-supervisor.mjs');

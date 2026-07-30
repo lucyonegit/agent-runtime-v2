@@ -10,6 +10,10 @@ import {
   runtimeContext,
   stringArgument,
 } from '../helpers/tool-input.helper.js';
+import {
+  CODE_PROJECT_ROOT_EXAMPLE,
+  CODE_PROJECT_ROOT_PATTERN,
+} from '../helpers/code-project-path.helper.js';
 import { stringRecord } from './helpers/process-environment.helper.js';
 import {
   resolveManagedProcessToolConfig,
@@ -30,15 +34,21 @@ export function createManagedProcessTools(
       'The Runtime allocates a free port when port is auto, waits until the TCP port is reachable, captures logs, and returns a stable processId and URL.',
       'When port is auto, the command or an explicit env value must contain {PORT}; the Runtime rejects ambiguous commands before starting them.',
       'For Vite, use: npm run dev -- --host {HOST} --port {PORT}. For an env-driven server, use: PORT={PORT} HOST={HOST} npm start.',
+      `cwd is required and must be the exact existing project root ${CODE_PROJECT_ROOT_PATTERN}, for example ${CODE_PROJECT_ROOT_EXAMPLE}.`,
+      'Prefix name with the project directory name, for example todo-app-dev-server.',
       'A failed start exposes structured details with the exact process.id and captured log tail; use that evidence instead of guessing a process identifier.',
       'Do not kill operating-system PIDs directly; use stop_process with the returned processId.',
     ].join(' '),
     schema: {
       type: 'object',
       properties: {
-        name: { type: 'string', minLength: 1, maxLength: 120, description: 'Stable human-readable service name within the Session.' },
+        name: { type: 'string', minLength: 1, maxLength: 120, description: 'Stable service name prefixed by the project directory name, for example todo-app-dev-server.' },
         command: { type: 'string', minLength: 1, maxLength: 20_000, description: 'Non-interactive development-server command.' },
-        cwd: { type: 'string', default: '.', description: 'Working directory relative to the Session workspace, or an absolute directory.' },
+        cwd: {
+          type: 'string',
+          pattern: '^code/[A-Za-z0-9][A-Za-z0-9._-]*$',
+          description: `Exact existing project root relative to the Session workspace, for example ${CODE_PROJECT_ROOT_EXAMPLE}.`,
+        },
         env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Explicit child environment. {PORT} and {HOST} placeholders are supported.' },
         host: {
           type: 'string',
@@ -60,7 +70,7 @@ export function createManagedProcessTools(
           default: processConfig.defaultStartupTimeoutMs,
         },
       },
-      required: ['name', 'command'],
+      required: ['name', 'command', 'cwd'],
       additionalProperties: false,
     } as const,
     responseFormat: 'content_and_artifact',
@@ -72,7 +82,7 @@ export function createManagedProcessTools(
         context: runtimeContext(config),
         name: stringArgument(args, 'name'),
         command: stringArgument(args, 'command'),
-        cwd: stringArgument(args, 'cwd', '.'),
+        cwd: stringArgument(args, 'cwd'),
         env: stringRecord(args.env, 'env'),
         host: stringArgument(args, 'host', processConfig.defaultHost),
         port,
