@@ -79,6 +79,8 @@ export type ToolExecutionResult =
       message: string;
       details?: unknown;
       executionStarted?: boolean;
+      /** True only when the executor lost authoritative knowledge of the effect outcome. */
+      outcomeUnknown?: boolean;
     }
   | { type: 'requires_user_input'; request: ToolUserInputRequest };
 
@@ -461,6 +463,8 @@ export class AgentLoop {
         type: 'failed',
         code: 'tool_failed',
         message,
+        executionStarted: true,
+        outcomeUnknown: true,
       };
     }
     const durationMs = Math.max(0, this.#clock.nowMs() - startedAtMs);
@@ -486,6 +490,7 @@ export class AgentLoop {
           modelToolCallId: call.id,
           toolName: call.name,
           executionStarted: result.executionStarted ?? true,
+          outcomeUnknown: result.outcomeUnknown ?? false,
           code: result.code,
           message: result.message,
           details: result.details,
@@ -585,6 +590,7 @@ function assemblyFailureEvent(
     modelToolCallId: error.call.id,
     toolName: error.call.name,
     executionStarted: false,
+    outcomeUnknown: false,
     code: error.code,
     message: error.message,
     details: error.details,

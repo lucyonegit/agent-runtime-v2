@@ -256,6 +256,7 @@ export class LoopEventHandler {
         : {
             status: 'failed' as const,
             executionStarted: event.executionStarted,
+            outcomeUnknown: event.outcomeUnknown,
             code: event.code,
             message: event.message,
             details: event.details,

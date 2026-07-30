@@ -101,6 +101,7 @@ describe('LoopEventHandler', () => {
       error: { code: 'side_effect_outcome_unknown', message: 'Outcome unknown.' },
     };
     const completeToolCall = vi.fn(async () => ({
+      message: { id: 'message_result', sessionId: 'session_1' },
       toolCall,
       artifacts: [],
     }) as never);
@@ -124,8 +125,9 @@ describe('LoopEventHandler', () => {
       modelToolCallId: 'model_tool_call_1',
       toolName: 'run_shell',
       executionStarted: true,
-      code: 'shell_exit_nonzero',
-      message: 'The command failed.',
+      outcomeUnknown: true,
+      code: 'tool_transport_lost',
+      message: 'The executor connection disappeared after dispatch.',
       durationMs: 5,
     }, {
       sessionId: 'session_1', taskId: 'task_1', taskRunId: 'task_run_1',
@@ -138,6 +140,15 @@ describe('LoopEventHandler', () => {
         details: { toolCallId: 'tool_call_1' },
       },
     });
-    expect(publish.mock.calls.map(([event]) => event.type)).toEqual(['tool_call.upserted']);
+    expect(completeToolCall).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: expect.objectContaining({
+        executionStarted: true,
+        outcomeUnknown: true,
+      }),
+    }));
+    expect(publish.mock.calls.map(([event]) => event.type)).toEqual([
+      'message.upserted',
+      'tool_call.upserted',
+    ]);
   });
 });

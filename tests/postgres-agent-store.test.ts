@@ -756,8 +756,9 @@ describe('PostgresAgentStore converged model', () => {
       outcome: {
         status: 'failed' as const,
         executionStarted: true,
-        code: 'shell_exit_nonzero',
-        message: 'The command exited with status 1.',
+        outcomeUnknown: true,
+        code: 'tool_transport_lost',
+        message: 'The executor connection disappeared after dispatch.',
         durationMs: 5,
       },
       nowMs: 27,
@@ -767,14 +768,119 @@ describe('PostgresAgentStore converged model', () => {
     expect(unknown).toMatchObject({
       toolCall: {
         status: 'outcome_unknown',
+        resultMessageId: 'message_side_effect_result',
         error: { code: 'side_effect_outcome_unknown' },
       },
+      message: {
+        id: 'message_side_effect_result',
+        role: 'tool',
+        modelToolCallId: 'model_side_effect',
+        toolResult: {
+          status: 'failed',
+          code: 'side_effect_outcome_unknown',
+          durationMs: 5,
+        },
+      },
     });
-    expect(unknown.message).toBeUndefined();
     await expect(store.execution.completeToolCall(input)).resolves.toMatchObject({
-      toolCall: { status: 'outcome_unknown' },
+      toolCall: {
+        status: 'outcome_unknown',
+        resultMessageId: 'message_side_effect_result',
+      },
+      message: { id: 'message_side_effect_result' },
     });
+    const snapshot = await store.context.loadInputSnapshot({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      goalMessageId: task.goalMessageId,
+    });
+    expect(snapshot.outcomeUnknownToolCalls).toHaveLength(1);
+    expect(snapshot.messages.map(message => message.id)).toEqual(expect.arrayContaining([
+      'message_side_effect',
+      'message_side_effect_result',
+    ]));
     await expect(store.sessions.listUserInputRequests(task.sessionId)).resolves.toEqual([]);
+    await expect(store.tasks.get(task.id)).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('records a returned side-effect failure as a ToolResult instead of outcome_unknown', async () => {
+    const { task } = await createTask();
+    const started = await startRun(task.id, task.version, 'task_run_1', 'initial', 20);
+    await store.execution.saveToolCalls({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      outputId: 'output_known_failure',
+      messageId: 'message_known_failure',
+      content: '',
+      contextScope: 'task',
+      toolCalls: [{
+        id: 'tool_call_known_failure',
+        call: {
+          id: 'model_known_failure',
+          name: 'run_shell',
+          args: { command: 'npm run build' },
+          type: 'tool_call',
+        },
+        argumentsChecksum: 'known_failure_checksum',
+        sideEffectLevel: 'side_effecting',
+        idempotencyKey: 'known_failure_key',
+      }],
+      nowMs: 21,
+    });
+    await store.execution.startToolCall({
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      modelToolCallId: 'model_known_failure',
+      ownerId: 'worker_1',
+      nowMs: 22,
+    });
+
+    const failed = await store.execution.completeToolCall({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      taskRunId: started.taskRun.id,
+      ownerId: 'worker_1',
+      modelToolCallId: 'model_known_failure',
+      messageId: 'message_known_failure_result',
+      outcome: {
+        status: 'failed',
+        executionStarted: true,
+        outcomeUnknown: false,
+        code: 'shell_timeout',
+        message: 'The command timed out and was terminated.',
+        details: { timedOut: true, signal: 'SIGTERM' },
+        durationMs: 30_011,
+      },
+      nowMs: 27,
+    });
+
+    expect(failed).toMatchObject({
+      toolCall: {
+        status: 'failed',
+        resultMessageId: 'message_known_failure_result',
+        error: { code: 'shell_timeout' },
+        completedAtMs: 27,
+      },
+      message: {
+        id: 'message_known_failure_result',
+        role: 'tool',
+        modelToolCallId: 'model_known_failure',
+        toolResult: {
+          status: 'failed',
+          code: 'shell_timeout',
+          durationMs: 30_011,
+        },
+      },
+    });
+    const snapshot = await store.context.loadInputSnapshot({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      goalMessageId: task.goalMessageId,
+    });
+    expect(snapshot.outcomeUnknownToolCalls).toEqual([]);
+    expect(snapshot.messages.map(message => message.id)).toContain('message_known_failure_result');
     await expect(store.tasks.get(task.id)).resolves.toMatchObject({ status: 'running' });
   });
 

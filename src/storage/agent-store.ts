@@ -216,6 +216,8 @@ type CompletedToolOutcome =
   | {
       status: 'failed';
       executionStarted?: boolean;
+      /** Distinct from executionStarted: a returned failure normally has a known outcome. */
+      outcomeUnknown?: boolean;
       code: string;
       message: string;
       details?: unknown;

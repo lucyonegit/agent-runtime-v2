@@ -53,6 +53,7 @@ describe('executeDurableAgentLoop event boundary', () => {
       modelToolCallId: 'model_tool_call_1',
       toolName: 'run_shell',
       executionStarted: true,
+      outcomeUnknown: true,
       code: 'tool_state_unknown',
       message: 'Outcome unknown.',
       durationMs: 5,

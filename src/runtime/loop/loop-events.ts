@@ -66,6 +66,7 @@ export type LoopEvent =
       modelToolCallId: string;
       toolName: string;
       executionStarted: boolean;
+      outcomeUnknown: boolean;
       code: string;
       message: string;
       details?: unknown;

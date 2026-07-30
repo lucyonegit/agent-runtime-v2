@@ -66,18 +66,20 @@ export class RuntimeToolExecutionError extends Error {
   readonly code: string;
   readonly details?: unknown;
   readonly executionStarted: boolean;
+  readonly outcomeUnknown: boolean;
 
   constructor(
     code: string,
     message: string,
     details?: unknown,
-    options: { executionStarted?: boolean } = {}
+    options: { executionStarted?: boolean; outcomeUnknown?: boolean } = {}
   ) {
     super(message);
     this.name = 'RuntimeToolExecutionError';
     this.code = code;
     this.details = details;
     this.executionStarted = options.executionStarted ?? true;
+    this.outcomeUnknown = options.outcomeUnknown ?? false;
   }
 }
 
@@ -192,6 +194,11 @@ export class ToolExecutor implements ToolExecutorPort {
           ? false
           : error instanceof RuntimeToolExecutionError
             ? error.executionStarted
+            : true,
+        outcomeUnknown: error instanceof ToolInputParsingException
+          ? false
+          : error instanceof RuntimeToolExecutionError
+            ? error.outcomeUnknown
             : true,
         code: error instanceof ToolInputParsingException
           ? 'invalid_tool_arguments'

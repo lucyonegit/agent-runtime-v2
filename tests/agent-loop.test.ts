@@ -404,6 +404,7 @@ describe('AgentLoop with LangChain messages', () => {
       type: LOOP_EVENT_TYPES.ToolResultFailed,
       modelToolCallId: 'call_bad',
       executionStarted: false,
+      outcomeUnknown: false,
       code: 'invalid_tool_arguments',
     });
     expect(execute).not.toHaveBeenCalled();
@@ -474,6 +475,12 @@ describe('AgentLoop with LangChain messages', () => {
       LOOP_EVENT_TYPES.ToolResultFailed,
       LOOP_EVENT_TYPES.ToolResultCompleted,
     ]);
+    expect(run.events[1]).toMatchObject({
+      type: LOOP_EVENT_TYPES.ToolResultFailed,
+      executionStarted: true,
+      outcomeUnknown: true,
+      code: 'tool_failed',
+    });
     expect(run.result).toMatchObject({ type: 'completed' });
   });
 

@@ -188,7 +188,8 @@ export async function completeToolCallCommand(
     const taskRun = await selectTaskRun(client, input.taskRunId, true);
     const call = await selectToolCall(client, input.taskId, input.modelToolCallId, true);
     if (!call) throw toolCallNotFound(input.taskId, input.modelToolCallId);
-    if (['completed', 'failed'].includes(call.status) && call.result_message_id) {
+    if (['completed', 'failed', 'outcome_unknown'].includes(call.status)
+      && call.result_message_id) {
       const message = await client.query<AgentMessageRow>(
         `select * from agent_messages where id = $1`,
         [call.result_message_id]
@@ -223,6 +224,7 @@ export async function completeToolCallCommand(
     );
     const contextScope = requireRow(callMessage.rows[0], 'load tool call message').context_scope;
     const outcomeUnknown = input.outcome.status === 'failed'
+      && input.outcome.outcomeUnknown === true
       && input.outcome.executionStarted !== false
       && call.side_effect_level === 'side_effecting';
     const terminalStatus = outcomeUnknown ? 'outcome_unknown' : input.outcome.status;
@@ -262,33 +264,30 @@ export async function completeToolCallCommand(
     const content = input.outcome.status === 'completed'
       ? input.outcome.content
       : errorMessage!;
-    let messageRow: AgentMessageRow | undefined;
-    if (!outcomeUnknown) {
-      const messageResult = await client.query<AgentMessageRow>(
-        `insert into agent_messages(
-           id, session_id, task_id, task_run_id,
-           role, message_type, context_scope, visibility, channel,
-           content, model_tool_call_id, tool_name, tool_result, created_at_ms
-         ) values (
-           $1, $2, $3, $4,
-           'tool', 'tool_result', $5, 'ui', 'normal',
-           $6, $7, $8, $9, $10
-         ) returning *`,
-        [
-          input.messageId,
-          input.sessionId,
-          input.taskId,
-          input.taskRunId,
-          contextScope,
-          content,
-          input.modelToolCallId,
-          call.tool_name,
-          JSON.stringify(toolResult),
-          input.nowMs,
-        ]
-      );
-      messageRow = requireRow(messageResult.rows[0], 'save tool result message');
-    }
+    const messageResult = await client.query<AgentMessageRow>(
+      `insert into agent_messages(
+         id, session_id, task_id, task_run_id,
+         role, message_type, context_scope, visibility, channel,
+         content, model_tool_call_id, tool_name, tool_result, created_at_ms
+       ) values (
+         $1, $2, $3, $4,
+         'tool', 'tool_result', $5, 'ui', 'normal',
+         $6, $7, $8, $9, $10
+       ) returning *`,
+      [
+        input.messageId,
+        input.sessionId,
+        input.taskId,
+        input.taskRunId,
+        contextScope,
+        content,
+        input.modelToolCallId,
+        call.tool_name,
+        JSON.stringify(toolResult),
+        input.nowMs,
+      ]
+    );
+    const messageRow = requireRow(messageResult.rows[0], 'save tool result message');
     const callResult = await client.query<AgentToolCallRow>(
       `update agent_tool_calls
        set status = $2, result_message_id = $3,
@@ -303,7 +302,7 @@ export async function completeToolCallCommand(
       [
         call.id,
         terminalStatus,
-        outcomeUnknown ? null : input.messageId,
+        input.messageId,
         errorCode,
         errorMessage,
         errorDetails !== undefined
