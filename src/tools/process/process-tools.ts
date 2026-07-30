@@ -30,6 +30,7 @@ export function createManagedProcessTools(
       'The Runtime allocates a free port when port is auto, waits until the TCP port is reachable, captures logs, and returns a stable processId and URL.',
       'When port is auto, the command or an explicit env value must contain {PORT}; the Runtime rejects ambiguous commands before starting them.',
       'For Vite, use: npm run dev -- --host {HOST} --port {PORT}. For an env-driven server, use: PORT={PORT} HOST={HOST} npm start.',
+      'A failed start exposes structured details with the exact process.id and captured log tail; use that evidence instead of guessing a process identifier.',
       'Do not kill operating-system PIDs directly; use stop_process with the returned processId.',
     ].join(' '),
     schema: {
@@ -87,7 +88,7 @@ export function createManagedProcessTools(
 
   const getProcess = new DynamicStructuredTool({
     name: 'get_process',
-    description: 'Get the current live operating-system state of a process previously created by start_process.',
+    description: 'Get current state using the exact processId returned by start_process. Never pass the human-readable name or an operating-system PID.',
     schema: processIdSchema,
     responseFormat: 'content_and_artifact',
     func: async input => jsonToolOutput(await manager.getProcess(
@@ -97,11 +98,11 @@ export function createManagedProcessTools(
 
   const readProcessLogs = new DynamicStructuredTool({
     name: 'read_process_logs',
-    description: 'Read the newest captured stdout and stderr from a process created by start_process.',
+    description: 'Read captured logs using the exact processId returned in a successful or failed start_process result. Never pass the human-readable name or an operating-system PID.',
     schema: {
       type: 'object',
       properties: {
-        processId: { type: 'string', minLength: 1 },
+        processId: processIdProperty,
         maxBytes: {
           type: 'integer',
           minimum: 1_024,
@@ -130,7 +131,7 @@ export function createManagedProcessTools(
 
   const stopProcess = new DynamicStructuredTool({
     name: 'stop_process',
-    description: 'Stop a process previously created by start_process. It is safe and idempotent and never targets an arbitrary operating-system PID.',
+    description: 'Stop a process using the exact processId returned by start_process. It is safe and idempotent, and never accepts a human-readable name or arbitrary operating-system PID.',
     schema: processIdSchema,
     responseFormat: 'content_and_artifact',
     func: async input => jsonToolOutput(await manager.stopProcess(
@@ -146,9 +147,15 @@ export function createManagedProcessTools(
   ];
 }
 
+const processIdProperty = {
+  type: 'string',
+  pattern: '^process_[a-f0-9]{32}$',
+  description: 'Exact opaque processId returned by start_process, such as process_0123456789abcdef0123456789abcdef. A process name or OS PID is invalid.',
+} as const;
+
 const processIdSchema = {
   type: 'object',
-  properties: { processId: { type: 'string', minLength: 1 } },
+  properties: { processId: processIdProperty },
   required: ['processId'],
   additionalProperties: false,
 } as const;
