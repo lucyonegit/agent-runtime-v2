@@ -117,6 +117,8 @@ describe('managed process tool contract', () => {
 function testToolsConfig(): ToolsConfig {
   const config = structuredClone(DEFAULT_TOOLS_CONFIG) as ToolsConfig;
   config.hostEnvironment = { ...process.env };
+  config.managedProcesses.portRangeStart = 5_100;
+  config.managedProcesses.portRangeEnd = 5_199;
   return config;
 }
 
