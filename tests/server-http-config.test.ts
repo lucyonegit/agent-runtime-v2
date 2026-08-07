@@ -3,6 +3,8 @@ import type { ExecutionContext } from '@nestjs/common';
 import { DEFAULT_SERVER_CONFIG, loadRuntimeConfig } from '../src/config/runtime-config.js';
 import { AgentDebugController } from '../src/server/http/agent-debug.controller.js';
 import { AgentController } from '../src/server/http/agent.controller.js';
+import { AgentArtifactController } from '../src/server/http/agent-artifact.controller.js';
+import { AgentContextController } from '../src/server/http/agent-context.controller.js';
 import { AgentHttpModule } from '../src/server/http/agent-http.module.js';
 import { AgentManagedProcessController } from '../src/server/http/agent-managed-process.controller.js';
 import { restrictHttpToolCapabilities } from '../src/server/http/http-tool-capabilities.js';
@@ -40,10 +42,16 @@ describe('Agent HTTP CORS configuration', () => {
     ]);
   });
 
-  it('does not register Debug Context routes unless explicitly enabled', () => {
-    expect(httpModule(false).controllers).toEqual([AgentController]);
+  it('always registers the authenticated Session Context route', () => {
+    expect(httpModule(false).controllers).toEqual([
+      AgentController,
+      AgentArtifactController,
+      AgentContextController,
+    ]);
     expect(httpModule(true).controllers).toEqual([
       AgentController,
+      AgentArtifactController,
+      AgentContextController,
       AgentDebugController,
     ]);
   });
@@ -135,6 +143,7 @@ function httpModule(
     null as never,
     null as never,
     null as never,
+    '.agent-sandbox',
     'test-runtime-auth-token-32-characters',
     debugEndpointsEnabled,
     managedProcessEndpointsEnabled

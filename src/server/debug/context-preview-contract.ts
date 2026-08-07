@@ -9,7 +9,7 @@ export interface ContextPreviewMessage {
   toolCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
 }
 
-/** Debug-only projection of the actual LangChain input list. */
+/** Sensitive diagnostic projection of the actual LangChain input list. */
 export interface ContextPreviewV2 {
   schemaVersion: 2;
   debugOnly: true;

@@ -19,6 +19,7 @@ const app = await NestFactory.create<NestFastifyApplication>(
     application.events,
     application.contextPreview,
     application.managedProcesses,
+    httpRuntimeConfig.sandboxRoot,
     authToken,
     config.server.debugEndpointsEnabled,
     httpRuntimeConfig.tools.enabled.managedProcesses

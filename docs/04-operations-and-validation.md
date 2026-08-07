@@ -6,7 +6,7 @@
 
 standalone HTTP 默认 fail closed：启动前必须设置至少 32 字符的 `AGENT_SERVER_AUTH_TOKEN`，Web 使用相同的 `VITE_AGENT_API_TOKEN`。所有普通请求和 SSE 都发送 `Authorization: Bearer <token>`。CORS 只允许 `runtime.json` 中列出的显式 Origin，默认是本机 5174 开发端口；不要把带有构建期 token 的 Web 静态包公开部署。
 
-Context Preview 可能包含敏感答案、工具参数和模型输入，三个 Debug Context HTTP 路由默认不注册。仅在受控的本地排障环境中设置 `AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS=true`；Electron 内部 IPC 的 Context Preview 不受这个 HTTP 开关影响。
+Context Preview 可能包含敏感答案、工具参数和模型输入。Web 使用的会话级下一轮预览 `GET /sessions/:sessionId/context-preview` 是经过 Bearer 鉴权的只读路由；不要把带有构建期 token 的 Web 静态包公开部署。Task 与 Model Call 的深度 Debug Context 路由默认不注册，仅在受控的本地排障环境中设置 `AGENT_SERVER_ENABLE_DEBUG_ENDPOINTS=true`；Electron 内部 IPC 的 Context Preview 不受这个 HTTP 开关影响。
 
 standalone HTTP 默认 capability 只有 `artifacts,filesystem`，因此不能调用宿主 Shell、启动长驻进程或访问网络。需要时通过完整列表显式设置，例如 `AGENT_SERVER_TOOL_CAPABILITIES=artifacts,filesystem,shell,managedProcesses,browser`；全局 `tools.enabled` 仍是上限，HTTP capability 不能重新开启全局已关闭的工具。未授权 `managedProcesses` 时，对应 HTTP 管理路由也不注册。Electron 受控 IPC 不套用这层 HTTP capability 收缩。
 
@@ -40,9 +40,12 @@ NODE_ENV=development npm run schema:reset -- --confirm-agent-runtime-reset
 - `POST /user-input-requests/:requestId/answer`
 - `GET /sessions/:sessionId/events`
 
-以下 Debug Context 路由仅在显式启用后存在：
+会话级 Context 路由始终随已鉴权 HTTP Server 注册：
 
 - `GET /sessions/:sessionId/context-preview`
+
+以下深度 Debug Context 路由仅在显式启用后存在：
+
 - `GET /tasks/:taskId/context-preview`
 - `GET /model-calls/:modelCallId/context`
 

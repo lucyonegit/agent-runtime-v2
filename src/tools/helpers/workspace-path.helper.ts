@@ -26,7 +26,9 @@ function workspaceAreaRoot(
   return resolve(sessionWorkspaceRoot(context), area);
 }
 
-export async function workspaceRoot(context: RuntimeToolContext): Promise<string> {
+export async function workspaceRoot(
+  context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>
+): Promise<string> {
   const root = sessionWorkspaceRoot(context);
   await mkdir(root, { recursive: true });
   await Promise.all(SESSION_WORKSPACE_AREAS.map(area => (
@@ -36,15 +38,22 @@ export async function workspaceRoot(context: RuntimeToolContext): Promise<string
 }
 
 export async function resolveWorkspacePath(
-  context: RuntimeToolContext,
+  context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>,
   userPath: string,
   options: { mustExist?: boolean } = {}
 ): Promise<string> {
   return resolveContainedPath(await workspaceRoot(context), userPath, options);
 }
 
+export async function resolveExistingWorkspacePath(
+  context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>,
+  userPath: string
+): Promise<string> {
+  return resolveContainedPath(sessionWorkspaceRoot(context), userPath, { mustExist: true });
+}
+
 export async function resolveWorkspaceAreaPath(
-  context: RuntimeToolContext,
+  context: Pick<RuntimeToolContext, 'sandboxRoot' | 'sessionId'>,
   area: SessionWorkspaceArea,
   userPath: string,
   options: { mustExist?: boolean } = {}

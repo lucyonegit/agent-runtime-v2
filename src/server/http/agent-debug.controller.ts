@@ -5,11 +5,6 @@ import { ContextPreviewService } from '../debug/context-preview.service.js';
 export class AgentDebugController {
   constructor(private readonly contextPreview: ContextPreviewService) {}
 
-  @Get('sessions/:sessionId/context-preview')
-  getSessionContextPreview(@Param('sessionId') sessionId: string) {
-    return this.contextPreview.preview(sessionId);
-  }
-
   @Get('tasks/:taskId/context-preview')
   getTaskContextPreview(@Param('taskId') taskId: string) {
     return this.contextPreview.previewTask(taskId);
